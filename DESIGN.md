@@ -53,7 +53,7 @@ internal/
   store/     # SQLite(modernc.org/sqlite,纯 Go 无 cgo):request_log
   proxy/     # 数据面:转发、SSE 流式回传、错误归一、日志落库
   server/    # HTTP 路由、统一 key 鉴权、访问日志中间件
-  web/       # (P2+) 静态管理页 + /api 实现
+web/         # (P2.5+) 管理台前端:React+antd v5,前后端分离(独立构建,吃同一 /api)
 config.example.yaml
 DESIGN.md
 ```
@@ -181,9 +181,10 @@ P2 起据此做按日/模型/上游聚合查询(这就是 Web 用量页的数据
 | **P1 ✅** | 双端点 + 统一 key + 上游配置 + 同协议透传 + failover/熔断 + SQLite 请求日志 | `go test ./...` 绿;同协议链路真实跑通;拔掉首选上游自动切备选 |
 | **P1.5 ✅** | 上游真实链路联调。发现 opencode-go 是**双协议**上游(`https://opencode.ai/zen/go` 同时给 `/v1/messages` 与 `/v1/chat/completions`):Claude Code 走 anthropic 型、OpenCode 走 openai 型,**全程透传**,无需跨协议翻译 | 真实流量稳定 |
 | **P2 ✅(API)** | 用量采集(非流式+SSE 嗅探)+ 成本入库 + `pricing` 单价表 + `/api/v1/usage` 查询。**Web 页缓做**——先把 JSON API 设计稳(分页/排序/过滤/分组/时间桶),Web 只是它的一个客户端 | `go test ./...` 绿;真实流式请求校准 anthropic 用量启发式(§8) |
-| P2.5 | 简单 Web 用量页(读同一 `/api`)+ 模型别名映射(如需要) | 页面上能按天/模型/上游看 token 与成本 |
+| P2.5 | 管理台 Web(React+antd)已并到下方「管理台 Web ✅」实现;别名映射仍待需要时再做 | — |
 | **P3 ✅** | 配额/订阅型用量窗口 + 主动选路(配额快尽自动切)。轮询 `{base}/v1/usage`,hard(≥`hard_used_pct` 或 status≠ok)降级为备选 | `go test ./...` 绿;真实订阅(两端共用一个 opencode 订阅)→ 需第二个独立订阅才能肉眼验证切换 |
 | **管理面 ✅** | 订阅源运行期 CRUD:`/api/v1/upstreams`(增/删/改/查)+ `POST …/{name}/test` 连通探测。DB 权威、config.yaml 首启播种;router/quota 热应用 | `go test ./...` 绿;重启后仍读到 DB 里的订阅源;改完无需重启即生效 |
+| **管理台 Web ✅** | `web/`:React+antd v5 管理台(前后端分离,吃同一 `/api` 与统一 key)。概览(近 24h 统计卡 + 异常/告警卡片 + 14 天 ECharts)+ 用量明细(服务端分页/排序/过滤/自动刷新)+ 订阅源 CRUD(掩码 key、二次确认、连通测试结果)+ 配额与告警(进度环分级)。密钥只进 sessionStorage,列表密钥由网关掩码 | `npm run build` 绿;Vite 代理 `/api`→网关链路通;页面数据与 API 一致 |
 | P4 | 飞书告警(状态变化聚合)+ key 管理入库 + Docker 部署 + 加固 | 配额/故障告警不刷屏 |
 | T6 | **a2o / o2a 跨协议翻译**。目前无需求(P1.5 证实 opencode-go 双协议);仅当要接"纯 openai 型上游 + Claude Code 直连"时再做 | Claude Code 直连 openai 型上游走通 |
 
