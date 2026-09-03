@@ -1,5 +1,7 @@
 // Package router 维护"规范模型名 → 可用上游"的候选集合,
 // 提供优先级排序、健康过滤与熔断(连续失败后冷却)。
+// 上游列表在运行期可整体更换(Apply,管理 API 增删改订阅源时调用):
+// 换的是指针切片,已在飞的请求持有的旧指针不会被原地改写,天然无数据竞争。
 package router
 
 import (
@@ -19,6 +21,7 @@ type Circuit struct {
 }
 
 type Router struct {
+	mu   sync.RWMutex // 保护 ups / circ 字段访问
 	ups  []*config.Upstream
 	circ map[string]*Circuit
 	qmu  sync.RWMutex
@@ -38,6 +41,40 @@ func New(ups []config.Upstream) *Router {
 	return r
 }
 
+// Apply 整体更换上游集合(管理 API 增删改后的落地)。不做原地修改:
+// 每个上游建新指针,因此正被某个在飞请求持有的旧指针仍安全可读。
+// 同名存活者的 Circuit 对象被携带 —— 只改某一家时,别家的熔断状态不受影响。
+func (r *Router) Apply(ups []config.Upstream) {
+	r.mu.Lock()
+	ns := make([]*config.Upstream, len(ups))
+	ncirc := make(map[string]*Circuit, len(ups))
+	for i := range ups {
+		u := &ups[i]
+		ns[i] = u
+		if c := r.circ[u.Name]; c != nil {
+			ncirc[u.Name] = c
+		} else {
+			ncirc[u.Name] = &Circuit{}
+		}
+	}
+	r.ups = ns
+	r.circ = ncirc
+	r.mu.Unlock()
+
+	// 剪掉已被移除名字的配额快照,避免"删了又建同名"留下 stale-hard。
+	r.qmu.Lock()
+	keep := make(map[string]bool, len(ups))
+	for i := range ups {
+		keep[ups[i].Name] = true
+	}
+	for name := range r.q {
+		if !keep[name] {
+			delete(r.q, name)
+		}
+	}
+	r.qmu.Unlock()
+}
+
 // Candidates 返回能提供 model、且当前未熔断的上游。
 // 配额感知选路(软偏好):
 //   - 配额状态正常(未达 hard)的上游按 priority 升序排前;
@@ -49,12 +86,15 @@ func (r *Router) Candidates(model string) []*config.Upstream {
 		up   *config.Upstream
 		hard bool
 	}
+	r.mu.RLock()
 	var out []item
 	for _, u := range r.ups {
-		if Supports(u, model) && r.healthy(u.Name) {
+		if Supports(u, model) && !r.circOpenLocked(u.Name) {
 			out = append(out, item{up: u, hard: r.quotaHard(u.Name)})
 		}
 	}
+	r.mu.RUnlock()
+
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].hard != out[j].hard {
 			return !out[i].hard // 非 hard 在前
@@ -112,11 +152,19 @@ func Supports(u *config.Upstream, model string) bool {
 	return false
 }
 
-// All 返回全部上游(配置序),用于模型清单等只读场景。
-func (r *Router) All() []*config.Upstream { return r.ups }
+// All 返回全部上游的拷贝(配置序),调用方可安全持有。
+func (r *Router) All() []*config.Upstream {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*config.Upstream, len(r.ups))
+	copy(out, r.ups)
+	return out
+}
 
 // HasAny 判断是否至少有一个上游能出该模型(不管协议与健康状态)。
 func (r *Router) HasAny(model string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, u := range r.ups {
 		if Supports(u, model) {
 			return true
@@ -125,8 +173,11 @@ func (r *Router) HasAny(model string) bool {
 	return false
 }
 
+// healthy 报告熔断是否关闭(该名字可被选路)。不在册视为不可用。
 func (r *Router) healthy(name string) bool {
+	r.mu.RLock()
 	c := r.circ[name]
+	r.mu.RUnlock()
 	if c == nil {
 		return false
 	}
@@ -135,8 +186,21 @@ func (r *Router) healthy(name string) bool {
 	return time.Now().After(c.openUntil)
 }
 
-func (r *Router) RecordSuccess(name string) {
+// circOpenLocked 调用方需已持有 mu(读)。返回 true = 熔断打开或不在册。
+func (r *Router) circOpenLocked(name string) bool {
 	c := r.circ[name]
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !time.Now().After(c.openUntil)
+}
+
+func (r *Router) RecordSuccess(name string) {
+	r.mu.RLock()
+	c := r.circ[name]
+	r.mu.RUnlock()
 	if c == nil {
 		return
 	}
@@ -148,7 +212,9 @@ func (r *Router) RecordSuccess(name string) {
 
 // RecordFailure 累计失败;达到该上游 max_failures 即打开熔断,冷却 cooldown_sec。
 func (r *Router) RecordFailure(u *config.Upstream) {
+	r.mu.RLock()
 	c := r.circ[u.Name]
+	r.mu.RUnlock()
 	if c == nil {
 		return
 	}

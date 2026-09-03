@@ -109,10 +109,18 @@ DESIGN.md
       只往 router 里 set 状态,路由/请求路径不加锁热点(快照存 router 由 RWMutex 保护)。
 12. **配额窗口选哪个**:`rolling` 按请求滚动、`weekly/monthly` 按自然周期。订阅页最常看的是月度额度,
     默认 `window: monthly`;挑一个最能代表"还能不能跑"的窗口即可,暂不合并多窗口。
-
----
-
-## 4. 数据模型
+13. **运行期管理订阅源:DB 权威,config.yaml 只播种一次**。
+    - 上游增删改走 `/api/v1/upstreams`(变更面提前到管理期做,不再等 P4)。启动时若 DB 的
+      `upstreams` 表为空,把 config.yaml 的 `upstreams` **原样(不展开 `${ENV}`)写入一次**;
+      此后运行以上游以 DB 为准,手改 config.yaml 不再生效(README 有迁移说明)。
+    - **raw / resolved 两层**:DB 存 raw(api_key/base_url 可能还是 `${ENV}` 引用);
+      出站前经 `config.ResolveUpstreams` 展开 env + 补默认值成 resolved,router / quota / proxy 只用它。
+      数据库永不落展开后的明文;`GET` 列表对 api_key 掩码(env 引用回显 `${VAR}` 本身)。
+    - 变更链路:validate → 单事务全量 `ReplaceUpstreams` → `router.Apply`(整表换指针,
+      在飞请求持旧指针安全,同名熔断状态携带)→ `quota.Apply` + `RefreshAll`(配置没变的条目
+      保留缓存快照,窗口变了才重置重拉)。删除最后一条上游拒绝(409),网关至少要一个源。
+    - API key 新老都收:字面值或 `${ENV}` 引用,都落 raw;`PUT` 时 `api_key` 留空 = 保持不变,
+      不用每次改配置重贴密钥。
 
 SQLite 库 `gateway.db`:
 
@@ -136,17 +144,24 @@ CREATE TABLE IF NOT EXISTS request_log (
 );
 CREATE INDEX IF NOT EXISTS idx_reqlog_ts   ON request_log(ts);
 CREATE INDEX IF NOT EXISTS idx_reqlog_model ON request_log(model);
+
+CREATE TABLE IF NOT EXISTS upstreams (
+  name TEXT PRIMARY KEY,
+  doc  TEXT NOT NULL,      -- 整条上游配置的 YAML(raw 形式,${ENV} 原样保留)
+  ord  INTEGER NOT NULL    -- 列表顺序
+);
 ```
 
-P2 起据此做按日/模型/上游聚合查询(这就是 Web 用量页的数据源)。
+P2 起据此做按日/模型/上游聚合查询(这就是 Web 用量页的数据源)。`upstreams` 表是运行期订阅源唯一权威(决策 #13)。
 
 ---
 
 ## 5. 配置(config.example.yaml)
 
 - `keys[]` 统一 API key(名字+secret+备注)。secret 用 `${ENV}` 从环境注入,避免进仓库。
-- `upstreams[]`:
-  - `name` / `type`(openai|anthropic)/ `base_url` / `api_key`(可用 `${ENV}`)
+- `upstreams[]` —— **仅首次播种**(DB 的 `upstreams` 表为空时写入一次);此后运行以 DB 为准,
+  增删改走 `/api/v1/upstreams`(决策 #13)。块内字段即 API 的 JSON 字段名:
+  - `name` / `type`(openai|anthropic)/ `base_url` / `api_key`(可用 `${ENV}`,运行期也收字面值)
   - `priority` 越小越优先(选路顺序)
   - `models[]` 该上游能出哪些模型;`"*"` 或空 = 全部;支持前缀通配如 `claude-*`
   - `cooldown_sec` / `max_failures` 熔断参数(默认 10s / 3 次)
@@ -168,12 +183,32 @@ P2 起据此做按日/模型/上游聚合查询(这就是 Web 用量页的数据
 | **P2 ✅(API)** | 用量采集(非流式+SSE 嗅探)+ 成本入库 + `pricing` 单价表 + `/api/v1/usage` 查询。**Web 页缓做**——先把 JSON API 设计稳(分页/排序/过滤/分组/时间桶),Web 只是它的一个客户端 | `go test ./...` 绿;真实流式请求校准 anthropic 用量启发式(§8) |
 | P2.5 | 简单 Web 用量页(读同一 `/api`)+ 模型别名映射(如需要) | 页面上能按天/模型/上游看 token 与成本 |
 | **P3 ✅** | 配额/订阅型用量窗口 + 主动选路(配额快尽自动切)。轮询 `{base}/v1/usage`,hard(≥`hard_used_pct` 或 status≠ok)降级为备选 | `go test ./...` 绿;真实订阅(两端共用一个 opencode 订阅)→ 需第二个独立订阅才能肉眼验证切换 |
+| **管理面 ✅** | 订阅源运行期 CRUD:`/api/v1/upstreams`(增/删/改/查)+ `POST …/{name}/test` 连通探测。DB 权威、config.yaml 首启播种;router/quota 热应用 | `go test ./...` 绿;重启后仍读到 DB 里的订阅源;改完无需重启即生效 |
 | P4 | 飞书告警(状态变化聚合)+ key 管理入库 + Docker 部署 + 加固 | 配额/故障告警不刷屏 |
 | T6 | **a2o / o2a 跨协议翻译**。目前无需求(P1.5 证实 opencode-go 双协议);仅当要接"纯 openai 型上游 + Claude Code 直连"时再做 | Claude Code 直连 openai 型上游走通 |
 
-## 7. 管理 API(用量)合约
+## 7. 管理 API 合约
 
-`/api/*` 是管理数据的一等入口(Web 页/脚本共用),全部走统一 key 鉴权(`x-api-key` 或 `Authorization: Bearer`)。当前实现的是查询面;变更面(改上游/建 key)随 P4 再做。
+`/api/*` 是管理数据的一等入口(Web 页/脚本共用),全部走统一 key 鉴权(`x-api-key` 或 `Authorization: Bearer`)。查询面(用量/配额)与订阅源变更面均已实现;建 key 管理仍随 P4。
+
+### 上游订阅源:GET/POST/PUT/DELETE /api/v1/upstreams
+- body 字段 = config.yaml 里一条 `upstreams` 块的 JSON 同名(`name,type,base_url,api_key,priority,models,cooldown_sec,max_failures,quota`)。写库的是 raw(api_key/base_url 可含 `${ENV}`),读回/出站由 `ResolveUpstreams` 展开(决策 #13)。
+- `GET` → `{"data":[{…}]}`,列表按配置序;**api_key 永不回显明文**:`${VAR}` 原样回显,字面密钥只给头尾 `sk-…abcd`。
+- `POST` 新增:201 + 新行;`api_key` 必填;重名 409;校验失败 400。
+- `PUT /{name}` 修改:200 + 新行;name 取自路径、不可改;请求给**完整期望配置**,`api_key` 留空 = 保持旧密钥;目标不存在 404。
+- `DELETE /{name}`:204;最后一条上游拒绝 409(网关至少要一个源);不存在 404。
+- `POST /{name}/test` 连通探测:按上游 type `GET …/v1/models`(anthropic)或 `…/models`(openai),5s 超时,不打模型请求不耗配额。响应 `{reachable,status?,message}`:2xx 可达、401/403=可达但 key 被拒、其它状态=可达(HTTP n)、连接失败=不可达。
+- 每次变更即热生效:DB 单事务落盘 → router.Apply(熔断状态跨同名保留)→ quota.Apply+RefreshAll,无需重启。
+
+```bash
+KEY=$GATEWAY_KEY_LAPTOP
+curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -d '{
+  "name":"second-sub","type":"anthropic","base_url":"https://…","api_key":"${SUB2_KEY}","priority":2
+}' http://127.0.0.1:8787/api/v1/upstreams
+curl -X POST -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams/second-sub/test
+curl -X DELETE -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams/second-sub
+```
 
 ### GET /api/v1/usage/requests — 明细列表
 - 分页:`limit`(1..200,默认 50)、`offset`(默认 0)。响应 `meta.total` 给总数(用同条件 COUNT),`meta.returned` 给本页条数。

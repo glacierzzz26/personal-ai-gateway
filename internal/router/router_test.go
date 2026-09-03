@@ -85,6 +85,47 @@ func TestCircuitOpenAndRecover(t *testing.T) {
 	}
 }
 
+// Apply 整体换列表:同名熔断状态保留、删除的名字不再被选路、stale 配额快照被剪。
+func TestApplyCarriesCircuit(t *testing.T) {
+	a := config.Upstream{Name: "a", Type: config.TypeOpenAI, Priority: 1, MaxFailures: 1, CooldownSec: 60}
+	b := config.Upstream{Name: "b", Type: config.TypeOpenAI, Priority: 2, MaxFailures: 1, CooldownSec: 60}
+	r := New([]config.Upstream{a, b})
+
+	// 把 a 打开熔断
+	r.RecordFailure(&a)
+	if len(r.Candidates("m")) != 1 || r.Candidates("m")[0].Name != "b" {
+		t.Fatalf("expected only b after a trips")
+	}
+	r.SetQuota("a", quota.Snapshot{UsedPct: 99, Hard: true, Status: "ok", Window: "monthly"})
+
+	// 无关编辑 b(c 加进来、b 改 priority):a 的熔断与配额状态都应原样保留
+	r.Apply([]config.Upstream{
+		{Name: "a", Type: config.TypeOpenAI, Priority: 1, MaxFailures: 1, CooldownSec: 60},
+		{Name: "b", Type: config.TypeOpenAI, Priority: 9, MaxFailures: 1, CooldownSec: 60},
+		{Name: "c", Type: config.TypeOpenAI, Priority: 2},
+	})
+	if got := r.Candidates("m"); len(got) != 2 || got[0].Name != "c" || got[1].Name != "b" {
+		// a 仍熔断打开被排除;c(prio 2)、b(prio 9)按 priority 排
+		t.Fatalf("after apply candidates = %v", got)
+	}
+	if _, ok := r.QuotaState("a"); !ok {
+		t.Error("a quota snapshot should survive unrelated Apply")
+	}
+
+	// 删除 b:其候选消失;若 b 曾因硬配额被剪也一样
+	r.Apply([]config.Upstream{{Name: "a", Type: config.TypeOpenAI, Priority: 1, MaxFailures: 1, CooldownSec: 60}})
+	if got := r.Candidates("m"); len(got) != 0 {
+		t.Fatalf("after removing b, a still open → want 0 candidates, got %v", got)
+	}
+	r.RecordSuccess("a") // 健康恢复
+	if got := r.Candidates("m"); len(got) != 1 || got[0].Name != "a" {
+		t.Fatalf("a should be healthy again, got %v", got)
+	}
+	if _, ok := r.QuotaState("b"); ok {
+		t.Error("removed upstream quota snapshot should be pruned")
+	}
+}
+
 // 配额感知选路:hard 的上游排到正常候选之后(尽力而为);未设置配额 = 不参与。
 func TestQuotaTiering(t *testing.T) {
 	r := New([]config.Upstream{

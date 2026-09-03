@@ -128,6 +128,7 @@ func (f *fakeFetcher) Fetch(context.Context, config.Upstream) (Report, error) {
 	f.next = f.next[1:]
 	return Report{Windows: map[string]WindowInfo{
 		"monthly": {Percent: p.percent, Status: p.status},
+		"weekly":  {Percent: p.percent, Status: p.status},
 	}}, nil
 }
 
@@ -172,6 +173,51 @@ func TestManagerPushAndFailOpen(t *testing.T) {
 	}
 	if len(pushed) != 2 {
 		t.Fatalf("no push expected on failure, got %d", len(pushed))
+	}
+}
+
+// Apply:同名且 quota 配置不变 → 保留缓存/快照;配置变或新加入 → 重置重拉;被删 → 移除。
+func TestApplyPreservesAndResets(t *testing.T) {
+	up := config.Upstream{Name: "a", Type: config.TypeOpenAI, BaseURL: "http://x/v1", APIKey: "k"}
+	up.Quota = &config.QuotaConfig{Enabled: true, Window: "monthly", HardUsedPct: 90, CacheTTLSec: 3600}
+
+	f := &fakeFetcher{next: []struct {
+		percent int
+		status  string
+	}{{40, "ok"}}}
+	m := NewManager([]config.Upstream{up}, f, discardLogger())
+	m.RefreshAll(context.Background())
+	if st, _ := m.Snapshot("a"); st.UsedPct != 40 {
+		t.Fatalf("seed snapshot wrong: %+v", st)
+	}
+
+	// 同配置 Apply → entry 原样保留(last 仍在)
+	unchanged := up
+	m.Apply([]config.Upstream{unchanged})
+	if st, ok := m.Snapshot("a"); !ok || st.UsedPct != 40 {
+		t.Fatalf("unchanged Apply dropped snapshot: %+v %v", st, ok)
+	}
+
+	// 窗口变更 Apply → 快照重置,条目变新(立即可重拉)
+	changed := up
+	changed.Quota = &config.QuotaConfig{Enabled: true, Window: "weekly", HardUsedPct: 90, CacheTTLSec: 3600}
+	m.Apply([]config.Upstream{changed})
+	if _, ok := m.Snapshot("a"); ok {
+		t.Fatal("window change should reset snapshot")
+	}
+	f.next = []struct {
+		percent int
+		status  string
+	}{{50, "ok"}}
+	m.RefreshAll(context.Background()) // 新条目 triedAt 为零 → 立刻拉
+	if st, _ := m.Snapshot("a"); st.Window != "weekly" || st.UsedPct != 50 {
+		t.Fatalf("refresh after change wrong: %+v", st)
+	}
+
+	// 删除 → 不再有该上游
+	m.Apply(nil)
+	if _, ok := m.Snapshot("a"); ok {
+		t.Fatal("removed upstream should be gone")
 	}
 }
 

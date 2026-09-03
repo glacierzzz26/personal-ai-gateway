@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS request_log (
 );
 CREATE INDEX IF NOT EXISTS idx_reqlog_ts    ON request_log(ts);
 CREATE INDEX IF NOT EXISTS idx_reqlog_model ON request_log(model);
+
+CREATE TABLE IF NOT EXISTS upstreams (
+  name TEXT PRIMARY KEY,
+  doc  TEXT NOT NULL,      -- 整条上游配置,存 YAML raw 形式(${ENV} 引用原样保留)
+  ord  INTEGER NOT NULL    -- 列表顺序,与 ord 序一致地回读
+);
 `
 
 // Open 打开(必要时创建)SQLite 库并建表。父目录不存在会自动创建。

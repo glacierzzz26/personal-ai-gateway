@@ -8,12 +8,14 @@ import (
 
 	"personal-ai-gateway/internal/config"
 	"personal-ai-gateway/internal/proxy"
+	"personal-ai-gateway/internal/quota"
 )
 
 type Server struct {
 	cfg *config.Config
 	gw  *proxy.Gateway
 	log *slog.Logger
+	qm  *quota.Manager // 上游增删改后同步配额轮询;nil(测试)= 跳过
 }
 
 func New(cfg *config.Config, gw *proxy.Gateway, log *slog.Logger) *Server {
@@ -22,6 +24,9 @@ func New(cfg *config.Config, gw *proxy.Gateway, log *slog.Logger) *Server {
 	}
 	return &Server{cfg: cfg, gw: gw, log: log}
 }
+
+// SetQuotaManager 注入配额管理器(main 在 server.New 后调用;测试可省略)。
+func (s *Server) SetQuotaManager(qm *quota.Manager) { s.qm = qm }
 
 // Handler 组装完整路由。对外只放行 /healthz,其余一律过鉴权。
 func (s *Server) Handler() http.Handler {
@@ -39,6 +44,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/usage/requests", s.auth(http.HandlerFunc(s.apiUsageRequests)))
 	mux.Handle("GET /api/v1/usage/summary", s.auth(http.HandlerFunc(s.apiUsageSummary)))
 	mux.Handle("GET /api/v1/quota", s.auth(http.HandlerFunc(s.apiQuota)))
+	mux.Handle("GET /api/v1/upstreams", s.auth(http.HandlerFunc(s.apiUpstreamList)))
+	mux.Handle("POST /api/v1/upstreams", s.auth(http.HandlerFunc(s.apiUpstreamCreate)))
+	mux.Handle("PUT /api/v1/upstreams/{name}", s.auth(http.HandlerFunc(s.apiUpstreamUpdate)))
+	mux.Handle("DELETE /api/v1/upstreams/{name}", s.auth(http.HandlerFunc(s.apiUpstreamDelete)))
+	mux.Handle("POST /api/v1/upstreams/{name}/test", s.auth(http.HandlerFunc(s.apiUpstreamTest)))
 
 	// 兜底:未知路径给 JSON 404(协议形状按请求特征推断)
 	mux.Handle("/", s.auth(http.HandlerFunc(s.handleRoot)))

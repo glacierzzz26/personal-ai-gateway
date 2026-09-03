@@ -36,7 +36,7 @@ go vet ./...       # 静态检查
 - `internal/proxy`  转发内核(透传 + SSE 流式回传)
 - `internal/server` HTTP 路由 + 统一 key 鉴权
 
-> 当前阶段:P1(同协议透传链路)+ P2(用量采集与成本入库 + `/api` 用量查询)+ P3(配额感知自动切换)。跨协议(Anthropic↔OpenAI)翻译在计划中。
+> 当前阶段:P1(同协议透传链路)+ P2(用量采集与成本入库 + `/api` 用量查询)+ P3(配额感知自动切换)+ 管理面(订阅源运行期增删改查 + 连通测试)。跨协议(Anthropic↔OpenAI)翻译在计划中。
 
 ## 配额感知自动切换(P3)
 
@@ -57,7 +57,32 @@ upstreams:
       cache_ttl_sec: 60
 ```
 
-## 用量查询 API
+## 管理订阅源(增删改查)
+
+运行期改上游不碰 config、不用重启,走 `/api/v1/upstreams`(与模型端点共用同一把 key)。写库存的是原始形式(`api_key` 可写字面值或 `${ENV}` 引用);`GET` 列表**永不回显密钥明文**(env 引用回显 `${VAR}`,字面密钥只露头尾)。每次增删改即时生效。
+
+```bash
+KEY=$GATEWAY_KEY_LAPTOP
+# 查
+curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams
+# 增:body 字段与 config.yaml 里一条 upstreams 相同(JSON);api_key 必填
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -d '{
+  "name":"second-sub","type":"anthropic",
+  "base_url":"https://REPLACE_ME","api_key":"${SUB2_KEY}",
+  "priority":2,"models":["*"]
+}' http://127.0.0.1:8787/api/v1/upstreams
+# 连通测试:GET …/models 探测,不耗模型配额
+curl -X POST -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams/second-sub/test
+# 改:发完整期望配置;api_key 留空 = 保持旧密钥
+curl -X PUT  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -d '{
+  "name":"second-sub","type":"anthropic",
+  "base_url":"https://REPLACE_ME","priority":1,"models":["*"]
+}' http://127.0.0.1:8787/api/v1/upstreams/second-sub
+# 删:最后一条上游不允许删(409)
+curl -X DELETE -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams/second-sub
+```
+
+> **迁移说明**:订阅源以 `gateway.db` 里的 `upstreams` 表为运行时唯一来源。首次用本版本启动时表为空 → 自动把 `config.yaml` 的 `upstreams` 原样播种一次(保持 `${ENV}` 引用)。**此后手改 `config.yaml` 的上游不再生效**,请一律用上面的 API 管理;`gateway.db` 依旧被 gitignore。清空该表即可回到 config.yaml 重新播种。
 
 ## 用量查询 API
 

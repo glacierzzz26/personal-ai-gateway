@@ -184,6 +184,30 @@ func (m *Manager) Run(ctx context.Context) {
 // RefreshAll 立即刷新所有启用了配额的上游(供测试/启动时预热)。
 func (m *Manager) RefreshAll(ctx context.Context) { m.pollDue(ctx) }
 
+// Apply 整体更换上游集合(管理 API 增删改订阅源后调用,传 resolved 态)。
+// 同名且 QuotaConfig 逐字段相等的条目保留 entry(缓存/快照/上次 tier 不丢);
+// 配置变了或新加入的建新 entry(旧快照对新窗口无意义,等下一次刷新重拉)。
+// 调用方一般随后调 RefreshAll 让新增/变更项立刻出结果。
+func (m *Manager) Apply(ups []config.Upstream) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	nm := map[string]config.Upstream{}
+	nb := map[string]*entry{}
+	for i := range ups {
+		u := &ups[i]
+		nm[u.Name] = *u
+		if q := u.Quota; q != nil && q.Enabled {
+			if old := m.byName[u.Name]; old != nil && old.cfg == *q {
+				nb[u.Name] = old
+			} else {
+				nb[u.Name] = &entry{cfg: *q}
+			}
+		}
+	}
+	m.ups = nm
+	m.byName = nb
+}
+
 func (m *Manager) pollDue(ctx context.Context) {
 	m.mu.Lock()
 	var due []string

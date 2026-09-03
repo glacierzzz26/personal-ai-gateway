@@ -33,28 +33,30 @@ type Key struct {
 	Note   string `yaml:"note,omitempty"`
 }
 
+// Upstream 一个订阅源/厂商。yaml 标签用于 config 文件与 store 落盘;
+// json 标签让同一结构体直接充当 /api/v1/upstreams 的请求/响应 DTO。
 type Upstream struct {
-	Name        string       `yaml:"name"`
-	Type        string       `yaml:"type"` // "openai" | "anthropic"
-	BaseURL     string       `yaml:"base_url"`
-	APIKey      string       `yaml:"api_key"`
-	Priority    int          `yaml:"priority"` // 越小越优先
-	Models      []string     `yaml:"models"`   // "*" 或空 = 全部;支持前缀通配 "claude-*"
-	CooldownSec int          `yaml:"cooldown_sec"`
-	MaxFailures int          `yaml:"max_failures"`
-	Quota       *QuotaConfig `yaml:"quota"` // 可选:配额感知选路
+	Name        string       `yaml:"name" json:"name"`
+	Type        string       `yaml:"type" json:"type"` // "openai" | "anthropic"
+	BaseURL     string       `yaml:"base_url" json:"base_url"`
+	APIKey      string       `yaml:"api_key" json:"api_key"`
+	Priority    int          `yaml:"priority" json:"priority"` // 越小越优先
+	Models      []string     `yaml:"models" json:"models"`     // "*" 或空 = 全部;支持前缀通配 "claude-*"
+	CooldownSec int          `yaml:"cooldown_sec" json:"cooldown_sec"`
+	MaxFailures int          `yaml:"max_failures" json:"max_failures"`
+	Quota       *QuotaConfig `yaml:"quota" json:"quota"` // 可选:配额感知选路
 }
 
 // QuotaConfig 声明该上游的订阅配额如何拉取与判等。
 // Window 指定以哪层窗口为准(rolling|weekly|monthly,默认 monthly)。
 // percent 按上游惯例=已用比例;若你的上游实际返回的是"剩余",把 invert_used_pct 置 true。
 type QuotaConfig struct {
-	Enabled        bool   `yaml:"enabled"`
-	Window         string `yaml:"window"`
-	WarnUsedPct    int    `yaml:"warn_used_pct"`  // 仅用于事件/日志(P4 告警复用),不改变选路
-	HardUsedPct    int    `yaml:"hard_used_pct"`  // ≥ 此值视作"配额耗尽",选路降级到备选
-	CacheTTLSec    int    `yaml:"cache_ttl_sec"`  // 配额缓存秒数,也是轮询间隔
-	InvertUsedPct  bool   `yaml:"invert_used_pct"` // true = percent 表示剩余,换算成已用
+	Enabled       bool   `yaml:"enabled" json:"enabled"`
+	Window        string `yaml:"window" json:"window"`
+	WarnUsedPct   int    `yaml:"warn_used_pct" json:"warn_used_pct"`     // 仅用于事件/日志(P4 告警复用),不改变选路
+	HardUsedPct   int    `yaml:"hard_used_pct" json:"hard_used_pct"`     // ≥ 此值视作"配额耗尽",选路降级到备选
+	CacheTTLSec   int    `yaml:"cache_ttl_sec" json:"cache_ttl_sec"`     // 配额缓存秒数,也是轮询间隔
+	InvertUsedPct bool   `yaml:"invert_used_pct" json:"invert_used_pct"` // true = percent 表示剩余,换算成已用
 }
 
 const (
@@ -89,8 +91,32 @@ func (c *Config) applyDefaults() {
 	if c.DBPath == "" {
 		c.DBPath = "gateway.db"
 	}
-	for i := range c.Upstreams {
-		u := &c.Upstreams[i]
+	ApplyUpstreamDefaults(c.Upstreams)
+}
+
+func (c *Config) validate() error {
+	if len(c.Keys) == 0 {
+		return errors.New("config: at least one unified key required (keys[])")
+	}
+	seenKey := map[string]bool{}
+	for _, k := range c.Keys {
+		if k.Name == "" || k.Secret == "" {
+			return fmt.Errorf("config: key entry needs both name and secret (got name=%q)", k.Name)
+		}
+		if seenKey[k.Name] {
+			return fmt.Errorf("config: duplicate key name %q", k.Name)
+		}
+		seenKey[k.Name] = true
+	}
+	// 上游正确性不在这里校验:运行时上游以 DB 为权威(config.yaml 仅首次播种),
+	// 统一在 ValidateUpstreams 边界(播种与 /api CRUD)把关,见 DESIGN 决策 #13。
+	return nil
+}
+
+// ApplyUpstreamDefaults 给上游列表就地补齐默认值(原地修改,不拷贝)。
+func ApplyUpstreamDefaults(ups []Upstream) {
+	for i := range ups {
+		u := &ups[i]
 		if u.CooldownSec == 0 {
 			u.CooldownSec = 10
 		}
@@ -114,54 +140,72 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-func (c *Config) validate() error {
-	if len(c.Keys) == 0 {
-		return errors.New("config: at least one unified key required (keys[])")
-	}
-	seenKey := map[string]bool{}
-	for _, k := range c.Keys {
-		if k.Name == "" || k.Secret == "" {
-			return fmt.Errorf("config: key entry needs both name and secret (got name=%q)", k.Name)
-		}
-		if seenKey[k.Name] {
-			return fmt.Errorf("config: duplicate key name %q", k.Name)
-		}
-		seenKey[k.Name] = true
-	}
-
-	if len(c.Upstreams) == 0 {
-		return errors.New("config: at least one upstream required (upstreams[])")
-	}
+// ValidateUpstreams 校验整份上游列表:逐条形状 + name 全局唯一。
+// 唯一冲突由调用方映射成 409,其余为 400。
+func ValidateUpstreams(ups []Upstream) error {
 	seenUp := map[string]bool{}
-	for i, u := range c.Upstreams {
+	for i, u := range ups {
 		if u.Name == "" {
-			return fmt.Errorf("config: upstream #%d missing name", i)
-		}
-		if u.Type != TypeOpenAI && u.Type != TypeAnthropic {
-			return fmt.Errorf("config: upstream %q type %q must be %q or %q", u.Name, u.Type, TypeOpenAI, TypeAnthropic)
-		}
-		if strings.TrimRight(u.BaseURL, "/") == "" {
-			return fmt.Errorf("config: upstream %q missing base_url", u.Name)
+			return fmt.Errorf("upstream #%d missing name", i)
 		}
 		if seenUp[u.Name] {
-			return fmt.Errorf("config: duplicate upstream name %q", u.Name)
+			return fmt.Errorf("duplicate upstream name %q", u.Name)
 		}
 		seenUp[u.Name] = true
+		if u.Type != TypeOpenAI && u.Type != TypeAnthropic {
+			return fmt.Errorf("upstream %q type %q must be %q or %q", u.Name, u.Type, TypeOpenAI, TypeAnthropic)
+		}
+		if strings.TrimRight(u.BaseURL, "/") == "" {
+			return fmt.Errorf("upstream %q missing base_url", u.Name)
+		}
+		if u.APIKey == "" {
+			return fmt.Errorf("upstream %q missing api_key", u.Name)
+		}
 		if q := u.Quota; q != nil && q.Enabled {
 			switch q.Window {
 			case "rolling", "weekly", "monthly":
 			default:
-				return fmt.Errorf("config: upstream %q quota.window %q must be rolling|weekly|monthly", u.Name, q.Window)
+				return fmt.Errorf("upstream %q quota.window %q must be rolling|weekly|monthly", u.Name, q.Window)
 			}
 			if q.WarnUsedPct < 0 || q.HardUsedPct <= q.WarnUsedPct || q.HardUsedPct > 100 {
-				return fmt.Errorf("config: upstream %q quota needs 0 <= warn_used_pct < hard_used_pct <= 100", u.Name)
+				return fmt.Errorf("upstream %q quota needs 0 <= warn_used_pct < hard_used_pct <= 100", u.Name)
 			}
 			if q.CacheTTLSec <= 0 {
-				return fmt.Errorf("config: upstream %q quota.cache_ttl_sec must be > 0", u.Name)
+				return fmt.Errorf("upstream %q quota.cache_ttl_sec must be > 0", u.Name)
 			}
 		}
 	}
 	return nil
+}
+
+// ResolveUpstreams 把 raw(持久化态,可能含 ${ENV})变成 resolved(运行态):
+// 拷贝 + 默认值 + os.ExpandEnv。router / quota manager / proxy 只使用 resolved;
+// 数据库永远只存 raw,避免回写时把密钥展开成明文。返回的新切片与入参无共享可变状态。
+func ResolveUpstreams(raw []Upstream) []Upstream {
+	out := make([]Upstream, len(raw))
+	copy(out, raw)
+	ApplyUpstreamDefaults(out)
+	for i := range out {
+		out[i].BaseURL = os.ExpandEnv(out[i].BaseURL)
+		out[i].APIKey = os.ExpandEnv(out[i].APIKey)
+	}
+	return out
+}
+
+// LoadSeedUpstreams 只读配置文件里的 upstreams 块,返回 raw 形式(不展开 ${ENV})。
+// 首次播种用:DB 的 upstreams 表为空时,把这份原样写入,密钥引用得以保留。
+func LoadSeedUpstreams(path string) ([]Upstream, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", path, err)
+	}
+	var file struct {
+		Upstreams []Upstream `yaml:"upstreams"`
+	}
+	if err := yaml.Unmarshal(raw, &file); err != nil {
+		return nil, fmt.Errorf("parse config %s upstreams: %w", path, err)
+	}
+	return file.Upstreams, nil
 }
 
 // FindKey 按 secret(不区分它来自 x-api-key 还是 Authorization)返回 key 名。

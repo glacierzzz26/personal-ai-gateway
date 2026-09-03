@@ -15,6 +15,8 @@ keys:
 # 上游:每家厂商/中转一份。type 决定出站协议与路径拼接规则:
 #   type: openai     → base_url 需含 /v1,出站拼 /chat/completions
 #   type: anthropic  → base_url 为域名根,出站拼 /v1/messages
+# 注意:本块仅作「首次播种」——运行期增删改订阅源一律走 API(GET/POST/PUT/DELETE
+# /api/v1/upstreams,见 README),以 gateway.db 的 upstreams 表为准;此处字段名与 API body 一致。
 upstreams:
   - name: opencode-go
     type: openai

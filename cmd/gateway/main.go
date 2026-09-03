@@ -40,32 +40,66 @@ func main() {
 	}
 	defer st.Close()
 
-	rt := router.New(cfg.Upstreams)
+	// 订阅源以 DB 为权威(管理 API 增删改的落点),config.yaml 仅首次播种。
+	// 见 DESIGN 决策 #13:DB 空 → 从 config.yaml 原样(不展开 ${ENV})写入一次。
+	ups, err := st.LoadUpstreams()
+	if err != nil {
+		logger.Error("store", "err", err)
+		os.Exit(1)
+	}
+	if len(ups) == 0 {
+		seed, err := config.LoadSeedUpstreams(*cfgPath)
+		if err != nil {
+			logger.Error("seed", "err", err)
+			os.Exit(1)
+		}
+		if len(seed) == 0 {
+			logger.Error("no upstreams",
+				"msg", "config.yaml upstreams is empty and DB has none; add at least one subscription source")
+			os.Exit(1)
+		}
+		config.ApplyUpstreamDefaults(seed)
+		if err := config.ValidateUpstreams(seed); err != nil {
+			logger.Error("seed", "err", err)
+			os.Exit(1)
+		}
+		if err := st.ReplaceUpstreams(seed); err != nil {
+			logger.Error("seed persist", "err", err)
+			os.Exit(1)
+		}
+		ups = seed
+		logger.Info("seeded upstreams from config.yaml", "count", len(seed))
+	}
+	// raw → resolved:展开 ${ENV} 并补默认值;router/quota/proxy 只用这份。
+	resolved := config.ResolveUpstreams(ups)
+
+	rt := router.New(resolved)
 	gw := proxy.New(rt, st, pricing.New(cfg.Pricing))
 	gw.Logger = logger
 
 	// 配额感知选路:P3。启用了 quota 的上游由管理器后台轮询,
 	// 快照实时推给 router(超过 hard 阈值的上游自动降级到备选)。
-	qm := quota.NewManager(cfg.Upstreams, &quota.HTTPFetcher{}, logger)
+	qm := quota.NewManager(resolved, &quota.HTTPFetcher{}, logger)
 	qm.SetUpdater(rt.SetQuota)
 	qctx, qcancel := context.WithCancel(context.Background())
 	defer qcancel()
 	go qm.Run(qctx)
-	if len(cfg.Upstreams) > 0 {
-		quotaEnabled := 0
-		for _, u := range cfg.Upstreams {
-			if u.Quota != nil && u.Quota.Enabled {
-				quotaEnabled++
-			}
-		}
-		if quotaEnabled > 0 {
-			logger.Info("quota manager", "enabled_upstreams", quotaEnabled)
+	quotaEnabled := 0
+	for _, u := range resolved {
+		if u.Quota != nil && u.Quota.Enabled {
+			quotaEnabled++
 		}
 	}
+	if quotaEnabled > 0 {
+		logger.Info("quota manager", "enabled_upstreams", quotaEnabled)
+	}
+
+	srv := server.New(&cfg, gw, logger)
+	srv.SetQuotaManager(qm)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           server.New(&cfg, gw, logger).Handler(),
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -74,7 +108,7 @@ func main() {
 		"db", cfg.DBPath,
 		"keys", len(cfg.Keys),
 	)
-	for _, u := range cfg.Upstreams {
+	for _, u := range resolved {
 		logger.Info("upstream",
 			"name", u.Name, "type", u.Type, "base", u.BaseURL,
 			"priority", u.Priority, "models", u.Models)
