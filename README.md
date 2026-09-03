@@ -32,31 +32,62 @@ go vet ./...       # 静态检查
 - `internal/config` 配置加载与校验
 - `internal/router` 模型匹配 + 候选排序 + 熔断 + 配额感知选路
 - `internal/quota`  配额拉取/缓存/判硬(后台轮询)
-- `internal/store` SQLite 请求日志
-- `internal/proxy`  转发内核(透传 + SSE 流式回传)
-- `internal/server` HTTP 路由 + 统一 key 鉴权
+- `internal/store` SQLite 请求日志 + 模型面 API key(只存 sha256)
+- `internal/proxy`  转发内核(同协议透传 + SSE 流式回传)
+- `internal/proxy/translate` 跨协议翻译(a2o:anthropic 入站 → openai 上游,流式 + 工具 + usage)
+- `internal/server` HTTP 路由 + 双层 key 鉴权
 - `web/`            管理台前端(React + antd v5,前后端分离,吃同一 `/api`)
 
-> 当前阶段:P1 + P2(用量与成本入库 + 查询)+ P3(配额感知自动切换)+ 管理面(订阅源 CRUD + 连通测试)+ 管理台 Web(概览/用量/订阅源/配额告警)。跨协议(Anthropic↔OpenAI)翻译在计划中。
+> 当前阶段:P1–P3 + 管理面(订阅源 CRUD + 连通测试)+ 模型面 Key 管理 + a2o 跨协议翻译 + 管理台 Web(概览/用量/订阅源/配额告警/API Keys)。
+
+## 模型面 Key(API Keys)
+
+`config.yaml` 里的 `keys[]` 是**登录/管理 key**(能打 `/api/*` 管理面,如上面的订阅源 CRUD 与用量查询)。给 Claude Code / 脚本用**另一个运行时生成的模型面 key** —— 一个 key 解锁网关内所有模型与协议翻译,但它只能访问 `/v1/*`,访问管理面一律 401。DB 只存 sha256;明文只在创建响应出现一次,请当场保存。
+
+```bash
+KEY=$GATEWAY_KEY_LAPTOP
+# 生成:201 响应里有 secret(只此一次)
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"name":"claude-code","note":"CC 用"}' http://127.0.0.1:8787/api/v1/keys
+# 列(永不出现 secret/sha256)与吊销
+curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/keys
+curl -X POST -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/keys/claude-code/revoke
+# 用模型面 key 打模型端点(吊销后立即 401)
+export ANTHROPIC_API_KEY=<上面拿到的 secret>
+```
+
+## 跨协议翻译(a2o)
+
+Claude Code 讲 Anthropic 协议(`/v1/messages`);DeepSeek/GLM 等订阅只给 OpenAI 兼容接口。网关在候选循环里对跨协议候选做**a2o 翻译**:Claude Code 直接发 `deepseek-chat` / `glm-4-flash` 这类模型名,网关改写请求、把上游响应(非流式整包 + **流式 SSE 逐 chunk**)转回 anthropic 形状 —— 含**工具调用**(tool_call_id ↔ tool_use id 可逆无状态映射)与 **usage**(流式末块转 `message_delta` 权威计数;`message_start` 的 input_tokens 为本地估算,仅供展示)。失败切换与熔断对翻译腿同样生效;上游 4xx 会被重编码成 anthropic 错误信封,不会把 openai 的原始错误体塞给 Claude Code。
+
+模型名只在 openai 型上游时,`count_tokens` 用本地估算作答(启发式,非计量)。Web 管理台「API Keys」页可完成生成/吊销。
+
+> 使用形态:一个模型若同时有 anthropic 型与 openai 型上游,优先走透传(最准确);只有 openai 上游时自动走翻译,客户端无感知。
+
+
 
 ## 配额感知自动切换(P3)
 
-给配了 `quota` 块的上游,网关按 `cache_ttl_sec` 周期轮询其用量接口(`GET {base}/v1/usage`),当所选窗口 `used_pct ≥ hard_used_pct` 或 `status ≠ ok` 时,该上游从首选降为备选(熔断仍是硬排除;全部耗尽则尽力而为放行,避免请求直接失败)。拉取失败保留上次快照,不误伤上游。
+给配了 `quota` 块的上游(字段同 `/api/v1/upstreams` 的 JSON body,见下节),网关按 `cache_ttl_sec` 周期轮询其用量接口(`GET {base}/v1/usage`),当所选窗口 `used_pct ≥ hard_used_pct` 或 `status ≠ ok` 时,该上游从首选降为备选(熔断仍是硬排除;全部耗尽则尽力而为放行,避免请求直接失败)。拉取失败保留上次快照,不误伤上游。
 
-```yaml
-upstreams:
-  - name: opencode-go
-    type: openai
-    base_url: https://REPLACE_ME/v1
-    api_key: ${OPENCODE_GO_KEY}
-    priority: 1
-    quota:
-      enabled: true
-      window: monthly     # rolling | weekly | monthly
-      warn_used_pct: 80   # 仅日志/未来告警
-      hard_used_pct: 95
-      cache_ttl_sec: 60
+```json
+{
+  "name": "opencode-go",
+  "type": "openai",
+  "base_url": "https://REPLACE_ME/v1",
+  "api_key": "${OPENCODE_GO_KEY}",
+  "priority": 1,
+  "quota": {
+    "enabled": true,
+    "window": "monthly",
+    "warn_used_pct": 80,
+    "hard_used_pct": 95,
+    "cache_ttl_sec": 60
+  }
+}
 ```
+
+`window` 取 `rolling | weekly | monthly` 之一;`warn_used_pct` 只用于日志/未来告警,不改变选路。
 
 ## 管理订阅源(增删改查)
 
@@ -66,7 +97,7 @@ upstreams:
 KEY=$GATEWAY_KEY_LAPTOP
 # 查
 curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams
-# 增:body 字段与 config.yaml 里一条 upstreams 相同(JSON);api_key 必填
+# 增:body = 一条上游的完整配置(JSON,字段见配额示例);api_key 必填
 curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -d '{
   "name":"second-sub","type":"anthropic",
   "base_url":"https://REPLACE_ME","api_key":"${SUB2_KEY}",
@@ -79,15 +110,15 @@ curl -X PUT  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
   "name":"second-sub","type":"anthropic",
   "base_url":"https://REPLACE_ME","priority":1,"models":["*"]
 }' http://127.0.0.1:8787/api/v1/upstreams/second-sub
-# 删:最后一条上游不允许删(409)
+# 删:允许删空 —— 删到 0 条是合法态,此后模型请求返回 404,加源即恢复;删不存在的源 → 404
 curl -X DELETE -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/api/v1/upstreams/second-sub
 ```
 
-> **迁移说明**:订阅源以 `gateway.db` 里的 `upstreams` 表为运行时唯一来源。首次用本版本启动时表为空 → 自动把 `config.yaml` 的 `upstreams` 原样播种一次(保持 `${ENV}` 引用)。**此后手改 `config.yaml` 的上游不再生效**,请一律用上面的 API 管理;`gateway.db` 依旧被 gitignore。清空该表即可回到 config.yaml 重新播种。
+> **说明**:订阅源以 `gateway.db` 里的 `upstreams` 表为运行时唯一来源,**`config.yaml` 不再承载上游**(`upstreams` 键会被忽略)。全新部署(空 DB)以空上游启动,模型请求返回 404,加源一律用上面的 API;删空后重启也不会"复活"。`gateway.db` 依旧被 gitignore。
 
 ## Web 管理台(React + Ant Design)
 
-`web/` 里是一套**前后端分离**的 React + antd v5 管理台:概览(近 24h 用量卡 + 异常/告警卡片 + 14 天趋势图)、用量明细(服务端分页/排序/过滤)、订阅源运行期 CRUD(含连通测试)、配额与告警。它只消费网关现有的 `/api/*` 管理接口,与模型接口共用同一把统一 key;开发期由 Vite 把 `/api` 代理到网关(同源,无 CORS,后端不用动)。
+`web/` 里是一套**前后端分离**的 React + antd v5 管理台:概览(近 24h 用量卡 + 异常/告警卡片 + 14 天趋势图)、用量明细(服务端分页/排序/过滤)、订阅源运行期 CRUD(含连通测试)、配额与告警、API Keys(生成模型面 key,一次性明文展示,吊销)。它只消费网关现有的 `/api/*` 管理接口,与模型接口共用同一把统一 key;开发期由 Vite 把 `/api` 代理到网关(同源,无 CORS,后端不用动)。
 
 ```bash
 # 终端 1:起网关

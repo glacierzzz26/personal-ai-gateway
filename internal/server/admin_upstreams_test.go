@@ -138,15 +138,18 @@ func TestUpstreamCRUD(t *testing.T) {
 		t.Errorf("update missing want 404 got %d", code)
 	}
 
-	// DELETE b → 204,剩 1 条;再删最后一条 → 409;删不存在 → 404
+	// DELETE b → 204,剩 1 条;再删最后一条(空上游合法)→ 204 且表空;删不存在 → 404
 	if code, _ := apiJSON(t, ts.URL, "DELETE", "/api/v1/upstreams/b", ""); code != 204 {
 		t.Errorf("delete b want 204 got %d", code)
 	}
 	if ups, _ := st.LoadUpstreams(); len(ups) != 1 || ups[0].Name != "a" {
 		t.Fatalf("after delete b: %+v", ups)
 	}
-	if code, _ := apiJSON(t, ts.URL, "DELETE", "/api/v1/upstreams/a", ""); code != 409 {
-		t.Errorf("delete last want 409 got %d", code)
+	if code, _ := apiJSON(t, ts.URL, "DELETE", "/api/v1/upstreams/a", ""); code != 204 {
+		t.Errorf("delete last want 204 got %d", code)
+	}
+	if ups, _ := st.LoadUpstreams(); len(ups) != 0 {
+		t.Fatalf("after delete last (empty allowed): %+v", ups)
 	}
 	if code, _ := apiJSON(t, ts.URL, "DELETE", "/api/v1/upstreams/nope", ""); code != 404 {
 		t.Errorf("delete missing want 404 got %d", code)

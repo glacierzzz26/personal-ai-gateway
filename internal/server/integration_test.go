@@ -60,7 +60,6 @@ func buildServer(t *testing.T, ups []config.Upstream) *httptest.Server {
 	cfg := config.Config{
 		Keys: []config.Key{{Name: "laptop", Secret: testKey}},
 	}
-	cfg.Upstreams = ups
 	cfg.DBPath = t.TempDir() + "/gw.db"
 	cfg.Listen = ":0"
 

@@ -12,42 +12,12 @@ keys:
     secret: ${GATEWAY_KEY_SCRIPTS}
     note: 自写脚本/定时任务
 
-# 上游:每家厂商/中转一份。type 决定出站协议与路径拼接规则:
-#   type: openai     → base_url 需含 /v1,出站拼 /chat/completions
-#   type: anthropic  → base_url 为域名根,出站拼 /v1/messages
-# 注意:本块仅作「首次播种」——运行期增删改订阅源一律走 API(GET/POST/PUT/DELETE
-# /api/v1/upstreams,见 README),以 gateway.db 的 upstreams 表为准;此处字段名与 API body 一致。
-upstreams:
-  - name: opencode-go
-    type: openai
-    base_url: https://REPLACE_ME/v1
-    api_key: ${OPENCODE_GO_KEY}
-    priority: 1            # 越小越优先
-    models: ["*"]          # "*" 或留空 = 该上游可出所有模型;可用前缀通配 claude-*
-    cooldown_sec: 30       # 熔断冷却(连续失败后)
-    max_failures: 3
-    # 可选:订阅配额监控。网关按 cache_ttl_sec 周期拉取
-    #   GET {base}/v1/usage (Bearer api_key)
-    # 当 used_pct ≥ hard_used_pct 或 status 非 ok 时,该上游从"首选"降为"备选"。
-    #   window: rolling|weekly|monthly,挑你订阅页面里最在意的一个窗口
-    #   warn_used_pct 只用于日志/未来告警,不改变选路
-    quota:
-      enabled: true
-      window: monthly
-      warn_used_pct: 80
-      hard_used_pct: 95
-      cache_ttl_sec: 60
-
-  - name: anthropic-official
-    type: anthropic
-    base_url: https://api.anthropic.com
-    api_key: ${ANTHROPIC_API_KEY}
-    priority: 2
-    models: ["claude-*"]   # 只声明你账号能用的模型范围
-    cooldown_sec: 10
-    max_failures: 3
-    # 官方 api.anthropic.com 不提供 /v1/usage,无法开 quota;只有当你的上游
-    # 自己暴露用量接口(如 opencode/zen 这类中转)时才配 quota 块。
+# 订阅源(上游)不配置在 config.yaml:运行期以 gateway.db 的 upstreams 表为唯一权威,
+# 一律经管理 API 维护 —— GET/POST/PUT/DELETE /api/v1/upstreams(curl 示例见 README,
+# Web 管理台也可操作)。一条上游的字段(name/type/base_url/api_key/priority/models/
+# cooldown_sec/max_failures/quota,type 决定出站协议)即该 API 的 JSON body;
+# api_key 可写字面值或 ${ENV} 引用。全新部署(空 DB)启动即空上游:模型请求将 404,
+# 先加一条源即可用。
 
 # 成本单价表(USD / 每百万 token),按声明顺序匹配,命中第一条即停,支持 "*" 与前缀通配。
 # 规则匹配到就按 (prompt*pm + completion*cm + cache_read*crm) / 1e6 折算每次请求的成本入库。

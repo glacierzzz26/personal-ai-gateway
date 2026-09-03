@@ -120,7 +120,7 @@ func (s *Server) apiUpstreamUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, row)
 }
 
-// apiUpstreamDelete 删除一个订阅源;最后一个不允许删(网关至少要有一个源)。
+// apiUpstreamDelete 删除一个订阅源;允许删空(空上游合法,模型请求将无源可路由 → 404)。
 func (s *Server) apiUpstreamDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cur, err := s.gw.Store.LoadUpstreams()
@@ -137,10 +137,6 @@ func (s *Server) apiUpstreamDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if idx < 0 {
 		apiError(w, http.StatusNotFound, "no such upstream: "+name)
-		return
-	}
-	if len(cur) == 1 {
-		apiError(w, http.StatusConflict, "cannot remove the last upstream")
 		return
 	}
 	next := append(cur[:idx], cur[idx+1:]...)

@@ -40,35 +40,17 @@ func main() {
 	}
 	defer st.Close()
 
-	// 订阅源以 DB 为权威(管理 API 增删改的落点),config.yaml 仅首次播种。
-	// 见 DESIGN 决策 #13:DB 空 → 从 config.yaml 原样(不展开 ${ENV})写入一次。
+	// 订阅源以 DB upstreams 表为唯一权威(管理 API 增删改的落点),
+	// config.yaml 不再承载上游(见 DESIGN 决策 #13)。表空 = 空上游的合法启动态:
+	// 网关照常服务管理面与 /healthz,模型请求无源可路由 → 404(not_found_error)。
 	ups, err := st.LoadUpstreams()
 	if err != nil {
 		logger.Error("store", "err", err)
 		os.Exit(1)
 	}
 	if len(ups) == 0 {
-		seed, err := config.LoadSeedUpstreams(*cfgPath)
-		if err != nil {
-			logger.Error("seed", "err", err)
-			os.Exit(1)
-		}
-		if len(seed) == 0 {
-			logger.Error("no upstreams",
-				"msg", "config.yaml upstreams is empty and DB has none; add at least one subscription source")
-			os.Exit(1)
-		}
-		config.ApplyUpstreamDefaults(seed)
-		if err := config.ValidateUpstreams(seed); err != nil {
-			logger.Error("seed", "err", err)
-			os.Exit(1)
-		}
-		if err := st.ReplaceUpstreams(seed); err != nil {
-			logger.Error("seed persist", "err", err)
-			os.Exit(1)
-		}
-		ups = seed
-		logger.Info("seeded upstreams from config.yaml", "count", len(seed))
+		logger.Info("no upstreams configured",
+			"msg", "model requests will 404 until an upstream is added via /api/v1/upstreams")
 	}
 	// raw → resolved:展开 ${ENV} 并补默认值;router/quota/proxy 只用这份。
 	resolved := config.ResolveUpstreams(ups)

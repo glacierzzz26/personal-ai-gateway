@@ -1,8 +1,6 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -62,27 +60,8 @@ func TestValidateUpstreams(t *testing.T) {
 	if err := ValidateUpstreams([]Upstream{badq}); err == nil {
 		t.Error("want quota range error")
 	}
-}
-
-// LoadSeedUpstreams 不展开 ${ENV},原样返回 raw。
-func TestLoadSeedUpstreamsKeepsEnvRefs(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.yaml")
-	content := `upstreams:
-  - name: a
-    type: anthropic
-    base_url: ${ANTHROPIC_BASE_URL}
-    api_key: ${ANTHROPIC_API_KEY}
-    priority: 1
-`
-	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ups, err := LoadSeedUpstreams(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ups) != 1 || ups[0].APIKey != "${ANTHROPIC_API_KEY}" || ups[0].BaseURL != "${ANTHROPIC_BASE_URL}" {
-		t.Fatalf("seed not raw: %+v", ups)
+	// 空上游列表本身是合法的(空上游 = 网关不路由模型请求)。
+	if err := ValidateUpstreams(nil); err != nil {
+		t.Errorf("empty upstream list should be valid, got %v", err)
 	}
 }

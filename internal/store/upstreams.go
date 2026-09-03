@@ -1,4 +1,4 @@
-// upstreams 表:运行时订阅源唯一权威(config.yaml 仅首次播种,见 DESIGN 决策 #13)。
+// upstreams 表:运行时订阅源唯一权威(config.yaml 不承载上游,见 DESIGN 决策 #13)。
 // doc 存整条上游配置的 YAML raw 形式 —— 与 config 文件同标签,row 可直接人读;
 // base_url/api_key 里的 ${ENV} 引用原样保存,展开发生在 ResolveUpstreams(运行态)。
 package store

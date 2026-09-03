@@ -10,12 +10,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Config 只承载网关自身配置(listen/db/管理 key/计费表)。
+// 订阅源(Upstream)不在此列:运行期上游以 DB upstreams 表为唯一权威,
+// 经 /api/v1/upstreams 维护(见 DESIGN 决策 #13)。
 type Config struct {
-	Listen    string      `yaml:"listen"`
-	DBPath    string      `yaml:"db_path"`
-	Keys      []Key       `yaml:"keys"`
-	Upstreams []Upstream  `yaml:"upstreams"`
-	Pricing   []PriceRule `yaml:"pricing"`
+	Listen  string      `yaml:"listen"`
+	DBPath  string      `yaml:"db_path"`
+	Keys    []Key       `yaml:"keys"`
+	Pricing []PriceRule `yaml:"pricing"`
 }
 
 // PriceRule 按模型(支持 "*" 与 "claude-*" 前缀通配)给定每百万 token 的美元单价。
@@ -33,8 +35,9 @@ type Key struct {
 	Note   string `yaml:"note,omitempty"`
 }
 
-// Upstream 一个订阅源/厂商。yaml 标签用于 config 文件与 store 落盘;
+// Upstream 一个订阅源/厂商。yaml 标签用于 store 落盘(raw 形式);
 // json 标签让同一结构体直接充当 /api/v1/upstreams 的请求/响应 DTO。
+// 上游不写在 config.yaml 里 —— 运行期以 DB upstreams 表为唯一权威。
 type Upstream struct {
 	Name        string       `yaml:"name" json:"name"`
 	Type        string       `yaml:"type" json:"type"` // "openai" | "anthropic"
@@ -91,7 +94,6 @@ func (c *Config) applyDefaults() {
 	if c.DBPath == "" {
 		c.DBPath = "gateway.db"
 	}
-	ApplyUpstreamDefaults(c.Upstreams)
 }
 
 func (c *Config) validate() error {
@@ -108,8 +110,8 @@ func (c *Config) validate() error {
 		}
 		seenKey[k.Name] = true
 	}
-	// 上游正确性不在这里校验:运行时上游以 DB 为权威(config.yaml 仅首次播种),
-	// 统一在 ValidateUpstreams 边界(播种与 /api CRUD)把关,见 DESIGN 决策 #13。
+	// 上游不属 config:运行期上游以 DB upstreams 表为唯一权威,
+	// 正确性统一在 ValidateUpstreams 边界(/api CRUD commitUpstreams)把关,见 DESIGN 决策 #13。
 	return nil
 }
 
@@ -190,22 +192,6 @@ func ResolveUpstreams(raw []Upstream) []Upstream {
 		out[i].APIKey = os.ExpandEnv(out[i].APIKey)
 	}
 	return out
-}
-
-// LoadSeedUpstreams 只读配置文件里的 upstreams 块,返回 raw 形式(不展开 ${ENV})。
-// 首次播种用:DB 的 upstreams 表为空时,把这份原样写入,密钥引用得以保留。
-func LoadSeedUpstreams(path string) ([]Upstream, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config %s: %w", path, err)
-	}
-	var file struct {
-		Upstreams []Upstream `yaml:"upstreams"`
-	}
-	if err := yaml.Unmarshal(raw, &file); err != nil {
-		return nil, fmt.Errorf("parse config %s upstreams: %w", path, err)
-	}
-	return file.Upstreams, nil
 }
 
 // FindKey 按 secret(不区分它来自 x-api-key 还是 Authorization)返回 key 名。
