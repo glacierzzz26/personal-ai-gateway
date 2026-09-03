@@ -96,6 +96,19 @@ DESIGN.md
     另:聚合列全部包 `COALESCE(...,0)`——否则空窗口的无分组查询会产出单行 `SUM=NULL`,
     Scan 进 int 直接报错(Web 端"查一个无用量的时间段"必然踩中)。
     时间过滤在 `strftime` 上无法走 `idx_reqlog_ts`,个人规模可接受。
+11. **配额感知选路(P3)语义**。
+    - 配额接口约定:`GET {base}/v1/usage`,只认 `Authorization: Bearer`(发 `x-api-key` 会 401)。
+      `type: anthropic` → base 为域名根再拼 `/v1/usage`;`type: openai` → base 已含 `/v1` 再拼 `/usage`(与决策 #5 同款拼接)。
+      响应 `{"usage":{"rolling|weekly|monthly":{"status","percent","resetsAt"}}}` —— percent 业界惯例为**已用百分比**。
+    - percent 整数粒度很粗(小请求推不动),方向按已用默认;万一某上游 percent 表示"剩余",
+      用 `quota.invert_used_pct: true` 换算。`status != "ok"` 视为硬信号(强判耗尽)。
+    - **hard 是软降级不是硬排除**:配额耗尽的 upstream 只是排到正常候选之后(尽力而为)。
+      只有熔断(决策 #3)是硬排除。若全部候选都 hard,则全部放行避免请求直接失败。
+      warn 档只写日志/事件,不影响选路(P4 告警复用)。
+    - 拉取失败 fail-open:保留最后一次成功快照,不踢上游。配额轮询是独立 goroutine,
+      只往 router 里 set 状态,路由/请求路径不加锁热点(快照存 router 由 RWMutex 保护)。
+12. **配额窗口选哪个**:`rolling` 按请求滚动、`weekly/monthly` 按自然周期。订阅页最常看的是月度额度,
+    默认 `window: monthly`;挑一个最能代表"还能不能跑"的窗口即可,暂不合并多窗口。
 
 ---
 
@@ -137,6 +150,9 @@ P2 起据此做按日/模型/上游聚合查询(这就是 Web 用量页的数据
   - `priority` 越小越优先(选路顺序)
   - `models[]` 该上游能出哪些模型;`"*"` 或空 = 全部;支持前缀通配如 `claude-*`
   - `cooldown_sec` / `max_failures` 熔断参数(默认 10s / 3 次)
+  - `quota`(可选,该上游暴露用量接口时):`enabled`、`window`(rolling|weekly|monthly,默认 monthly)、
+    `warn_used_pct`(默认 80,仅事件/日志)、`hard_used_pct`(默认 95,≥ 视作耗尽)、
+    `cache_ttl_sec`(默认 60,也是轮询周期)、`invert_used_pct`(percent 表剩余时 true)。见决策 #11。
 - `pricing[]` 成本单价表(USD/百万 token):`model`(`"*"` 或 `claude-*` 通配)+
   `prompt_per_m` / `completion_per_m` / `cache_read_per_m`。按声明顺序匹配第一条;
   每次请求成本 =(prompt×pm + completion×cm + cache_read×crm)/ 1e6 入库。无匹配则 cost 记 0。
@@ -151,7 +167,7 @@ P2 起据此做按日/模型/上游聚合查询(这就是 Web 用量页的数据
 | **P1.5 ✅** | 上游真实链路联调。发现 opencode-go 是**双协议**上游(`https://opencode.ai/zen/go` 同时给 `/v1/messages` 与 `/v1/chat/completions`):Claude Code 走 anthropic 型、OpenCode 走 openai 型,**全程透传**,无需跨协议翻译 | 真实流量稳定 |
 | **P2 ✅(API)** | 用量采集(非流式+SSE 嗅探)+ 成本入库 + `pricing` 单价表 + `/api/v1/usage` 查询。**Web 页缓做**——先把 JSON API 设计稳(分页/排序/过滤/分组/时间桶),Web 只是它的一个客户端 | `go test ./...` 绿;真实流式请求校准 anthropic 用量启发式(§8) |
 | P2.5 | 简单 Web 用量页(读同一 `/api`)+ 模型别名映射(如需要) | 页面上能按天/模型/上游看 token 与成本 |
-| P3 | 配额/订阅型用量窗口 + 主动选路(配额快尽自动切) | 阈值触发自动切,日志可查 |
+| **P3 ✅** | 配额/订阅型用量窗口 + 主动选路(配额快尽自动切)。轮询 `{base}/v1/usage`,hard(≥`hard_used_pct` 或 status≠ok)降级为备选 | `go test ./...` 绿;真实订阅(两端共用一个 opencode 订阅)→ 需第二个独立订阅才能肉眼验证切换 |
 | P4 | 飞书告警(状态变化聚合)+ key 管理入库 + Docker 部署 + 加固 | 配额/故障告警不刷屏 |
 | T6 | **a2o / o2a 跨协议翻译**。目前无需求(P1.5 证实 opencode-go 双协议);仅当要接"纯 openai 型上游 + Claude Code 直连"时再做 | Claude Code 直连 openai 型上游走通 |
 
@@ -182,6 +198,18 @@ curl -H "Authorization: Bearer $KEY" \
 ```
 
 > 参数错误统一返回 `400 {"error":{"type":"api_error","message":…}}`;非法 sort/group/bucket/status 均 400(白名单兜底防 SQL 注入)。
+
+### GET /api/v1/quota — 配额感知选路状态
+- 返回每个上游当前配额快照(诊断用 / 未来 Web 用量页数据源)。
+- 响应信封:`{"data":[{upstream,type,enabled,window?,warn_used_pct?,hard_used_pct?,used_pct?,status?,hard?,resets_at?}]}`。
+  `enabled=false`(未配 `quota` 块或 `enabled:false`)的行只有基础字段;启用但从未拉到快照的行
+  `used_pct/status/resets_at` 为 `null`、`hard=false`。`resets_at` 为该窗口重置时间(UTC)。
+- `hard` 即当前路由判定:为 `true` 时该上游在 `Candidates` 里排到正常候选之后。
+
+```bash
+KEY=$GATEWAY_KEY_LAPTOP
+curl -H "Authorization: Bearer $KEY" "http://127.0.0.1:8787/api/v1/quota"
+```
 
 ## 8. 联调 / 校准本机(不暴露公网时)
 

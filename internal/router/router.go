@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"personal-ai-gateway/internal/config"
+	"personal-ai-gateway/internal/quota"
 )
 
 type Circuit struct {
@@ -20,10 +21,15 @@ type Circuit struct {
 type Router struct {
 	ups  []*config.Upstream
 	circ map[string]*Circuit
+	qmu  sync.RWMutex
+	q    map[string]quota.Snapshot // 配额感知选路状态(见 SetQuota)
 }
 
 func New(ups []config.Upstream) *Router {
-	r := &Router{circ: make(map[string]*Circuit, len(ups))}
+	r := &Router{
+		circ: make(map[string]*Circuit, len(ups)),
+		q:    make(map[string]quota.Snapshot, len(ups)),
+	}
 	for i := range ups {
 		u := ups[i]
 		r.ups = append(r.ups, &u)
@@ -32,19 +38,59 @@ func New(ups []config.Upstream) *Router {
 	return r
 }
 
-// Candidates 返回能提供 model、且当前未熔断的上游,按 priority 升序(稳定)。
-// priority 相同则保持配置顺序。
+// Candidates 返回能提供 model、且当前未熔断的上游。
+// 配额感知选路(软偏好):
+//   - 配额状态正常(未达 hard)的上游按 priority 升序排前;
+//   - 配额已 hard(≥hard_used_pct 或 status!=ok)的上游整体排后,作为"尽力而为"备选;
+//   - 若全部候选都 hard,则照常全量返回(不想让请求因配额直接失败)。
+// priority 相同则保持配置顺序。熔断(挂了)仍是硬排除,与配额解耦。
 func (r *Router) Candidates(model string) []*config.Upstream {
-	var out []*config.Upstream
+	type item struct {
+		up   *config.Upstream
+		hard bool
+	}
+	var out []item
 	for _, u := range r.ups {
 		if Supports(u, model) && r.healthy(u.Name) {
-			out = append(out, u)
+			out = append(out, item{up: u, hard: r.quotaHard(u.Name)})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].Priority < out[j].Priority
+		if out[i].hard != out[j].hard {
+			return !out[i].hard // 非 hard 在前
+		}
+		return out[i].up.Priority < out[j].up.Priority
 	})
-	return out
+	res := make([]*config.Upstream, len(out))
+	for i, it := range out {
+		res[i] = it.up
+	}
+	return res
+}
+
+// SetQuota 由配额管理器推送最新快照;并发安全,候选查询实时生效。
+func (r *Router) SetQuota(name string, s quota.Snapshot) {
+	r.qmu.Lock()
+	defer r.qmu.Unlock()
+	if r.q == nil {
+		r.q = map[string]quota.Snapshot{}
+	}
+	r.q[name] = s
+}
+
+// QuotaState 返回某上游当前配额状态(用于 /api 展示)。未启用配额或从未成功拉取则 ok=false。
+func (r *Router) QuotaState(name string) (quota.Snapshot, bool) {
+	r.qmu.RLock()
+	defer r.qmu.RUnlock()
+	s, ok := r.q[name]
+	return s, ok
+}
+
+func (r *Router) quotaHard(name string) bool {
+	r.qmu.RLock()
+	defer r.qmu.RUnlock()
+	s, ok := r.q[name]
+	return ok && s.Hard
 }
 
 // Supports 判断上游是否声称能出 model。

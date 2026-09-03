@@ -38,6 +38,7 @@ func (s *Server) Handler() http.Handler {
 	// —— /api 管理接口(Web 端与脚本用),与模型端点共用统一 key 鉴权 ——
 	mux.Handle("GET /api/v1/usage/requests", s.auth(http.HandlerFunc(s.apiUsageRequests)))
 	mux.Handle("GET /api/v1/usage/summary", s.auth(http.HandlerFunc(s.apiUsageSummary)))
+	mux.Handle("GET /api/v1/quota", s.auth(http.HandlerFunc(s.apiQuota)))
 
 	// 兜底:未知路径给 JSON 404(协议形状按请求特征推断)
 	mux.Handle("/", s.auth(http.HandlerFunc(s.handleRoot)))

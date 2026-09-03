@@ -24,6 +24,17 @@ upstreams:
     models: ["*"]          # "*" 或留空 = 该上游可出所有模型;可用前缀通配 claude-*
     cooldown_sec: 30       # 熔断冷却(连续失败后)
     max_failures: 3
+    # 可选:订阅配额监控。网关按 cache_ttl_sec 周期拉取
+    #   GET {base}/v1/usage (Bearer api_key)
+    # 当 used_pct ≥ hard_used_pct 或 status 非 ok 时,该上游从"首选"降为"备选"。
+    #   window: rolling|weekly|monthly,挑你订阅页面里最在意的一个窗口
+    #   warn_used_pct 只用于日志/未来告警,不改变选路
+    quota:
+      enabled: true
+      window: monthly
+      warn_used_pct: 80
+      hard_used_pct: 95
+      cache_ttl_sec: 60
 
   - name: anthropic-official
     type: anthropic
@@ -33,6 +44,8 @@ upstreams:
     models: ["claude-*"]   # 只声明你账号能用的模型范围
     cooldown_sec: 10
     max_failures: 3
+    # 官方 api.anthropic.com 不提供 /v1/usage,无法开 quota;只有当你的上游
+    # 自己暴露用量接口(如 opencode/zen 这类中转)时才配 quota 块。
 
 # 成本单价表(USD / 每百万 token),按声明顺序匹配,命中第一条即停,支持 "*" 与前缀通配。
 # 规则匹配到就按 (prompt*pm + completion*cm + cache_read*crm) / 1e6 折算每次请求的成本入库。

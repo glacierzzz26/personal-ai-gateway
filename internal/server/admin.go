@@ -157,6 +157,42 @@ func (s *Server) apiUsageSummary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// apiQuota 返回各上游配额感知选路当前状态(诊断/未来 Web 用量页用)。
+func (s *Server) apiQuota(w http.ResponseWriter, r *http.Request) {
+	rows := make([]map[string]any, 0)
+	for _, up := range s.gw.Router.All() {
+		q := up.Quota
+		enabled := q != nil && q.Enabled
+		row := map[string]any{
+			"upstream": up.Name,
+			"type":     up.Type,
+			"enabled":  enabled,
+		}
+		if !enabled {
+			rows = append(rows, row)
+			continue
+		}
+		row["window"] = q.Window
+		row["warn_used_pct"] = q.WarnUsedPct
+		row["hard_used_pct"] = q.HardUsedPct
+		if st, ok := s.gw.Router.QuotaState(up.Name); ok {
+			row["used_pct"] = st.UsedPct
+			row["status"] = st.Status
+			row["hard"] = st.Hard
+			if !st.ResetsAt.IsZero() {
+				row["resets_at"] = st.ResetsAt.UTC().Format(time.RFC3339)
+			}
+		} else {
+			row["used_pct"] = nil
+			row["status"] = nil
+			row["hard"] = false
+			row["resets_at"] = nil
+		}
+		rows = append(rows, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": rows})
+}
+
 // —— 参数解析与响应工具 ——
 
 func parseFilter(q map[string][]string) (store.ReqFilter, error) {

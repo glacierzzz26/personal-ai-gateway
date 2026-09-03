@@ -12,6 +12,7 @@ import (
 	"personal-ai-gateway/internal/config"
 	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/proxy"
+	"personal-ai-gateway/internal/quota"
 	"personal-ai-gateway/internal/router"
 	"personal-ai-gateway/internal/store"
 )
@@ -192,6 +193,47 @@ func TestSummaryGrouping(t *testing.T) {
 	}
 	if code, _ := apiGet(t, ts.URL, base+"&group_by=wat"); code != 400 {
 		t.Fatalf("bad group want 400 got %d", code)
+	}
+}
+
+// TestQuotaEndpoint 验证 /api/v1/quota 如实反映 router 里的配额状态(供诊断/未来 Web)。
+func TestQuotaEndpoint(t *testing.T) {
+	ups := []config.Upstream{
+		{Name: "a", Type: config.TypeAnthropic, Priority: 1},
+		{Name: "b", Type: config.TypeAnthropic, Priority: 2, Quota: &config.QuotaConfig{
+			Enabled: true, Window: "monthly", WarnUsedPct: 80, HardUsedPct: 95}},
+		{Name: "c", Type: config.TypeOpenAI, Priority: 3},
+	}
+	rt := router.New(ups)
+	rt.SetQuota("b", quota.Snapshot{Window: "monthly", UsedPct: 99, Status: "exceeded", Hard: true})
+
+	st, _ := store.Open(t.TempDir() + "/gw.db")
+	t.Cleanup(func() { st.Close() })
+	cfg := config.Config{Keys: []config.Key{{Name: "laptop", Secret: testKey}}}
+	gw := proxy.New(rt, st, pricing.New(nil))
+	ts := httptest.NewServer(New(&cfg, gw, nil).Handler())
+	t.Cleanup(ts.Close)
+
+	code, body := apiGet(t, ts.URL, "/api/v1/quota")
+	if code != 200 {
+		t.Fatalf("quota endpoint: %d %s", code, body)
+	}
+	m := decodeObj(t, body)
+	rows := m["data"].([]any)
+	byName := map[string]map[string]any{}
+	for _, r := range rows {
+		rm := r.(map[string]any)
+		byName[rm["upstream"].(string)] = rm
+	}
+	if byName["a"]["enabled"].(bool) {
+		t.Error("a should be disabled (no quota config)")
+	}
+	b := byName["b"]
+	if !b["enabled"].(bool) || b["used_pct"].(float64) != 99 || !b["hard"].(bool) || b["status"] != "exceeded" {
+		t.Errorf("b row wrong: %v", b)
+	}
+	if byName["c"]["enabled"].(bool) {
+		t.Error("c should be disabled")
 	}
 }
 

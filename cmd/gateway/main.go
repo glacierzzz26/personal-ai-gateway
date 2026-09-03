@@ -15,6 +15,7 @@ import (
 	"personal-ai-gateway/internal/config"
 	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/proxy"
+	"personal-ai-gateway/internal/quota"
 	"personal-ai-gateway/internal/router"
 	"personal-ai-gateway/internal/server"
 	"personal-ai-gateway/internal/store"
@@ -42,6 +43,25 @@ func main() {
 	rt := router.New(cfg.Upstreams)
 	gw := proxy.New(rt, st, pricing.New(cfg.Pricing))
 	gw.Logger = logger
+
+	// 配额感知选路:P3。启用了 quota 的上游由管理器后台轮询,
+	// 快照实时推给 router(超过 hard 阈值的上游自动降级到备选)。
+	qm := quota.NewManager(cfg.Upstreams, &quota.HTTPFetcher{}, logger)
+	qm.SetUpdater(rt.SetQuota)
+	qctx, qcancel := context.WithCancel(context.Background())
+	defer qcancel()
+	go qm.Run(qctx)
+	if len(cfg.Upstreams) > 0 {
+		quotaEnabled := 0
+		for _, u := range cfg.Upstreams {
+			if u.Quota != nil && u.Quota.Enabled {
+				quotaEnabled++
+			}
+		}
+		if quotaEnabled > 0 {
+			logger.Info("quota manager", "enabled_upstreams", quotaEnabled)
+		}
+	}
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,

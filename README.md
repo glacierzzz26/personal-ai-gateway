@@ -30,12 +30,34 @@ go vet ./...       # 静态检查
 
 - `cmd/gateway` 入口
 - `internal/config` 配置加载与校验
-- `internal/router` 模型匹配 + 候选排序 + 熔断
+- `internal/router` 模型匹配 + 候选排序 + 熔断 + 配额感知选路
+- `internal/quota`  配额拉取/缓存/判硬(后台轮询)
 - `internal/store` SQLite 请求日志
 - `internal/proxy`  转发内核(透传 + SSE 流式回传)
 - `internal/server` HTTP 路由 + 统一 key 鉴权
 
-> 当前阶段:P1(同协议透传链路)+ P2(用量采集与成本入库 + `/api` 用量查询)。跨协议(Anthropic↔OpenAI)翻译在计划中。
+> 当前阶段:P1(同协议透传链路)+ P2(用量采集与成本入库 + `/api` 用量查询)+ P3(配额感知自动切换)。跨协议(Anthropic↔OpenAI)翻译在计划中。
+
+## 配额感知自动切换(P3)
+
+给配了 `quota` 块的上游,网关按 `cache_ttl_sec` 周期轮询其用量接口(`GET {base}/v1/usage`),当所选窗口 `used_pct ≥ hard_used_pct` 或 `status ≠ ok` 时,该上游从首选降为备选(熔断仍是硬排除;全部耗尽则尽力而为放行,避免请求直接失败)。拉取失败保留上次快照,不误伤上游。
+
+```yaml
+upstreams:
+  - name: opencode-go
+    type: openai
+    base_url: https://REPLACE_ME/v1
+    api_key: ${OPENCODE_GO_KEY}
+    priority: 1
+    quota:
+      enabled: true
+      window: monthly     # rolling | weekly | monthly
+      warn_used_pct: 80   # 仅日志/未来告警
+      hard_used_pct: 95
+      cache_ttl_sec: 60
+```
+
+## 用量查询 API
 
 ## 用量查询 API
 

@@ -34,14 +34,27 @@ type Key struct {
 }
 
 type Upstream struct {
-	Name        string   `yaml:"name"`
-	Type        string   `yaml:"type"` // "openai" | "anthropic"
-	BaseURL     string   `yaml:"base_url"`
-	APIKey      string   `yaml:"api_key"`
-	Priority    int      `yaml:"priority"` // 越小越优先
-	Models      []string `yaml:"models"`   // "*" 或空 = 全部;支持前缀通配 "claude-*"
-	CooldownSec int      `yaml:"cooldown_sec"`
-	MaxFailures int      `yaml:"max_failures"`
+	Name        string       `yaml:"name"`
+	Type        string       `yaml:"type"` // "openai" | "anthropic"
+	BaseURL     string       `yaml:"base_url"`
+	APIKey      string       `yaml:"api_key"`
+	Priority    int          `yaml:"priority"` // 越小越优先
+	Models      []string     `yaml:"models"`   // "*" 或空 = 全部;支持前缀通配 "claude-*"
+	CooldownSec int          `yaml:"cooldown_sec"`
+	MaxFailures int          `yaml:"max_failures"`
+	Quota       *QuotaConfig `yaml:"quota"` // 可选:配额感知选路
+}
+
+// QuotaConfig 声明该上游的订阅配额如何拉取与判等。
+// Window 指定以哪层窗口为准(rolling|weekly|monthly,默认 monthly)。
+// percent 按上游惯例=已用比例;若你的上游实际返回的是"剩余",把 invert_used_pct 置 true。
+type QuotaConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	Window         string `yaml:"window"`
+	WarnUsedPct    int    `yaml:"warn_used_pct"`  // 仅用于事件/日志(P4 告警复用),不改变选路
+	HardUsedPct    int    `yaml:"hard_used_pct"`  // ≥ 此值视作"配额耗尽",选路降级到备选
+	CacheTTLSec    int    `yaml:"cache_ttl_sec"`  // 配额缓存秒数,也是轮询间隔
+	InvertUsedPct  bool   `yaml:"invert_used_pct"` // true = percent 表示剩余,换算成已用
 }
 
 const (
@@ -84,6 +97,20 @@ func (c *Config) applyDefaults() {
 		if u.MaxFailures == 0 {
 			u.MaxFailures = 3
 		}
+		if q := u.Quota; q != nil && q.Enabled {
+			if q.Window == "" {
+				q.Window = "monthly"
+			}
+			if q.WarnUsedPct == 0 {
+				q.WarnUsedPct = 80
+			}
+			if q.HardUsedPct == 0 {
+				q.HardUsedPct = 95
+			}
+			if q.CacheTTLSec == 0 {
+				q.CacheTTLSec = 60
+			}
+		}
 	}
 }
 
@@ -120,6 +147,19 @@ func (c *Config) validate() error {
 			return fmt.Errorf("config: duplicate upstream name %q", u.Name)
 		}
 		seenUp[u.Name] = true
+		if q := u.Quota; q != nil && q.Enabled {
+			switch q.Window {
+			case "rolling", "weekly", "monthly":
+			default:
+				return fmt.Errorf("config: upstream %q quota.window %q must be rolling|weekly|monthly", u.Name, q.Window)
+			}
+			if q.WarnUsedPct < 0 || q.HardUsedPct <= q.WarnUsedPct || q.HardUsedPct > 100 {
+				return fmt.Errorf("config: upstream %q quota needs 0 <= warn_used_pct < hard_used_pct <= 100", u.Name)
+			}
+			if q.CacheTTLSec <= 0 {
+				return fmt.Errorf("config: upstream %q quota.cache_ttl_sec must be > 0", u.Name)
+			}
+		}
 	}
 	return nil
 }
