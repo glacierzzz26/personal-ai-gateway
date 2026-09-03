@@ -1,0 +1,636 @@
+// Package proxy 承载数据面(model-plane):/v1 全部端点。
+//
+// 职责:令牌鉴权(RPM/额度/有效期/允许模型)→ 引擎选路(目录+规则+熔断)
+// → 出站按候选逐一执行(重试/翻译/流式)→ 计费(offer 单价)+ 落账 + 令牌扣额。
+// 管理面(/api)见 internal/server。
+package proxy
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"personal-ai-gateway/internal/auth"
+	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/engine"
+	"personal-ai-gateway/internal/proxy/translate"
+	"personal-ai-gateway/internal/store"
+)
+
+// Gateway 模型面处理器(挂载到 server 的 /v1/*)。
+type Gateway struct {
+	st  *store.Store
+	eng *engine.Engine
+	rl  *Relay
+	log *slog.Logger
+
+	rpm   sync.Map // tokenID → *rpmWindow
+	nowFn func() time.Time
+}
+
+func NewGateway(st *store.Store, eng *engine.Engine, rl *Relay) *Gateway {
+	return &Gateway{st: st, eng: eng, rl: rl, log: slog.Default(), nowFn: time.Now}
+}
+
+// handler 方法
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
+		g.handleListModels(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/messages":
+		g.forwardMessages(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
+		g.forwardChat(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/messages/count_tokens":
+		g.handleCountTokens(w, r)
+	default:
+		gateError(w, ProtoOpenAI, http.StatusNotFound, "not_found_error", "no such model endpoint")
+	}
+}
+
+// —— 入站解析 ——
+
+// inboundReq 一次 /v1 业务请求的收敛信息。
+type inboundReq struct {
+	op      string // messages | chat | count_tokens
+	inProto string // anthropic | openai
+	body    []byte
+	model   string
+	stream  bool
+	ip      string
+	tool    string
+	token   domain.TokenRow
+}
+
+// parseModelStream 从 body 取 model/stream(两种协议都这两个顶层字段)。
+func parseModelStream(body []byte) (model string, stream bool, err error) {
+	var probe struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return "", false, err
+	}
+	return probe.Model, probe.Stream, nil
+}
+
+// parseInbound 做鉴权与模型解析;失败时已写入错误响应。
+func (g *Gateway) parseInbound(w http.ResponseWriter, r *http.Request, op string) (*inboundReq, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+	if err != nil {
+		gateError(w, inboundProtoOf(op), http.StatusBadRequest, "invalid_request_error", "read body: "+err.Error())
+		return nil, false
+	}
+	in := &inboundReq{op: op, inProto: inboundProtoOf(op), body: body, ip: clientIP(r), tool: clientTool(r)}
+
+	secretKey := extractSecret(r)
+	if secretKey == "" {
+		gateError(w, in.inProto, http.StatusUnauthorized, "authentication_error", "missing api key (x-api-key or Authorization: Bearer)")
+		return nil, false
+	}
+	token, err := g.st.LookupTokenBySHA256(auth.HashSecret(secretKey))
+	if err != nil {
+		gateError(w, in.inProto, http.StatusUnauthorized, "authentication_error", "invalid api key")
+		return nil, false
+	}
+	if code, typ, msg := tokenGateErr(g.nowFn(), token); code != 0 {
+		gateError(w, in.inProto, code, typ, msg)
+		return nil, false
+	}
+	if !g.rpmAllow(token.ID, token.RpmLimit) {
+		w.Header().Set("Retry-After", "1")
+		gateError(w, in.inProto, http.StatusTooManyRequests, "rate_limit_error", "token rate limit exceeded")
+		return nil, false
+	}
+	in.token = token
+
+	if op != countOp {
+		model, stream, err := parseModelStream(body)
+		if err != nil || model == "" {
+			gateError(w, in.inProto, http.StatusBadRequest, "invalid_request_error", "request body must include a model")
+			return nil, false
+		}
+		if !engine.SupportsModel(token.AllowedModels, model) {
+			gateError(w, in.inProto, http.StatusForbidden, "permission_error", "model "+model+" is not allowed for this token")
+			return nil, false
+		}
+		in.model = model
+		in.stream = stream
+	}
+	return in, true
+}
+
+// tokenGateErr 令牌硬校验:0=通过;否则返回客户端错误(401 disabled/过期,402 额度)。
+func tokenGateErr(now time.Time, t domain.TokenRow) (int, string, string) {
+	switch t.Status {
+	case domain.TokenDisabled:
+		return http.StatusUnauthorized, "authentication_error", "token is disabled"
+	case domain.TokenExpired:
+		return http.StatusUnauthorized, "authentication_error", "token is expired"
+	}
+	if t.ExpiresAt != nil && *t.ExpiresAt != "" {
+		if tm, ok := parseDate(*t.ExpiresAt); ok && now.After(tm) {
+			return http.StatusUnauthorized, "authentication_error", "token is expired"
+		}
+	}
+	if t.QuotaUsd > 0 && t.UsedUsd >= t.QuotaUsd {
+		return http.StatusPaymentRequired, "quota_exceeded", "token quota exhausted"
+	}
+	return 0, "", ""
+}
+
+func parseDate(s string) (time.Time, bool) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// rpmAllow 令牌级滑动窗口限速(60s)。
+func (g *Gateway) rpmAllow(id int64, limit int) bool {
+	if limit <= 0 {
+		return true
+	}
+	now := g.nowFn()
+	v, _ := g.rpm.LoadOrStore(id, &rpmWindow{})
+	w := v.(*rpmWindow)
+	return w.allow(now, limit)
+}
+
+type rpmWindow struct {
+	mu sync.Mutex
+	t  []time.Time
+}
+
+func (w *rpmWindow) allow(now time.Time, limit int) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	cut := now.Add(-time.Minute)
+	kept := w.t[:0]
+	for _, x := range w.t {
+		if x.After(cut) {
+			kept = append(kept, x)
+		}
+	}
+	w.t = kept
+	if len(w.t) >= limit {
+		return false
+	}
+	w.t = append(w.t, now)
+	return true
+}
+
+func inboundProtoOf(op string) string {
+	if op == countOp {
+		return ProtoAnthropic
+	}
+	if op == messagesOp {
+		return ProtoAnthropic
+	}
+	return ProtoOpenAI
+}
+
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	host := r.RemoteAddr
+	if i := strings.LastIndexByte(host, ':'); i > 0 {
+		return host[:i]
+	}
+	return host
+}
+
+// clientTool 识别常见客户端,便于日志/用量归因。
+func clientTool(r *http.Request) string {
+	ua := r.Header.Get("User-Agent")
+	switch {
+	case strings.Contains(ua, "ClaudeCode") || strings.Contains(ua, "claude-code"):
+		return "claude-code"
+	case strings.Contains(ua, "opencode"):
+		return "opencode"
+	case strings.Contains(ua, "openai"):
+		return "openai-sdk"
+	case strings.Contains(ua, "curl"):
+		return "curl"
+	}
+	if v := r.Header.Get("x-stainless-package-version"); v != "" {
+		return "anthropic-sdk"
+	}
+	if ua == "" {
+		return "unknown"
+	}
+	if len(ua) > 40 {
+		ua = ua[:40]
+	}
+	return ua
+}
+
+func extractSecret(r *http.Request) string {
+	if k := strings.TrimSpace(r.Header.Get("x-api-key")); k != "" {
+		return k
+	}
+	authz := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(authz, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(authz, "Bearer "))
+	}
+	return ""
+}
+
+// —— 端点 ——
+
+func (g *Gateway) forwardMessages(w http.ResponseWriter, r *http.Request) {
+	g.forward(w, r, messagesOp, ProtoAnthropic)
+}
+
+func (g *Gateway) forwardChat(w http.ResponseWriter, r *http.Request) {
+	g.forward(w, r, chatOp, ProtoOpenAI)
+}
+
+func (g *Gateway) forward(w http.ResponseWriter, r *http.Request, op, inProto string) {
+	in, ok := g.parseInbound(w, r, op)
+	if !ok {
+		return
+	}
+	settings, err := g.st.GetSettings()
+	if err != nil {
+		gateError(w, inProto, http.StatusInternalServerError, "api_error", err.Error())
+		return
+	}
+
+	plan, err := g.eng.Evaluate(in.model)
+	if err != nil {
+		if errors.Is(err, engine.ErrModelUnavailable) {
+			gateError(w, inProto, http.StatusNotFound, modelNotFoundType(inProto), "model "+in.model+" is not available (not in catalog / disabled / no enabled offer)")
+		} else {
+			gateError(w, inProto, http.StatusInternalServerError, "api_error", err.Error())
+		}
+		return
+	}
+	if plan.MatchedID > 0 {
+		_ = g.st.HitRule(plan.MatchedID)
+	}
+	if !settings.DegradeOnError && len(plan.Attempts) > 1 {
+		plan.Attempts = plan.Attempts[:1] // 关闭自动降级:只用首个候选
+	}
+
+	client := g.rl.Client(settings)
+	if in.stream {
+		g.forwardStream(w, r, in, plan, client, inProto)
+	} else {
+		g.forwardOnceNonStream(w, r, in, plan, client, inProto, settings)
+	}
+}
+
+// attemptEnv 取候选渠道行(出站要用 provider/base_url/密钥)。
+func (g *Gateway) attemptEnv(at engine.Attempt) (domain.ChannelRow, bool) {
+	ch, err := g.st.GetChannel(at.Offer.ChannelID)
+	return ch, err == nil
+}
+
+// —— 非流 ——
+
+func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, client *http.Client, inProto string, settings domain.Settings) {
+	start := time.Now()
+	var firstErr *attemptResult // 兜底展示(保留首个错误)
+	for _, at := range plan.Attempts {
+		ch, ok := g.attemptEnv(at)
+		if !ok {
+			continue
+		}
+		outProto := OutProto(ch.Provider)
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false)
+		if err != nil {
+			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
+			return
+		}
+		res, err := g.rl.doNonStream(r.Context(), client, ob, ch, at.Offer, at.TimeoutMs)
+		if err != nil {
+			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
+			continue
+		}
+		if res.upErr != "" {
+			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
+			firstErr = res
+			continue
+		}
+		if res.status < 200 || res.status >= 300 {
+			if firstErr == nil {
+				firstErr = res
+			}
+			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
+			if !retryableHTTP(res.status) {
+				break // 400/422 属请求自身问题,换渠道无益
+			}
+			continue
+		}
+		// 成功
+		g.eng.RecordSuccess(ch.ID, res.latencyMs)
+		var tok translate.Usage
+		outBody := res.body
+		if inProto == outProto {
+			u := usage{}
+			if outProto == ProtoAnthropic {
+				u = parseAnthropicUsage(res.body)
+			} else {
+				u = parseOpenAIUsage(res.body)
+			}
+			tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead}
+		} else {
+			var convErr error
+			outBody, tok, convErr = translate.ConvertNonStream(inProto, outProto, res.body)
+			if convErr != nil {
+				g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
+				firstErr = res
+				continue
+			}
+		}
+		g.finish(w, r, in, res.latencyMs, res.status, outBody, ch, at.Offer, tok, start)
+		return
+	}
+	// 全候选失败:回错误前也落一条失败账(供用量/错误率/渠道健康统计)。
+	total := time.Since(start).Milliseconds()
+	if firstErr == nil {
+		gateError(w, inProto, http.StatusBadGateway, "api_error", "all upstream channels failed")
+		g.logFailure(in, domain.ChannelRow{}, domain.OfferRead{}, http.StatusBadGateway,
+			total, nil, ptrStr("all upstream channels failed"))
+		return
+	}
+	if firstErr.upErr != "" {
+		gateError(w, inProto, http.StatusGatewayTimeout, "api_error", "upstream unavailable: "+firstErr.upErr)
+		g.logFailure(in, firstErr.channel, firstErr.offer, http.StatusGatewayTimeout,
+			total, nil, ptrStr("upstream unavailable: "+firstErr.upErr))
+		return
+	}
+	writeTranslatedError(w, inProto, OutProto(firstErr.channel.Provider), firstErr.status, firstErr.body)
+	g.logFailure(in, firstErr.channel, firstErr.offer, firstErr.status,
+		total, &firstErr.latencyMs, upstreamMsg(firstErr.status, firstErr.body))
+}
+
+// finish 落账+回写:非流成功路径。
+func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq, latencyMs int64, status int, outBody []byte, ch domain.ChannelRow, offer domain.OfferRead, tok translate.Usage, start time.Time) {
+	cost := costUsd(offer, tok)
+	_ = g.st.ChargeToken(in.token.ID, cost)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(outBody)
+	total := time.Since(start).Milliseconds()
+	g.writeLog(in, ch, offer, status, tok, latencyMs, total, nil)
+}
+
+// —— 流式 ——
+
+func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, client *http.Client, inProto string) {
+	start := time.Now()
+	var firstErr *streamOutcome
+	for _, at := range plan.Attempts {
+		ch, ok := g.attemptEnv(at)
+		if !ok {
+			continue
+		}
+		outProto := OutProto(ch.Provider)
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true)
+		if err != nil {
+			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
+			return
+		}
+		res, err := g.rl.doStream(r.Context(), client, ob, ch, at.Offer, at.TimeoutMs)
+		if err != nil {
+			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
+			continue
+		}
+		if res.upErr != "" {
+			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
+			firstErr = res
+			continue
+		}
+		if res.status != http.StatusOK {
+			if firstErr == nil {
+				firstErr = res
+			}
+			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
+			if !retryableHTTP(res.status) {
+				break
+			}
+			continue
+		}
+		// 200:开始向客户端回推;中途失败无法再换渠道。
+		g.eng.RecordSuccess(ch.ID, res.firstTTFB.Milliseconds())
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		var tok translate.Usage
+		var streamErr error
+		if inProto == outProto {
+			var u usage
+			u, streamErr = passthroughSSE(w, res.body, outProto)
+			tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead}
+		} else {
+			estIn := 0
+			if inProto == ProtoAnthropic {
+				estIn = translate.EstimateMessagesInput(in.body)
+			}
+			tok, streamErr = translate.ConvertStream(inProto, outProto, res.body, w, in.model, estIn)
+		}
+		res.body.Close()
+		total := time.Since(start).Milliseconds()
+		if streamErr != nil {
+			// 客户端/上游中断:无法补发,记一条错误日志不收费。
+			msg := "stream interrupted: " + streamErr.Error()
+			g.writeLog(in, ch, at.Offer, http.StatusBadGateway, tok, res.firstTTFB.Milliseconds(), total, &msg)
+			return
+		}
+		cost := costUsd(at.Offer, tok)
+		_ = g.st.ChargeToken(in.token.ID, cost)
+		g.writeLog(in, ch, at.Offer, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil)
+		return
+	}
+	total := time.Since(start).Milliseconds()
+	if firstErr == nil {
+		gateError(w, inProto, http.StatusBadGateway, "api_error", "all upstream channels failed")
+		g.logFailure(in, domain.ChannelRow{}, domain.OfferRead{}, http.StatusBadGateway,
+			total, nil, ptrStr("all upstream channels failed"))
+		return
+	}
+	if firstErr.upErr != "" {
+		gateError(w, inProto, http.StatusGatewayTimeout, "api_error", "upstream unavailable: "+firstErr.upErr)
+		g.logFailure(in, firstErr.channel, firstErr.offer, http.StatusGatewayTimeout,
+			total, nil, ptrStr("upstream unavailable: "+firstErr.upErr))
+		return
+	}
+	writeTranslatedError(w, inProto, OutProto(firstErr.channel.Provider), firstErr.status, firstErr.errBody)
+	g.logFailure(in, firstErr.channel, firstErr.offer, firstErr.status,
+		total, nil, upstreamMsg(firstErr.status, firstErr.errBody))
+}
+
+// —— 计费与日志 ——
+
+// costUsd 按命中 offer 单价 × token(每百万)算成本。
+func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
+	pm := func(price float64, n int) float64 { return price * float64(n) / 1e6 }
+	return pm(offer.InputPriceUsd, tok.Prompt) + pm(offer.OutputPriceUsd, tok.Completion) + pm(offer.CacheReadPriceUsd, tok.CacheRead)
+}
+
+// writeLog 请求日志落库。ok=true 成功;errMsg 非空记录错误。
+func (g *Gateway) writeLog(in *inboundReq, ch domain.ChannelRow, offer domain.OfferRead, status int, tok translate.Usage, firstMs, totalMs int64, errMsg *string) {
+	var errField *string
+	if status >= 400 || errMsg != nil {
+		e := errMsg
+		if e == nil {
+			s := http.StatusText(status)
+			e = &s
+		}
+		errField = e
+	}
+	_ = g.st.InsertLog(domain.LogRow{
+		TS:           g.nowFn().UTC(),
+		Model:        in.model,
+		ChannelID:    ch.ID,
+		ChannelName:  ch.Name,
+		TokenID:      in.token.ID,
+		TokenName:    in.token.Name,
+		ClientTool:   in.tool,
+		Protocol:     in.inProto,
+		Stream:       in.stream,
+		Status:       status,
+		PromptTokens: tok.Prompt,
+		Completion:   tok.Completion,
+		CacheRead:    tok.CacheRead,
+		CostUsd:      costUsd(offer, tok),
+		FirstTokenMs: int(firstMs),
+		TotalMs:      int(totalMs),
+		IP:           in.ip,
+		Err:          errField,
+	})
+}
+
+// logFailure 全候选失败(或网关内部错)时的失败账:供用量/错误率/渠道健康统计。
+func (g *Gateway) logFailure(in *inboundReq, ch domain.ChannelRow, offer domain.OfferRead, status int, totalMs int64, firstMs *int64, msg *string) {
+	errField := msg
+	if errField == nil {
+		s := http.StatusText(status)
+		errField = &s
+	}
+	var ft int
+	if firstMs != nil {
+		ft = int(*firstMs)
+	}
+	_ = g.st.InsertLog(domain.LogRow{
+		TS:           g.nowFn().UTC(),
+		Model:        in.model,
+		ChannelID:    ch.ID,
+		ChannelName:  ch.Name,
+		TokenID:      in.token.ID,
+		TokenName:    in.token.Name,
+		ClientTool:   in.tool,
+		Protocol:     in.inProto,
+		Stream:       in.stream,
+		Status:       status,
+		FirstTokenMs: ft,
+		TotalMs:      int(totalMs),
+		IP:           in.ip,
+		Err:          errField,
+	})
+}
+
+// upstreamMsg 从上游错误体抽一句人读信息(兼容 {"error":{message}} 两形状),无则状态文案。
+func upstreamMsg(status int, body []byte) *string {
+	var probe struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if len(body) > 0 && json.Unmarshal(body, &probe) == nil && probe.Error.Message != "" {
+		return &probe.Error.Message
+	}
+	s := http.StatusText(status)
+	if s == "" {
+		s = "upstream request failed"
+	}
+	return &s
+}
+
+func ptrStr(s string) *string { return &s }
+
+// —— GET /v1/models 与 count_tokens ——
+
+func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
+	secretKey := extractSecret(r)
+	if secretKey == "" {
+		gateError(w, ProtoOpenAI, http.StatusUnauthorized, "authentication_error", "missing api key")
+		return
+	}
+	token, err := g.st.LookupTokenBySHA256(auth.HashSecret(secretKey))
+	if err != nil {
+		gateError(w, ProtoOpenAI, http.StatusUnauthorized, "authentication_error", "invalid api key")
+		return
+	}
+	if code, typ, msg := tokenGateErr(g.nowFn(), token); code != 0 {
+		gateError(w, ProtoOpenAI, code, typ, msg)
+		return
+	}
+	models, err := g.st.EnabledModelsWithOffers()
+	if err != nil {
+		gateError(w, ProtoOpenAI, http.StatusInternalServerError, "api_error", err.Error())
+		return
+	}
+	var names []string
+	for _, m := range models {
+		if engine.SupportsModel(token.AllowedModels, m.Name) {
+			names = append(names, m.Name)
+		}
+	}
+	anthropic := r.Header.Get("anthropic-version") != ""
+	if anthropic {
+		data := make([]any, 0, len(names))
+		for _, n := range names {
+			data = append(data, map[string]any{"type": "model", "id": n, "display_name": n, "created_at": g.nowFn().UTC().Format(time.RFC3339)})
+		}
+		writeJSONBytes(w, http.StatusOK, map[string]any{"data": data, "has_more": false})
+		return
+	}
+	data := make([]any, 0, len(names))
+	for _, n := range names {
+		data = append(data, map[string]any{"id": n, "object": "model", "created": g.nowFn().Unix(), "owned_by": "gateway"})
+	}
+	writeJSONBytes(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+func (g *Gateway) handleCountTokens(w http.ResponseWriter, r *http.Request) {
+	in, ok := g.parseInbound(w, r, countOp)
+	if !ok {
+		return
+	}
+	n := translate.EstimateMessagesInput(in.body)
+	writeJSONBytes(w, http.StatusOK, map[string]any{"input_tokens": n})
+}
+
+func writeJSONBytes(w http.ResponseWriter, status int, v any) {
+	b, _ := json.Marshal(v)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(b)
+}
+
+func modelNotFoundType(inProto string) string {
+	if inProto == ProtoAnthropic {
+		return "not_found_error"
+	}
+	return "model_not_found"
+}
+
+// 端点/操作字符串(小写常量,避与 translate 命名混淆)。
+const (
+	messagesOp = "messages"
+	chatOp     = "chat"
+	countOp    = "count_tokens"
+)

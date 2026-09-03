@@ -21,7 +21,9 @@ const (
 	ProtoAnthropic = "anthropic"
 	ProtoOpenAI    = "openai"
 
-	OpMessages = "messages"
+	OpMessages    = "messages"
+	OpChat        = "chat"
+	OpCountTokens = "count_tokens"
 )
 
 // Usage 归一化 token 口径,与 proxy.usage 一致但独立定义(避免 import 环):
@@ -32,40 +34,54 @@ type Usage struct {
 	CacheRead  int
 }
 
-// Supported 是否实现 inProto→outProto 翻译。
+// Supported 是否实现 inProto→outProto 翻译(仅跨协议需要;同协议 fast path 透传)。
 func Supported(inProto, outProto string) bool {
-	return inProto == ProtoAnthropic && outProto == ProtoOpenAI
+	return (inProto == ProtoAnthropic && outProto == ProtoOpenAI) ||
+		(inProto == ProtoOpenAI && outProto == ProtoAnthropic)
 }
 
 // BuildRequest 把入站体改写成上游协议。
-//   - 返回改写的 outOp:anthropic messages → openai chat(供 outboundPath 取路径);
-//   - outBody 是重写的 JSON;estIn 是本地估算的输入 token(供 anthropic message_start 展示)。
+//   - 返回改写的 outOp(anthropic messages → openai chat / openai chat → anthropic messages,
+//     供 outbound 取路径);
+//   - outBody 是重写的 JSON;estIn 是本地估算的输入 token(仅 a2o 的 message_start 展示用)。
 //   - 返回的错误是「入站体无法翻译」→ 上层按客户端 400 处理,不回退。
 func BuildRequest(inProto, outProto, op string, body []byte, stream bool) (outOp string, outBody []byte, estIn int, err error) {
-	if !Supported(inProto, outProto) {
-		return "", nil, 0, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
+	switch {
+	case inProto == ProtoAnthropic && outProto == ProtoOpenAI:
+		if op != OpMessages {
+			return "", nil, 0, fmt.Errorf("translate: op %q has no a2o outbound (only messages)", op)
+		}
+		return buildA2ORequest(body, stream)
+	case inProto == ProtoOpenAI && outProto == ProtoAnthropic:
+		if op != OpChat {
+			return "", nil, 0, fmt.Errorf("translate: op %q has no o2a outbound (only chat)", op)
+		}
+		return buildO2ARequest(body, stream)
 	}
-	if op != OpMessages {
-		return "", nil, 0, fmt.Errorf("translate: op %q has no a2o outbound (only messages)", op)
-	}
-	return buildA2ORequest(body, stream)
+	return "", nil, 0, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
 }
 
 // ConvertNonStream 把整段上游非流响应转成入站协议响应。
 func ConvertNonStream(inProto, outProto string, raw []byte) (outBody []byte, tok Usage, err error) {
-	if !Supported(inProto, outProto) {
-		return nil, Usage{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
+	switch {
+	case inProto == ProtoAnthropic && outProto == ProtoOpenAI:
+		return convertA2ONonStream(raw)
+	case inProto == ProtoOpenAI && outProto == ProtoAnthropic:
+		return convertO2ANonStream(raw)
 	}
-	return convertA2ONonStream(raw)
+	return nil, Usage{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
 }
 
 // ConvertStream 把上游 SSE 流边读边转成入站协议 SSE 事件流,直接写到 w。
 // model/estIn 来自入站解析(同协议 fast path 不经过这里)。
 func ConvertStream(inProto, outProto string, src io.Reader, w http.ResponseWriter, model string, estIn int) (Usage, error) {
-	if !Supported(inProto, outProto) {
-		return Usage{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
+	switch {
+	case inProto == ProtoAnthropic && outProto == ProtoOpenAI:
+		return convertA2OStream(src, w, model, estIn)
+	case inProto == ProtoOpenAI && outProto == ProtoAnthropic:
+		return convertO2AStream(src, w, model)
 	}
-	return convertA2OStream(src, w, model, estIn)
+	return Usage{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
 }
 
 // A2OError 把上游非 2xx 错误体分类成入站(anthropic)协议的错误 type+message。

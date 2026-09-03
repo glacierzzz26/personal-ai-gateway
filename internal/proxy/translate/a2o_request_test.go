@@ -273,11 +273,14 @@ func TestEstimateMessagesInput(t *testing.T) {
 }
 
 func TestSupportedMatrix(t *testing.T) {
+	// v2 双向往返都支持(openai⇄anthropic),同协议直通不经翻译。
 	if !Supported(ProtoAnthropic, ProtoOpenAI) {
 		t.Error("anthropic→openai should be supported")
 	}
+	if !Supported(ProtoOpenAI, ProtoAnthropic) {
+		t.Error("openai→anthropic (o2a) should be supported")
+	}
 	for _, p := range [][2]string{
-		{ProtoOpenAI, ProtoAnthropic},
 		{ProtoAnthropic, ProtoAnthropic},
 		{ProtoOpenAI, ProtoOpenAI},
 	} {

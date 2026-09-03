@@ -1,0 +1,186 @@
+/* 视觉红线：禁止 gradient / backdrop-filter / 卡片 box-shadow / transform 动效 */
+
+:root {
+  --gw-bg: #f7f8fa;
+  --gw-card: #ffffff;
+  --gw-border: #e5e7eb;
+  --gw-border-2: #eff1f4;
+  --gw-fill: #f1f5f9;
+  --gw-text: #0f172a;
+  --gw-text-2: #475569;
+  --gw-text-3: #94a3b8;
+  --gw-primary: #2563eb;
+}
+
+html[data-theme='dark'] {
+  --gw-bg: #0b0e14;
+  --gw-card: #131722;
+  --gw-border: #232936;
+  --gw-border-2: #1b2130;
+  --gw-fill: #1a2030;
+  --gw-text: #e2e8f0;
+  --gw-text-2: #94a3b8;
+  --gw-text-3: #64748b;
+  --gw-primary: #3b82f6;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--gw-bg);
+}
+
+/* 数字统一等宽对齐 */
+.gw-num,
+.ant-table-cell.gw-num,
+.ant-statistic-content {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 滚动条细化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 页面切换：只改 opacity，180ms */
+@keyframes gw-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.gw-page {
+  animation: gw-fade-in 0.18s ease;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* 卡片：1px 边框分层，hover 只改边框色 */
+.gw-card-hover {
+  transition: border-color 0.15s ease;
+}
+.gw-card-hover:hover {
+  border-color: #cbd5e1;
+}
+html[data-theme='dark'] .gw-card-hover:hover {
+  border-color: #33405a;
+}
+
+/* 拖拽排序 */
+.gw-drag {
+  cursor: grab;
+  color: var(--gw-text-3);
+  user-select: none;
+  letter-spacing: -2px;
+}
+.gw-drag:active {
+  cursor: grabbing;
+}
+.gw-drag:focus-visible {
+  outline: 2px solid var(--gw-primary);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+tr.gw-dragging {
+  opacity: 0.4;
+}
+tr.gw-drop-before > td {
+  border-top: 2px solid var(--gw-primary) !important;
+}
+tr.gw-drop-after > td {
+  border-bottom: 2px solid var(--gw-primary) !important;
+}
+
+/* 模型广场 */
+.gw-mcard {
+  transition: border-color 0.15s ease;
+  cursor: pointer;
+}
+.gw-mcard:hover {
+  border-color: #cbd5e1;
+}
+html[data-theme='dark'] .gw-mcard:hover {
+  border-color: #33405a;
+}
+
+.gw-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.gw-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  background: var(--gw-fill);
+  border: 1px solid var(--gw-border);
+  border-radius: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+}
+
+/* 偏好减少动效时关闭全部过渡 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* 表格字号（antd token 不含表头字号，用 CSS 兜底） */
+.ant-table-thead > tr > th {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+}
+.ant-table-tbody {
+  font-size: 13px;
+}
+.ant-card-head-title {
+  font-size: 15px;
+  font-weight: 500;
+}
+.ant-statistic-title {
+  font-size: 13px !important;
+  color: var(--gw-text-3) !important;
+}
+.ant-menu-item {
+  position: relative;
+}
+.ant-menu-light .ant-menu-item-selected::before,
+.ant-menu-inline .ant-menu-item-selected::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--gw-primary);
+  border-radius: 0 2px 2px 0;
+}
+.ant-menu-item-group-title {
+  font-size: 12px !important;
+  color: var(--gw-text-3) !important;
+  padding-left: 16px !important;
+  padding-top: 14px !important;
+}
+.ant-layout-sider {
+  transition: all 0.15s ease !important;
+}

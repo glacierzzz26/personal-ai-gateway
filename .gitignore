@@ -12,3 +12,7 @@ config.yaml
 # 环境
 .env
 .env.*
+
+# 前端依赖与构建产物(web-v2)
+web-v2/node_modules/
+web-v2/dist/

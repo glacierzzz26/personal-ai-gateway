@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 网关管理台</title>
+    <script>
+      // 避免主题切换白闪：首屏前先落地 data-theme 与背景色
+      (function () {
+        try {
+          var t = localStorage.getItem('gw-theme') ||
+            (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.dataset.theme = t;
+          document.documentElement.style.background = t === 'dark' ? '#0B0E14' : '#F7F8FA';
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

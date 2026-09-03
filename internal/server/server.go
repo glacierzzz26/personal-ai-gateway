@@ -1,7 +1,9 @@
 // Package server 承载 v2 网关的全部 HTTP 面。
 //
-// M1 先落健康检查与 JSON 404 骨架;M2 注入管理 REST(会话鉴权)+ 账号引导,
-// M3 注入 /v1 模型面(令牌鉴权 + engine 转发),M4 增加静态托管。
+//   - 管理面 /api/v1:会话鉴权(cookie),账号引导 bootstrap/login/logout/me,
+//     渠道/模型/供给源/规则/令牌/日志/用量/概览/设置 全 CRUD(展示字段现算);
+//   - 数据面 /v1:令牌鉴权 + engine 选路 + relay 真转发(由 proxy.Gateway 实现);
+//   - 健康检查 /healthz 与静态托管(web-v2 构建产物)。
 package server
 
 import (
@@ -10,6 +12,8 @@ import (
 	"net/http"
 
 	"personal-ai-gateway/internal/config"
+	"personal-ai-gateway/internal/engine"
+	"personal-ai-gateway/internal/proxy"
 	"personal-ai-gateway/internal/store"
 )
 
@@ -17,33 +21,90 @@ type Server struct {
 	cfg config.Config
 	st  *store.Store
 	log *slog.Logger
+
+	eng *engine.Engine
+	gw  *proxy.Gateway
+	rl  *proxy.Relay
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
-	return &Server{cfg: cfg, st: st, log: slog.Default()}
+	eng := engine.New(st)
+	rl := proxy.NewRelay(st)
+	gw := proxy.NewGateway(st, eng, rl)
+	return &Server{cfg: cfg, st: st, log: slog.Default(), eng: eng, gw: gw, rl: rl}
 }
 
-// Handler 返回根路由 mux。子面(/api /v1)在各自里程碑挂载。
+// Handler 组装根路由。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+
+	// 数据面 /v1
+	mux.Handle("/v1/", s.gw)
+
+	// 管理面 /api/v1
+	mux.Handle("/api/v1/", s.session(s.apiMux()))
+
 	mux.HandleFunc("/", s.handleNotFound)
 	return mux
 }
 
+// apiMux 管理面全部子路由(仍受会话中间件约束)。
+func (s *Server) apiMux() *http.ServeMux {
+	m := http.NewServeMux()
+
+	m.HandleFunc("POST /api/v1/auth/bootstrap", s.handleBootstrap)
+	m.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	m.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
+	m.HandleFunc("GET /api/v1/auth/me", s.handleMe)
+
+	m.HandleFunc("GET /api/v1/overview", s.handleOverview)
+	m.HandleFunc("GET /api/v1/usage", s.handleUsage)
+
+	m.HandleFunc("GET /api/v1/channels", s.handleChannelsList)
+	m.HandleFunc("POST /api/v1/channels", s.handleChannelsCreate)
+	m.HandleFunc("PATCH /api/v1/channels/{id}", s.handleChannelsUpdate)
+	m.HandleFunc("DELETE /api/v1/channels/{id}", s.handleChannelsDelete)
+	m.HandleFunc("POST /api/v1/channels/{id}/test", s.handleChannelTest)
+	m.HandleFunc("POST /api/v1/channels/{id}/sync-models", s.handleChannelSyncModels)
+
+	m.HandleFunc("GET /api/v1/models", s.handleModelsList)
+	m.HandleFunc("POST /api/v1/models", s.handleModelsCreate)
+	m.HandleFunc("PATCH /api/v1/models/{id}", s.handleModelsUpdate)
+	m.HandleFunc("DELETE /api/v1/models/{id}", s.handleModelsDelete)
+	m.HandleFunc("GET /api/v1/models/{id}/usage", s.handleModelUsage)
+	m.HandleFunc("POST /api/v1/models/{id}/offers", s.handleOffersCreate)
+	m.HandleFunc("PUT /api/v1/models/{id}/offers/order", s.handleOffersReorder)
+	m.HandleFunc("PATCH /api/v1/offers/{oid}", s.handleOffersUpdate)
+	m.HandleFunc("DELETE /api/v1/offers/{oid}", s.handleOffersDelete)
+
+	m.HandleFunc("GET /api/v1/rules", s.handleRulesList)
+	m.HandleFunc("POST /api/v1/rules", s.handleRulesCreate)
+	m.HandleFunc("PATCH /api/v1/rules/{id}", s.handleRulesUpdate)
+	m.HandleFunc("DELETE /api/v1/rules/{id}", s.handleRulesDelete)
+	m.HandleFunc("PUT /api/v1/rules/order", s.handleRulesReorder)
+
+	m.HandleFunc("GET /api/v1/tokens", s.handleTokensList)
+	m.HandleFunc("POST /api/v1/tokens", s.handleTokensCreate)
+	m.HandleFunc("PATCH /api/v1/tokens/{id}", s.handleTokensUpdate)
+	m.HandleFunc("DELETE /api/v1/tokens/{id}", s.handleTokensDelete)
+
+	m.HandleFunc("GET /api/v1/logs", s.handleLogsList)
+	m.HandleFunc("DELETE /api/v1/logs", s.handleLogsClear)
+
+	m.HandleFunc("GET /api/v1/settings", s.handleSettingsGet)
+	m.HandleFunc("PATCH /api/v1/settings", s.handleSettingsPatch)
+
+	return m
+}
+
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":    true,
-		"store": "up",
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "store": "up"})
 }
 
 func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]any{
-		"error": map[string]any{
-			"type":    "not_found",
-			"message": "no such route",
-		},
+		"error": map[string]any{"type": "not_found", "message": "no such route"},
 	})
 }
 
