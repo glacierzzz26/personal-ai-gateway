@@ -15,6 +15,9 @@ import (
 type Config struct {
 	Listen string `yaml:"listen"`
 	DBPath string `yaml:"db_path"`
+	// WebDir 管理台前端源码目录(静态托管其 dist/ 构建产物,路径按进程 cwd 解析)。
+	// 缺省 "web-v2";空串关闭静态托管(纯 API 模式)。
+	WebDir string `yaml:"web_dir"`
 }
 
 // Load 读取并解析配置文件。整个文件先做一次 os.ExpandEnv,
@@ -41,5 +44,8 @@ func (c *Config) applyDefaults() {
 	if c.DBPath == "" {
 		// v2 换新库文件,旧 gateway.db(含 v1 表)原样留档,不迁移。
 		c.DBPath = "gateway-v2.db"
+	}
+	if c.WebDir == "" {
+		c.WebDir = "web-v2"
 	}
 }

@@ -17,9 +17,10 @@ const adminKey ctxKey = 1
 // 仅 auth/login 与 auth/bootstrap 匿名放行,其余一律要求已登录。
 func (s *Server) session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 匿名端点白名单
-		if r.Method == http.MethodPost &&
-			(r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/bootstrap") {
+		// 匿名端点白名单:登录/引导,以及登录页判定用 auth/state
+		if r.URL.Path == "/api/v1/auth/state" ||
+			(r.Method == http.MethodPost &&
+				(r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/bootstrap")) {
 			next.ServeHTTP(w, r)
 			return
 		}

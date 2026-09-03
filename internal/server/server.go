@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"personal-ai-gateway/internal/config"
 	"personal-ai-gateway/internal/engine"
@@ -45,8 +48,44 @@ func (s *Server) Handler() http.Handler {
 	// 管理面 /api/v1
 	mux.Handle("/api/v1/", s.session(s.apiMux()))
 
-	mux.HandleFunc("/", s.handleNotFound)
+	// 静态托管 web-v2/dist(SPA 回退 index.html);dist 不存在时给 404 提示。
+	mux.Handle("/", s.static())
 	return mux
+}
+
+// static 托管管理台构建产物。distDir=<webDir>/dist;文件命中即吐,其余回退 index.html。
+func (s *Server) static() http.Handler {
+	dist := s.distDir()
+	fileServer := http.FileServer(http.Dir(dist))
+	index := filepath.Join(dist, "index.html")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 只回退前端路由式的路径;API/模型面已在更具体的 pattern 命中,到不了这里。
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.NotFound(w, r)
+			return
+		}
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p != "" {
+			if f, err := os.Stat(filepath.Join(dist, filepath.FromSlash(p))); err == nil && !f.IsDir() {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+		if _, err := os.Stat(index); err == nil {
+			http.ServeFile(w, r, index)
+			return
+		}
+		s.handleNotFound(w, r)
+	})
+}
+
+// distDir 解析前端构建产物目录(相对 cwd 的 <webDir>/dist)。
+func (s *Server) distDir() string {
+	web := s.cfg.WebDir
+	if web == "" {
+		web = "web-v2"
+	}
+	return filepath.Join(web, "dist")
 }
 
 // apiMux 管理面全部子路由(仍受会话中间件约束)。
@@ -57,6 +96,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	m.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	m.HandleFunc("GET /api/v1/auth/me", s.handleMe)
+	m.HandleFunc("GET /api/v1/auth/state", s.handleAuthState)
 
 	m.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	m.HandleFunc("GET /api/v1/usage", s.handleUsage)

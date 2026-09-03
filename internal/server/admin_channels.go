@@ -15,8 +15,8 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	out := make([]domain.ChannelRead, 0, len(v.chByID))
-	for _, ch := range v.chByID {
+	out := make([]domain.ChannelRead, 0, len(v.chOrder))
+	for _, ch := range v.chOrder {
 		out = append(out, s.channelRead(v, ch))
 	}
 	writeJSON(w, http.StatusOK, out)

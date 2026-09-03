@@ -1,26 +1,164 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  App, Button, Card, Col, Empty, Input, Row, Segmented, Select, Switch,
+  App, Button, Card, Col, Empty, Form, Input, InputNumber, Modal, Row, Segmented, Select, Switch,
   Table, Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import PageHeader from '@/components/PageHeader';
-import ModelCard from '@/components/models/ModelCard';
+import ModelCard, { bestPrice } from '@/components/models/ModelCard';
 import ModelDrawer from '@/components/models/ModelDrawer';
 import CompareModal from '@/components/models/CompareModal';
-import { bestPrice } from '@/components/models/ModelCard';
 import { api } from '@/services/api';
-import { providers } from '@/services/mock/db';
+import { capabilities, providers } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
-import type { Capability, ModelCatalogItem } from '@/types';
+import type { Capability, Channel, ModelCatalogItem, ModelDraft } from '@/types';
 
 type SortKey = 'price' | 'latency' | 'hot' | 'ctx';
 
-const CAPS: Capability[] = ['vision', 'function', 'stream', 'reasoning'];
+/** 「新增模型」表单值 */
+interface ModelFormValues {
+  name: string;
+  contextWindow?: number;
+  capabilities?: Capability[];
+  enabled?: boolean;
+}
+
+function AddModelModal({ open, onClose, onCreate, creating }: {
+  open: boolean;
+  onClose: () => void;
+  onCreate: (v: ModelFormValues) => Promise<void>;
+  creating: boolean;
+}) {
+  const [form] = Form.useForm<ModelFormValues>();
+  return (
+    <Modal
+      open={open}
+      title="新增模型"
+      onCancel={onClose}
+      destroyOnHidden
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="primary"
+            loading={creating}
+            onClick={async () => {
+              try {
+                const v = await form.validateFields();
+                await onCreate(v);
+              } catch {
+                /* 校验未过或请求失败：保持弹窗以便修正 */
+              }
+            }}
+          >
+            创建
+          </Button>
+        </div>
+      }
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ contextWindow: 0, capabilities: [], enabled: true }}
+      >
+        <Form.Item
+          name="name"
+          label="模型名称"
+          rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}
+        >
+          <Input placeholder="如 gpt-4o-mini" className="gw-mono" />
+        </Form.Item>
+        <Form.Item name="contextWindow" label="上下文窗口">
+          <InputNumber min={0} step={1000} style={{ width: '100%' }} addonAfter="tokens" />
+        </Form.Item>
+        <Form.Item name="capabilities" label="能力">
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="选择能力标签，可留空"
+            options={capabilities.map(x => ({ value: x, label: CAP_LABEL[x] }))}
+          />
+        </Form.Item>
+        <Form.Item name="enabled" label="启用" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+/** 从渠道同步模型：先选渠道再拉取 */
+function SyncModal({ open, onClose, channels, onSync, syncing }: {
+  open: boolean;
+  onClose: () => void;
+  channels: Channel[];
+  onSync: (channelId: number) => Promise<void>;
+  syncing: boolean;
+}) {
+  const { message } = App.useApp();
+  const [cid, setCid] = useState<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (open) setCid(undefined);
+  }, [open]);
+
+  const run = async () => {
+    if (!cid) {
+      message.warning('请先选择要同步的渠道');
+      return;
+    }
+    try {
+      await onSync(cid);
+    } catch {
+      /* 失败提示由父级 mutation 处理 */
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      title="从渠道同步模型"
+      onCancel={onClose}
+      destroyOnHidden
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" loading={syncing} disabled={channels.length === 0} onClick={run}>
+            开始同步
+          </Button>
+        </div>
+      }
+    >
+      <div
+        style={{
+          border: '1px solid var(--gw-border)', borderLeft: '2px solid var(--gw-primary)',
+          borderRadius: 6, padding: '10px 12px', fontSize: 13,
+          color: 'var(--gw-text-2)', background: 'var(--gw-fill)', marginBottom: 16,
+        }}
+      >
+        网关将调用该渠道上游 <span className="gw-mono">/v1/models</span> 拉取清单：目录中不存在的模型会自动新建，已存在的自动补一条停用供给源（定价后启用）。
+      </div>
+      {channels.length === 0 ? (
+        <Empty description="暂无渠道，请先在「渠道管理」创建" />
+      ) : (
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择渠道"
+          value={cid}
+          onChange={setCid}
+          showSearch
+          optionFilterProp="label"
+          autoFocus
+          options={channels.map(ch => ({ value: ch.id, label: `${ch.name}（${ch.provider}）` }))}
+        />
+      )}
+    </Modal>
+  );
+}
 
 export default function Models() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const qc = useQueryClient();
 
   const [kw, setKw] = useState('');
@@ -33,13 +171,78 @@ export default function Models() {
   const [compare, setCompare] = useState<number[]>([]);
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const { data: models = [], isLoading } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
+  const { data: channels = [] } = useQuery({ queryKey: ['channels'], queryFn: api.getChannels });
 
   const toggleModel = useMutation({
-    mutationFn: (v: { id: number; enabled: boolean }) => api.toggleModel(v.id, v.enabled),
+    mutationFn: (v: { id: number; enabled: boolean }) => {
+      setBusyId(v.id);
+      return api.toggleModel(v.id, v.enabled);
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['models'] }),
+    onSettled: () => setBusyId(null),
+    onError: () => message.error('启停失败，请稍后重试'),
   });
+
+  const createModel = useMutation({
+    mutationFn: (d: ModelDraft) => api.createModel(d),
+    onSuccess: () => {
+      message.success('模型已创建');
+      setAddOpen(false);
+      qc.invalidateQueries({ queryKey: ['models'] });
+    },
+    onError: (e: Error) => message.error(e.message || '创建失败'),
+  });
+
+  const syncModel = useMutation({
+    mutationFn: (id: number) => api.syncModels(id),
+    onSuccess: r => {
+      message.success(`同步完成：新增 ${r.added} 个，更新 ${r.updated} 个，共 ${r.models.length} 个模型`);
+      setSyncOpen(false);
+      qc.invalidateQueries({ queryKey: ['models'] });
+      qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+    onError: (e: Error) => message.error(e.message || '同步失败'),
+  });
+
+  const deleteModel = useMutation({
+    mutationFn: (id: number) => api.deleteModel(id),
+    onSuccess: (_res, id) => {
+      message.success('模型已删除');
+      qc.invalidateQueries({ queryKey: ['models'] });
+      qc.invalidateQueries({ queryKey: ['channels'] });
+      if (drawerId === id) setDrawerId(null);
+    },
+    onError: (e: Error) => message.error(e.message || '删除失败'),
+  });
+
+  const handleCreateModel = async (v: ModelFormValues) => {
+    await createModel.mutateAsync({
+      name: v.name.trim(),
+      contextWindow: Number(v.contextWindow) || 0,
+      capabilities: v.capabilities ?? [],
+      enabled: v.enabled !== false,
+    });
+  };
+
+  const handleSyncModel = async (id: number) => {
+    await syncModel.mutateAsync(id);
+  };
+
+  const confirmDeleteModel = (m: ModelCatalogItem) => {
+    modal.confirm({
+      title: `删除模型「${m.name}」`,
+      content: '该模型下的全部供给源会一并删除，此操作不可恢复。',
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => deleteModel.mutateAsync(m.id).catch(() => undefined),
+    });
+  };
 
   const list = useMemo(() => {
     const filtered = models.filter(m => {
@@ -81,7 +284,7 @@ export default function Models() {
       render: v => <span className="gw-mono">{v}</span>,
     },
     {
-      title: '供应商', key: 'providers', align: 'right',
+      title: '供给源', key: 'offers', align: 'right',
       render: (_, m) => <span className="gw-num">{m.offers.length}</span>,
     },
     {
@@ -113,11 +316,14 @@ export default function Models() {
     {
       title: '启用', dataIndex: 'enabled', align: 'center',
       render: (v, m) => (
-        <Switch
-          size="small"
-          checked={v}
-          onChange={next => toggleModel.mutate({ id: m.id, enabled: next })}
-        />
+        <span onClick={e => e.stopPropagation()}>
+          <Switch
+            size="small"
+            checked={v}
+            loading={busyId === m.id}
+            onChange={next => toggleModel.mutate({ id: m.id, enabled: next })}
+          />
+        </span>
       ),
     },
   ];
@@ -129,8 +335,8 @@ export default function Models() {
         desc="以模型为中心聚合多家供应商供给源，可对比价格与延迟、编排优先级"
         extra={
           <>
-            <Button>从渠道同步</Button>
-            <Button type="primary">新增模型</Button>
+            <Button onClick={() => setSyncOpen(true)}>从渠道同步</Button>
+            <Button type="primary" onClick={() => setAddOpen(true)}>新增模型</Button>
           </>
         }
       />
@@ -149,7 +355,7 @@ export default function Models() {
         />
         <Select
           style={{ width: 130 }} value={cap} onChange={setCap}
-          options={[{ value: '', label: '全部能力' }, ...CAPS.map(x => ({ value: x, label: CAP_LABEL[x] }))]}
+          options={[{ value: '', label: '全部能力' }, ...capabilities.map(x => ({ value: x, label: CAP_LABEL[x] }))]}
         />
         <Select
           style={{ width: 140 }} value={ctxRange} onChange={setCtxRange}
@@ -197,9 +403,11 @@ export default function Models() {
               <ModelCard
                 model={m}
                 picked={compare.includes(m.id)}
+                busy={busyId === m.id}
                 onOpen={() => setDrawerId(m.id)}
                 onToggleCompare={() => toggleCompare(m.id)}
                 onToggleEnabled={next => toggleModel.mutate({ id: m.id, enabled: next })}
+                onDelete={() => confirmDeleteModel(m)}
               />
             </Col>
           ))}
@@ -257,8 +465,14 @@ export default function Models() {
       <ModelDrawer
         model={models.find(m => m.id === drawerId) ?? null}
         onClose={() => setDrawerId(null)}
+        onDeleteModel={() => {
+          const m = models.find(x => x.id === drawerId);
+          if (m) confirmDeleteModel(m);
+        }}
       />
       <CompareModal open={compareOpen} models={compareModels} onClose={() => setCompareOpen(false)} />
+      <SyncModal open={syncOpen} channels={channels} syncing={syncModel.isPending} onClose={() => setSyncOpen(false)} onSync={handleSyncModel} />
+      <AddModelModal open={addOpen} creating={createModel.isPending} onClose={() => setAddOpen(false)} onCreate={handleCreateModel} />
     </div>
   );
 }

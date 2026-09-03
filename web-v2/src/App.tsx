@@ -1,7 +1,11 @@
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Skeleton } from 'antd';
 import AppLayout from '@/layout/AppLayout';
+import Login from '@/pages/Login';
+import { setUnauthorizedHandler } from '@/services/http';
+import { api } from '@/services/api';
+import { useSession } from '@/stores/session';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const Models = lazy(() => import('@/pages/Models'));
@@ -20,7 +24,47 @@ function PageLoading() {
   );
 }
 
+function Boot() {
+  return (
+    <div
+      style={{
+        height: '100vh', display: 'flex', flexDirection: 'column', gap: 14,
+        alignItems: 'center', justifyContent: 'center', background: 'var(--gw-fill)',
+      }}
+    >
+      <div
+        style={{
+          width: 44, height: 44, borderRadius: 11, background: 'var(--gw-primary)', color: '#fff',
+          fontSize: 22, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        G
+      </div>
+      <Skeleton active title={false} paragraph={{ rows: 1, width: 160 }} />
+    </div>
+  );
+}
+
+/** 会话守卫:启动拉 /auth/me 恢复会话;未登录渲染 Login(其内部含首启「创建管理员」态)。 */
 export default function App() {
+  const admin = useSession(s => s.admin);
+  const setAdmin = useSession(s => s.setAdmin);
+  const [booting, setBooting] = useState(true);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => setAdmin(null)); // 任一请求 401 → 回到登录态
+    let live = true;
+    api.me()
+      .then(a => { if (live) setAdmin(a); })
+      .catch(() => { if (live) setAdmin(null); })
+      .finally(() => { if (live) setBooting(false); });
+    return () => { live = false; setUnauthorizedHandler(null); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (booting) return <Boot />;
+  if (!admin) return <Login />;
+
   return (
     <Routes>
       <Route path="/" element={<AppLayout />}>

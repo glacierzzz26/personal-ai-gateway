@@ -106,6 +106,16 @@ func (s *Server) loginAs(w http.ResponseWriter, username, password string, expec
 	writeJSON(w, http.StatusOK, domain.MeResp{ID: admin.ID, Username: admin.Username, CreatedAt: admin.CreatedAt})
 }
 
+// handleAuthState 匿名可访问:登录页需区分「首启建管理员」与「普通登录」。
+func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
+	n, err := s.st.CountAdmins()
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"adminExists": n > 0})
+}
+
 // handleLogout 删除当前会话并清 cookie(失败也照清)。
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(auth.SessionCookie); err == nil && c.Value != "" {

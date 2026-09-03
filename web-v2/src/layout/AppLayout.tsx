@@ -1,14 +1,16 @@
 import { useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  AppstoreOutlined, ApartmentOutlined, BarChartOutlined, BulbOutlined,
-  DashboardOutlined, FileSearchOutlined, KeyOutlined, MenuFoldOutlined,
-  MenuUnfoldOutlined, MoonOutlined, NodeIndexOutlined, SearchOutlined,
+  ApartmentOutlined, AppstoreOutlined, BarChartOutlined, BulbOutlined,
+  DashboardOutlined, FileSearchOutlined, KeyOutlined, LogoutOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, NodeIndexOutlined,
   SettingOutlined, SunOutlined,
 } from '@ant-design/icons';
-import { Avatar, Dropdown, Layout, Menu, Tag, Tooltip, Typography } from 'antd';
+import { App, Avatar, Dropdown, Layout, Menu, Typography } from 'antd';
 import type { MenuProps } from 'antd';
 import { useUi } from '@/stores/ui';
+import { useSession } from '@/stores/session';
+import { api } from '@/services/api';
 
 const { Header, Sider, Content } = Layout;
 
@@ -24,12 +26,15 @@ const NAV: Record<string, [group: string, label: string]> = {
 };
 
 export default function AppLayout() {
+  const { message } = App.useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const theme = useUi(s => s.theme);
   const collapsed = useUi(s => s.collapsed);
   const toggleCollapsed = useUi(s => s.toggleCollapsed);
   const toggleTheme = useUi(s => s.toggleTheme);
+  const admin = useSession(s => s.admin);
+  const setAdmin = useSession(s => s.setAdmin);
 
   const items: MenuProps['items'] = useMemo(
     () => [
@@ -56,6 +61,25 @@ export default function AppLayout() {
   );
 
   const current = NAV[pathname];
+  const username = admin?.username ?? '';
+  const avatarLetter = username ? username[0].toUpperCase() : 'A';
+
+  const logout = async () => {
+    try { await api.logout(); message.success('已退出登录'); } catch { /* 会话可能已失效,照样回登录页 */ }
+    setAdmin(null);
+  };
+
+  const userMenu: MenuProps = {
+    items: [
+      {
+        key: 'theme', icon: theme === 'dark' ? <SunOutlined /> : <MoonOutlined />,
+        label: theme === 'dark' ? '切换亮色' : '切换暗色', onClick: toggleTheme,
+      },
+      { key: 'settings', icon: <SettingOutlined />, label: '系统设置', onClick: () => navigate('/settings') },
+      { type: 'divider' },
+      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true, onClick: logout },
+    ],
+  };
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -98,17 +122,6 @@ export default function AppLayout() {
           onClick={({ key }) => navigate(key)}
           style={{ background: 'transparent', borderInlineEnd: 'none', paddingBottom: 24 }}
         />
-
-        {!collapsed && (
-          <div
-            style={{
-              padding: '12px 16px', borderTop: '1px solid var(--gw-border-2)',
-              fontSize: 12, color: 'var(--gw-text-3)', whiteSpace: 'nowrap',
-            }}
-          >
-            最后同步 20:31
-          </div>
-        )}
       </Sider>
 
       <Layout>
@@ -141,53 +154,30 @@ export default function AppLayout() {
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
             <button
               type="button"
+              onClick={toggleTheme}
+              aria-label="切换主题"
               style={{
-                height: 32, padding: '0 10px', borderRadius: 8, cursor: 'pointer',
-                border: '1px solid var(--gw-border)', background: 'var(--gw-card)',
-                color: 'var(--gw-text-3)', fontSize: 13,
-                display: 'flex', alignItems: 'center', gap: 8,
+                width: 32, height: 32, borderRadius: 8, border: 'none', cursor: 'pointer',
+                background: 'transparent', color: 'var(--gw-text-2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
             >
-              <SearchOutlined />
-              搜索
-              <kbd
-                style={{
-                  fontSize: 11, border: '1px solid var(--gw-border)', borderRadius: 4,
-                  padding: '1px 5px', background: 'var(--gw-fill)', fontFamily: 'inherit',
-                }}
-              >
-                ⌘K
-              </kbd>
+              {theme === 'dark' ? <SunOutlined /> : <BulbOutlined />}
             </button>
 
-            <Tooltip title={theme === 'dark' ? '切换到亮色' : '切换到暗色'}>
-              <button
-                type="button"
-                onClick={toggleTheme}
-                aria-label="切换主题"
-                style={{
-                  width: 32, height: 32, borderRadius: 8, border: 'none', cursor: 'pointer',
-                  background: 'transparent', color: 'var(--gw-text-2)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
+            <Dropdown menu={userMenu} trigger={['click']}>
+              <span
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '0 4px' }}
               >
-                {theme === 'dark' ? <SunOutlined /> : <BulbOutlined />}
-              </button>
-            </Tooltip>
-
-            <Tag style={{ marginInlineEnd: 0 }}>Dev</Tag>
-
-            <Dropdown
-              menu={{
-                items: [
-                  { key: 'theme', icon: theme === 'dark' ? <MoonOutlined /> : <BulbOutlined />, label: '切换主题', onClick: toggleTheme },
-                  { key: 'settings', icon: <SettingOutlined />, label: '系统设置', onClick: () => navigate('/settings') },
-                ],
-              }}
-            >
-              <Avatar style={{ background: 'var(--gw-fill)', color: 'var(--gw-text-2)', cursor: 'pointer' }}>
-                U
-              </Avatar>
+                <Avatar size={30} style={{ background: 'var(--gw-primary)', color: '#fff' }}>
+                  {avatarLetter}
+                </Avatar>
+                {!collapsed && (
+                  <Typography.Text style={{ fontSize: 13, color: 'var(--gw-text-2)' }}>
+                    {username}
+                  </Typography.Text>
+                )}
+              </span>
             </Dropdown>
           </div>
         </Header>

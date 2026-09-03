@@ -17,6 +17,7 @@ const (
 type adminView struct {
 	now      time.Time
 	tz       int
+	chOrder  []domain.ChannelRow // ListChannels 原始序(priority ASC),列表展示照此
 	chByID   map[int64]domain.ChannelRow
 	chRecent map[int64]store.ChannelStat // 近 displayWindow
 	chToday  map[int64]store.ChannelStat // 本地自然日
@@ -34,8 +35,10 @@ func (s *Server) buildView() (*adminView, error) {
 		return nil, err
 	}
 	byID := make(map[int64]domain.ChannelRow, len(rows))
+	order := make([]domain.ChannelRow, 0, len(rows))
 	for _, ch := range rows {
 		byID[ch.ID] = ch
+		order = append(order, ch)
 	}
 	todayStart, _ := store.LocalDayWindowUTC(settings.TZOffsetMin, now)
 	recent, err := s.st.ChannelStatsSince(now.Add(-displayWindow))
@@ -52,7 +55,7 @@ func (s *Server) buildView() (*adminView, error) {
 	}
 	return &adminView{
 		now: now, tz: settings.TZOffsetMin,
-		chByID: byID, chRecent: recent, chToday: today, chModels: counts,
+		chOrder: order, chByID: byID, chRecent: recent, chToday: today, chModels: counts,
 	}, nil
 }
 
