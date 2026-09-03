@@ -1,0 +1,35 @@
+# personal-ai-gateway 配置示例。密钥一律用 ${ENV} 引用,不要写死进仓库。
+listen: ":8787"
+db_path: "gateway.db"
+
+# 统一 API keys:你所有工具(client)用的同一把钥匙写在这里。
+# secret 用强随机串:openssl rand -hex 24
+keys:
+  - name: laptop-coder
+    secret: ${GATEWAY_KEY_LAPTOP}
+    note: Claude Code / OpenCode 共用
+  - name: scripts
+    secret: ${GATEWAY_KEY_SCRIPTS}
+    note: 自写脚本/定时任务
+
+# 上游:每家厂商/中转一份。type 决定出站协议与路径拼接规则:
+#   type: openai     → base_url 需含 /v1,出站拼 /chat/completions
+#   type: anthropic  → base_url 为域名根,出站拼 /v1/messages
+upstreams:
+  - name: opencode-go
+    type: openai
+    base_url: https://REPLACE_ME/v1
+    api_key: ${OPENCODE_GO_KEY}
+    priority: 1            # 越小越优先
+    models: ["*"]          # "*" 或留空 = 该上游可出所有模型;可用前缀通配 claude-*
+    cooldown_sec: 30       # 熔断冷却(连续失败后)
+    max_failures: 3
+
+  - name: anthropic-official
+    type: anthropic
+    base_url: https://api.anthropic.com
+    api_key: ${ANTHROPIC_API_KEY}
+    priority: 2
+    models: ["claude-*"]   # 只声明你账号能用的模型范围
+    cooldown_sec: 10
+    max_failures: 3

@@ -1,0 +1,14 @@
+# 二进制与构建产物
+/gateway
+/bin/
+*.exe
+
+# 运行数据与本地配置(密钥不提交)
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+
+# 环境
+.env
+.env.*
