@@ -33,3 +33,25 @@ upstreams:
     models: ["claude-*"]   # 只声明你账号能用的模型范围
     cooldown_sec: 10
     max_failures: 3
+
+# 成本单价表(USD / 每百万 token),按声明顺序匹配,命中第一条即停,支持 "*" 与前缀通配。
+# 规则匹配到就按 (prompt*pm + completion*cm + cache_read*crm) / 1e6 折算每次请求的成本入库。
+# 单价不对会把"用量"记账算错,但对查询本身无影响;没有匹配规则的模型 cost 记 0。
+# 下列数值仅示意,请按各模型在官方的真实单价填写。
+pricing:
+  - model: claude-opus-*
+    prompt_per_m: 15
+    completion_per_m: 75
+    cache_read_per_m: 1.5
+  - model: claude-sonnet-*
+    prompt_per_m: 3
+    completion_per_m: 15
+    cache_read_per_m: 0.3
+  - model: claude-haiku-*
+    prompt_per_m: 1
+    completion_per_m: 5
+    cache_read_per_m: 0.1
+  - model: "*"            # 兜底:未收录模型记 0(可留空或删除本行)
+    prompt_per_m: 0
+    completion_per_m: 0
+    cache_read_per_m: 0

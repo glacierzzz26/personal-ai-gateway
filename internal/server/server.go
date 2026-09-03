@@ -34,6 +34,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/messages/count_tokens", s.auth(http.HandlerFunc(s.hCountTokens)))
 	mux.Handle("POST /v1/chat/completions", s.auth(http.HandlerFunc(s.hChat)))
 	mux.Handle("GET /v1/models", s.auth(http.HandlerFunc(s.hModels)))
+
+	// —— /api 管理接口(Web 端与脚本用),与模型端点共用统一 key 鉴权 ——
+	mux.Handle("GET /api/v1/usage/requests", s.auth(http.HandlerFunc(s.apiUsageRequests)))
+	mux.Handle("GET /api/v1/usage/summary", s.auth(http.HandlerFunc(s.apiUsageSummary)))
+
 	// 兜底:未知路径给 JSON 404(协议形状按请求特征推断)
 	mux.Handle("/", s.auth(http.HandlerFunc(s.handleRoot)))
 

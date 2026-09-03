@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"personal-ai-gateway/internal/config"
+	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/proxy"
 	"personal-ai-gateway/internal/router"
 	"personal-ai-gateway/internal/server"
@@ -39,7 +40,7 @@ func main() {
 	defer st.Close()
 
 	rt := router.New(cfg.Upstreams)
-	gw := proxy.New(rt, st)
+	gw := proxy.New(rt, st, pricing.New(cfg.Pricing))
 	gw.Logger = logger
 
 	httpSrv := &http.Server{

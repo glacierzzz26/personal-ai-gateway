@@ -11,10 +11,20 @@ import (
 )
 
 type Config struct {
-	Listen    string     `yaml:"listen"`
-	DBPath    string     `yaml:"db_path"`
-	Keys      []Key      `yaml:"keys"`
-	Upstreams []Upstream `yaml:"upstreams"`
+	Listen    string      `yaml:"listen"`
+	DBPath    string      `yaml:"db_path"`
+	Keys      []Key       `yaml:"keys"`
+	Upstreams []Upstream  `yaml:"upstreams"`
+	Pricing   []PriceRule `yaml:"pricing"`
+}
+
+// PriceRule 按模型(支持 "*" 与 "claude-*" 前缀通配)给定每百万 token 的美元单价。
+// 规则按声明顺序匹配,命中第一条即停;想给未收录模型兜底,把 model: "*" 放最后。
+type PriceRule struct {
+	Model          string  `yaml:"model"`
+	PromptPerM     float64 `yaml:"prompt_per_m"`
+	CompletionPerM float64 `yaml:"completion_per_m"`
+	CacheReadPerM  float64 `yaml:"cache_read_per_m"`
 }
 
 type Key struct {

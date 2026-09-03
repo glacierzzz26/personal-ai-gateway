@@ -18,6 +18,7 @@ type Store struct {
 }
 
 type LogEntry struct {
+	ID               int64
 	TS               time.Time
 	ClientKey        string
 	ClientTool       string
@@ -120,29 +121,10 @@ func (s *Store) Recent(n int) ([]LogEntry, error) {
 	if n <= 0 {
 		n = 50
 	}
-	rows, err := s.db.Query(`SELECT ts, client_key, client_tool, protocol, model, upstream, stream, status,
-		prompt_tokens, completion_tokens, cache_read_tokens, cost, latency_ms, err
-		FROM request_log ORDER BY id DESC LIMIT ?`, n)
+	rows, err := s.db.Query(`SELECT `+reqCols+` FROM request_log ORDER BY id DESC LIMIT ?`, n)
 	if err != nil {
 		return nil, fmt.Errorf("store: recent: %w", err)
 	}
 	defer rows.Close()
-
-	out := make([]LogEntry, 0, n)
-	for rows.Next() {
-		var e LogEntry
-		var ts string
-		var stream int
-		if err := rows.Scan(&ts, &e.ClientKey, &e.ClientTool, &e.Protocol, &e.Model, &e.Upstream,
-			&stream, &e.Status, &e.PromptTokens, &e.CompletionTokens, &e.CacheReadTokens,
-			&e.Cost, &e.LatencyMs, &e.Err); err != nil {
-			return nil, fmt.Errorf("store: scan: %w", err)
-		}
-		e.Stream = stream == 1
-		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-			e.TS = t
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return scanLogs(rows)
 }

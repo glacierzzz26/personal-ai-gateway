@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"personal-ai-gateway/internal/config"
+	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/proxy"
 	"personal-ai-gateway/internal/router"
 	"personal-ai-gateway/internal/store"
@@ -69,7 +70,7 @@ func buildServer(t *testing.T, ups []config.Upstream) *httptest.Server {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	gw := proxy.New(router.New(ups), st)
+	gw := proxy.New(router.New(ups), st, pricing.New(nil))
 	ts := httptest.NewServer(New(&cfg, gw, nil).Handler())
 	t.Cleanup(ts.Close)
 	return ts

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/router"
 	"personal-ai-gateway/internal/sess"
 	"personal-ai-gateway/internal/store"
@@ -33,11 +34,15 @@ const maxBody = 64 << 20 // 64MB:足够容纳长提示词+工具定义,同时防
 type Gateway struct {
 	Router *router.Router
 	Store  *store.Store
+	Price  *pricing.Resolver
 	Logger *slog.Logger
 }
 
-func New(r *router.Router, s *store.Store) *Gateway {
-	return &Gateway{Router: r, Store: s, Logger: slog.Default()}
+func New(r *router.Router, s *store.Store, price *pricing.Resolver) *Gateway {
+	if price == nil {
+		price = pricing.New(nil)
+	}
+	return &Gateway{Router: r, Store: s, Price: price, Logger: slog.Default()}
 }
 
 // Relay 处理一次模型请求(inProto/op 由 server 依据路径给出)。
@@ -113,11 +118,16 @@ func (g *Gateway) Relay(w http.ResponseWriter, r *http.Request, inProto, op stri
 			continue
 		}
 
-		handled, status, err := g.tryRelay(ctx, w, r, body, up, op, probe.Stream)
+		handled, status, err, tok := g.tryRelay(ctx, w, r, body, up, op, probe.Stream)
 		if err == nil {
 			g.Router.RecordSuccess(up.Name)
+			ent.PromptTokens = tok.prompt
+			ent.CompletionTokens = tok.completion
+			ent.CacheReadTokens = tok.cacheRead
+			ent.Cost = g.Price.Price(probe.Model).Cost(tok.prompt, tok.completion, tok.cacheRead)
 			ent.Status = status
-			g.Logger.Debug("relay ok", "upstream", up.Name, "model", probe.Model, "status", status)
+			g.Logger.Debug("relay ok", "upstream", up.Name, "model", probe.Model, "status", status,
+				"prompt", tok.prompt, "completion", tok.completion, "cache_read", tok.cacheRead)
 			return
 		}
 		if handled {

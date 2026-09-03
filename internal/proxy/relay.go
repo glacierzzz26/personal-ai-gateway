@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -46,29 +47,29 @@ func setOutboundHeaders(out *http.Request, up *config.Upstream, in *http.Request
 	}
 }
 
-// tryRelay 把一个已选好上游的请求转发出去。
+// tryRelay 把一个已选好上游的请求转发出去,并顺带解析真实 token 用量(tok)。
 //
 // 返回值约定:
 //   - handled=true  → 已向客户端写出最终响应(成功体/透传 4xx/流式中途结束),上层不得再重试;
 //   - handled=false → 未写出任何响应,错误为可重试(传输层失败/429/5xx),上层可换下一个上游。
 func (g *Gateway) tryRelay(ctx context.Context, w http.ResponseWriter, in *http.Request,
-	body []byte, up *config.Upstream, op string, stream bool) (handled bool, status int, err error) {
+	body []byte, up *config.Upstream, op string, stream bool) (handled bool, status int, err error, tok usage) {
 
 	path, err := outboundPath(up.Type, op)
 	if err != nil {
-		return false, 0, err
+		return false, 0, err, usage{}
 	}
 	url := strings.TrimRight(up.BaseURL, "/") + path
 
 	outReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return false, 0, fmt.Errorf("upstream %s: build request: %w", up.Name, err)
+		return false, 0, fmt.Errorf("upstream %s: build request: %w", up.Name, err), usage{}
 	}
 	setOutboundHeaders(outReq, up, in)
 
 	resp, err := http.DefaultClient.Do(outReq)
 	if err != nil {
-		return false, 0, fmt.Errorf("upstream %s unreachable: %w", up.Name, err)
+		return false, 0, fmt.Errorf("upstream %s unreachable: %w", up.Name, err), usage{}
 	}
 	defer resp.Body.Close()
 	// 客户端断连(ctx 取消)时立刻关闭上游连接,避免继续烧配额/tokens
@@ -85,45 +86,61 @@ func (g *Gateway) tryRelay(ctx context.Context, w http.ResponseWriter, in *http.
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(resp.StatusCode)
 		if stream {
-			err = copySSE(ctx, w, resp.Body)
+			tok, err = copySSE(ctx, w, resp.Body, up.Type)
 		} else {
-			_, err = io.Copy(w, resp.Body)
+			tok, err = copyNonStream(w, resp.Body, up.Type)
 		}
 		if err != nil {
-			return true, resp.StatusCode, err
+			return true, resp.StatusCode, err, tok
 		}
-		return true, resp.StatusCode, nil
+		return true, resp.StatusCode, nil, tok
 	}
 
 	errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
 	if retryable(resp.StatusCode) {
 		return false, resp.StatusCode, fmt.Errorf("upstream %s: status %d: %s",
-			up.Name, resp.StatusCode, brief(errBody))
+			up.Name, resp.StatusCode, brief(errBody)), usage{}
 	}
 	// 不可重试的 4xx:把上游错误体原样透传给客户端,便于看清是哪家拒绝
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(errBody)
 	return true, resp.StatusCode, fmt.Errorf("upstream %s: status %d (forwarded)",
-		up.Name, resp.StatusCode)
+		up.Name, resp.StatusCode), usage{}
 }
 
-// copySSE 把上游 SSE 流原样回传,边读边 Flush,并在客户端断开时及时收手。
-func copySSE(ctx context.Context, w http.ResponseWriter, src io.Reader) error {
-	fl, _ := w.(http.Flusher)
+// copyNonStream 整段转发非流式响应,同时把响应体读进缓冲,转发完解析 usage。
+func copyNonStream(w http.ResponseWriter, src io.Reader, proto string) (usage, error) {
+	var buf bytes.Buffer
+	if _, err := io.Copy(w, io.TeeReader(src, &buf)); err != nil {
+		return usage{}, err
+	}
+	switch proto {
+	case ProtoAnthropic:
+		return parseAnthropicUsage(buf.Bytes()), nil
+	default:
+		return parseOpenAIUsage(buf.Bytes()), nil
+	}
+}
+
+// copySSE 把上游 SSE 流原样回传(逐行写+Flush),边写边嗅探 usage;
+// 客户端断开时关闭上游连接,及时收手。
+func copySSE(ctx context.Context, w http.ResponseWriter, src io.Reader, proto string) (usage, error) {
 	errc := make(chan error, 1)
+	var tok usage
 	go func() {
-		buf := make([]byte, 32<<10)
+		br := bufio.NewReaderSize(src, 32<<10)
 		for {
-			n, err := src.Read(buf)
-			if n > 0 {
-				if _, werr := w.Write(buf[:n]); werr != nil {
+			line, err := br.ReadString('\n')
+			if len(line) > 0 {
+				if _, werr := w.Write([]byte(line)); werr != nil {
 					errc <- werr
 					return
 				}
-				if fl != nil {
+				if fl, ok := w.(http.Flusher); ok {
 					fl.Flush()
 				}
+				sniffSSELine(proto, line, &tok)
 			}
 			switch err {
 			case nil:
@@ -139,13 +156,13 @@ func copySSE(ctx context.Context, w http.ResponseWriter, src io.Reader) error {
 
 	select {
 	case err := <-errc:
-		return err
+		return tok, err
 	case <-ctx.Done():
 		if c, ok := src.(io.Closer); ok {
 			_ = c.Close() // 让转发协程立刻退出
 		}
 		<-errc
-		return fmt.Errorf("client disconnected: %w", ctx.Err())
+		return usage{}, fmt.Errorf("client disconnected: %w", ctx.Err())
 	}
 }
 
