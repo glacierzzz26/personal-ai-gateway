@@ -17,12 +17,12 @@ import (
 //   - message_delta.usage.output_tokens 用真实 completion 而非 0。
 func convertA2OStream(src io.Reader, w http.ResponseWriter, model string, estIn int) (Usage, error) {
 	st := &a2oStream{
-		w:        w,
-		model:    model,
-		msgID:    "msg_" + randHex(8),
-		estIn:    estIn,
-		toolBlk:  map[int]int{},
-		toolID:   map[int]string{},
+		w:       w,
+		model:   model,
+		msgID:   "msg_" + randHex(8),
+		estIn:   estIn,
+		toolBlk: map[int]int{},
+		toolID:  map[int]string{},
 	}
 	if err := st.emitMessageStart(); err != nil {
 		return Usage{}, err
@@ -61,14 +61,14 @@ func convertA2OStream(src io.Reader, w http.ResponseWriter, model string, estIn 
 }
 
 type a2oStream struct {
-	w      http.ResponseWriter
-	model  string
-	msgID  string
-	estIn  int
-	nextBlk int  // 下一个 anthropic content-block index
+	w        http.ResponseWriter
+	model    string
+	msgID    string
+	estIn    int
+	nextBlk  int  // 下一个 anthropic content-block index
 	openText bool // 一个 text content_block 正开着
 
-	toolBlk   map[int]int  // openai tool_call index → anthropic block index
+	toolBlk   map[int]int // openai tool_call index → anthropic block index
 	toolID    map[int]string
 	toolOrder []int // openai tool_call index 首见顺序(finalize 按块序关)
 
@@ -107,7 +107,7 @@ func (s *a2oStream) emitMessageStart() error {
 			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage": map[string]any{
-				"input_tokens":              s.estIn, // 本地估算,展示用;权威数字来自 usage 末块
+				"input_tokens":                s.estIn, // 本地估算,展示用;权威数字来自 usage 末块
 				"cache_creation_input_tokens": 0,
 				"cache_read_input_tokens":     0,
 			},

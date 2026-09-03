@@ -6,9 +6,10 @@ import (
 )
 
 // usage 是归一化后的 token 统计口径:
-//   prompt    已剔除缓存命中,为"按正常价计费的输入 token"
-//   completion 输出 token
-//   cacheRead  缓存命中 token(Anthropic cache_read / OpenAI cached_tokens)
+//
+//	prompt    已剔除缓存命中,为"按正常价计费的输入 token"
+//	completion 输出 token
+//	cacheRead  缓存命中 token(Anthropic cache_read / OpenAI cached_tokens)
 type usage struct {
 	prompt, completion, cacheRead int
 }
@@ -107,11 +108,12 @@ func sseOpenAIUsage(payload string) (usage, bool) {
 // sseAnthropicUsage 逐 chunk 收敛 usage。事件载体各家不固定:
 // 官方 message_start 带 input/cache、message_delta 带 output;opencode 校准发现它可能
 // 全放 message_delta、或 message_start 也带(两种都见过)。故对"任一带 usage 的 chunk"都做:
-//   输入/缓存  → 取 input+cache_creation 更大的一版(防后面 0 值 chunk 覆盖);
-//   输出       → 累计语义下取观测最大值(若某上游按增量下发,校准后改为累加)。
+//
+//	输入/缓存  → 取 input+cache_creation 更大的一版(防后面 0 值 chunk 覆盖);
+//	输出       → 累计语义下取观测最大值(若某上游按增量下发,校准后改为累加)。
 func sseAnthropicUsage(payload string, u *usage) {
 	var ev struct {
-		Type  string             `json:"type"`
+		Type  string              `json:"type"`
 		Usage *anthropicUsageJSON `json:"usage"`
 	}
 	if json.Unmarshal([]byte(payload), &ev) != nil || ev.Usage == nil {

@@ -100,10 +100,10 @@ func TestBuildRequestToolUseToToolCalls(t *testing.T) {
 		t.Fatalf("BuildRequest: %v", err)
 	}
 	var got struct {
-		Messages    []json.RawMessage `json:"messages"`
-		Tools       []any             `json:"tools"`
-		ToolChoice  any               `json:"tool_choice"`
-		MaxTokens   int               `json:"max_tokens"`
+		Messages   []json.RawMessage `json:"messages"`
+		Tools      []any             `json:"tools"`
+		ToolChoice any               `json:"tool_choice"`
+		MaxTokens  int               `json:"max_tokens"`
 	}
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)

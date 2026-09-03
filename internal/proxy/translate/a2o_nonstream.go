@@ -37,13 +37,13 @@ func convertA2ONonStream(raw []byte) (outBody []byte, tok Usage, err error) {
 		in = 0
 	}
 	out := anthropicMessage{
-		ID:      "msg_" + randHex(8),
-		Type:    "message",
-		Role:    "assistant",
-		Model:   o.Model,
-		Content: content,
-		StopReason:    mapFinishReason(finish),
-		StopSequence:  nil,
+		ID:           "msg_" + randHex(8),
+		Type:         "message",
+		Role:         "assistant",
+		Model:        o.Model,
+		Content:      content,
+		StopReason:   mapFinishReason(finish),
+		StopSequence: nil,
 		Usage: anthropicUsage{
 			InputTokens:   in,
 			OutputTokens:  u.CompletionTokens,

@@ -1,150 +1,81 @@
-// Package store 提供 SQLite 持久化(modernc.org/sqlite,纯 Go 无 cgo)。
-// P1 用途:request_log 请求日志,为后续用量统计与 Web 管理端提供可查询数据源。
+// Package store 提供 v2 网关的全部持久化:版本化 schema 迁移 + 各业务仓库。
+//
+// 时间口径:request_logs.ts / 各 *_at 一律存 UTC RFC3339Nano 文本;
+// 展示与聚合按 settings.tz_offset_min(默认 480)换算,见 logs.go 桶查询。
+// 渠道 api_key 只存密文(secret 包 AES-GCM),明文不落库。
 package store
 
 import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
+	"net/url"
 	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
+// ErrNotFound 记录不存在(查询/更新/删除目标缺失)。
+var ErrNotFound = errors.New("record not found")
+
+// ErrConflict 唯一性冲突(名称/模型-渠道 组合已存在)。
+var ErrConflict = errors.New("record conflict")
+
+// Store 网关数据访问门面。并发安全(sql.DB 自带池)。
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	now func() time.Time
 }
 
-type LogEntry struct {
-	ID               int64
-	TS               time.Time
-	ClientKey        string
-	ClientTool       string
-	Protocol         string // anthropic | openai(入站)
-	Model            string
-	Upstream         string
-	Stream           bool
-	Status           int
-	PromptTokens     int
-	CompletionTokens int
-	CacheReadTokens  int
-	Cost             float64
-	LatencyMs        int64
-	Err              string
-}
-
-const schema = `
-CREATE TABLE IF NOT EXISTS request_log (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts            TEXT    NOT NULL,
-  client_key    TEXT    NOT NULL DEFAULT '',
-  client_tool   TEXT    NOT NULL DEFAULT '',
-  protocol      TEXT    NOT NULL,
-  model         TEXT    NOT NULL,
-  upstream      TEXT    NOT NULL DEFAULT '',
-  stream        INTEGER NOT NULL DEFAULT 0,
-  status        INTEGER NOT NULL,
-  prompt_tokens INTEGER NOT NULL DEFAULT 0,
-  completion_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
-  cost          REAL    NOT NULL DEFAULT 0,
-  latency_ms    INTEGER NOT NULL DEFAULT 0,
-  err           TEXT    NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_reqlog_ts    ON request_log(ts);
-CREATE INDEX IF NOT EXISTS idx_reqlog_model ON request_log(model);
-
-CREATE TABLE IF NOT EXISTS upstreams (
-  name TEXT PRIMARY KEY,
-  doc  TEXT NOT NULL,      -- 整条上游配置,存 YAML raw 形式(${ENV} 引用原样保留)
-  ord  INTEGER NOT NULL    -- 列表顺序,与 ord 序一致地回读
-);
-
--- 运行时生成的模型面 API key(与 config 登录 key 分开)。密钥只存 sha256,
--- 明文仅创建响应出现一次(见 DESIGN)。revoked=1 即吊销(保留行做审计)。
-CREATE TABLE IF NOT EXISTS api_keys (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  name       TEXT    NOT NULL UNIQUE,
-  prefix     TEXT    NOT NULL,             -- 展示用(secret 前 12 字符)
-  sha256     TEXT    NOT NULL UNIQUE,      -- hex sha256(secret);绝不存明文
-  note       TEXT    NOT NULL DEFAULT '',
-  revoked    INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT    NOT NULL,
-  revoked_at TEXT    NOT NULL DEFAULT ''   -- RFC3339Nano UTC;'' = 激活
-);
-CREATE INDEX IF NOT EXISTS idx_apikeys_sha256 ON api_keys(sha256);
-`
-
-// Open 打开(必要时创建)SQLite 库并建表。父目录不存在会自动创建。
+// Open 打开(必要时创建)数据库并执行版本化迁移。
 func Open(path string) (*Store, error) {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("store: create dir: %w", err)
-		}
+	if path == "" {
+		path = "gateway-v2.db"
 	}
-	db, err := sql.Open("sqlite", path)
+	dsn, err := sqliteDSN(path)
 	if err != nil {
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
+		return nil, fmt.Errorf("store dsn: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	// busy_timeout 由 pragma 保证;WAL 下读写可并行
+	if err := migrate(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("store: wal: %w", err)
+		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
-	if _, err := db.Exec(schema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("store: migrate: %w", err)
-	}
-	return &Store{db: db}, nil
+	return &Store{db: db, now: time.Now}, nil
 }
 
-func (s *Store) Close() error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-	return s.db.Close()
-}
+// Close 关闭底层连接。
+func (s *Store) Close() error { return s.db.Close() }
 
-// Log 写入一条请求日志。写失败只返回错误,不 panic;个人网关里日志丢一两行可接受。
-func (s *Store) Log(e LogEntry) error {
-	if s == nil || s.db == nil {
-		return nil
+func (s *Store) DB() *sql.DB { return s.db }
+
+func (s *Store) nowUTC() time.Time { return s.now().UTC() }
+
+// sqliteDSN 把路径转成带 pragma 的 file: DSN(modernc.org/sqlite)。
+// 相对路径先转绝对,避免 URI 语义歧义;WAL + 外键 + 忙等待。
+func sqliteDSN(path string) (string, error) {
+	if path == ":memory:" {
+		return "file:gwmem?mode=memory&cache=shared", nil
 	}
-	const q = `INSERT INTO request_log
-	(ts, client_key, client_tool, protocol, model, upstream, stream, status,
-	 prompt_tokens, completion_tokens, cache_read_tokens, cost, latency_ms, err)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(q,
-		e.TS.UTC().Format(time.RFC3339Nano),
-		e.ClientKey, e.ClientTool, e.Protocol, e.Model, e.Upstream, boolInt(e.Stream), e.Status,
-		e.PromptTokens, e.CompletionTokens, e.CacheReadTokens, e.Cost, e.LatencyMs, e.Err,
-	)
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		return fmt.Errorf("store: log: %w", err)
+		return "", err
 	}
-	return nil
+	u := url.URL{Scheme: "file", Path: abs}
+	q := url.Values{}
+	q.Add("_pragma", "foreign_keys(1)")
+	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "journal_mode(WAL)")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
-// Recent 返回最近 n 条记录(新→旧),供调试/后续 /api 使用。
-func (s *Store) Recent(n int) ([]LogEntry, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("store: not open")
-	}
-	if n <= 0 {
-		n = 50
-	}
-	rows, err := s.db.Query(`SELECT `+reqCols+` FROM request_log ORDER BY id DESC LIMIT ?`, n)
-	if err != nil {
-		return nil, fmt.Errorf("store: recent: %w", err)
-	}
-	defer rows.Close()
-	return scanLogs(rows)
+// parseTime 解析库内时间文本(UTC RFC3339Nano)。
+func parseTime(s string) (time.Time, error) {
+	return time.Parse(time.RFC3339Nano, s)
 }

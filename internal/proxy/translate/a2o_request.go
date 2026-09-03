@@ -63,8 +63,9 @@ func buildA2ORequest(body []byte, stream bool) (outOp string, outBody []byte, es
 }
 
 // rewriteMessage 把一条 anthropic message 改成 0..n 条 openai message:
-//   user(纯文本)→ user;user(带 tool_result)→ 各 tool 消息(+残余文本置后为 user);
-//   assistant(text+tool_use)→ 单条 assistant(content+tool_calls)。
+//
+//	user(纯文本)→ user;user(带 tool_result)→ 各 tool 消息(+残余文本置后为 user);
+//	assistant(text+tool_use)→ 单条 assistant(content+tool_calls)。
 func rewriteMessage(m aMessage) []map[string]any {
 	switch m.Role {
 	case "user":

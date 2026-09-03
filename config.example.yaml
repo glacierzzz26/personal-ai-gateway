@@ -1,42 +1,16 @@
-# personal-ai-gateway 配置示例。密钥一律用 ${ENV} 引用,不要写死进仓库。
+# personal-ai-gateway v2 配置示例。
+# config.yaml 只承载网关自身 listen/db_path;业务数据(账号/渠道/模型/规则/令牌)全部存 DB。
+
 listen: ":8787"
-db_path: "gateway.db"
 
-# 统一 API keys:你所有工具(client)用的同一把钥匙写在这里。
-# secret 用强随机串:openssl rand -hex 24
-keys:
-  - name: laptop-coder
-    secret: ${GATEWAY_KEY_LAPTOP}
-    note: Claude Code / OpenCode 共用
-  - name: scripts
-    secret: ${GATEWAY_KEY_SCRIPTS}
-    note: 自写脚本/定时任务
+# v2 换新库文件(默认 gateway-v2.db)。旧 gateway.db(v1 表)原样留档,不做迁移;
+# 想跑 v2 请把旧文件挪走或直接让默认值指向新库,勿让 v1/v2 混用同一文件。
+db_path: "gateway-v2.db"
 
-# 订阅源(上游)不配置在 config.yaml:运行期以 gateway.db 的 upstreams 表为唯一权威,
-# 一律经管理 API 维护 —— GET/POST/PUT/DELETE /api/v1/upstreams(curl 示例见 README,
-# Web 管理台也可操作)。一条上游的字段(name/type/base_url/api_key/priority/models/
-# cooldown_sec/max_failures/quota,type 决定出站协议)即该 API 的 JSON body;
-# api_key 可写字面值或 ${ENV} 引用。全新部署(空 DB)启动即空上游:模型请求将 404,
-# 先加一条源即可用。
-
-# 成本单价表(USD / 每百万 token),按声明顺序匹配,命中第一条即停,支持 "*" 与前缀通配。
-# 规则匹配到就按 (prompt*pm + completion*cm + cache_read*crm) / 1e6 折算每次请求的成本入库。
-# 单价不对会把"用量"记账算错,但对查询本身无影响;没有匹配规则的模型 cost 记 0。
-# 下列数值仅示意,请按各模型在官方的真实单价填写。
-pricing:
-  - model: claude-opus-*
-    prompt_per_m: 15
-    completion_per_m: 75
-    cache_read_per_m: 1.5
-  - model: claude-sonnet-*
-    prompt_per_m: 3
-    completion_per_m: 15
-    cache_read_per_m: 0.3
-  - model: claude-haiku-*
-    prompt_per_m: 1
-    completion_per_m: 5
-    cache_read_per_m: 0.1
-  - model: "*"            # 兜底:未收录模型记 0(可留空或删除本行)
-    prompt_per_m: 0
-    completion_per_m: 0
-    cache_read_per_m: 0
+# 渠道/令牌密钥说明:
+# - 管理账号首次启动走「创建管理员」引导(DB 无账号时登录页出现),config 不含任何凭据。
+# - 渠道上游 api_key 经 AES-256-GCM 加密落库,本地主密钥来自:
+#       1) 环境变量 GW_MASTER_KEY(推荐,任意长度会被 sha256 展平);
+#       2) 缺失时自动生成 DB 同目录 gateway.master.key(0600)。
+#   主密钥换过会导致旧密文解不开 —— 保留原密钥即可解密回放。
+# - 访问令牌(模型面 /v1)明文只在创建时返回一次,库里只存 sha256。

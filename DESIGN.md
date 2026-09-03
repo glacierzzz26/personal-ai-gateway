@@ -8,6 +8,27 @@
 
 ---
 
+## 0. v2 演进记录(web-v2 管理端重构)
+
+> 下面是 v1 时代的设计文档。2026-09 起按 web-v2 前端契约(渠道/模型供给/路由规则/访问令牌/
+> 请求日志/用量/设置 全 CRUD 管理台)**同仓演进重写后端**;本小节逐里程碑增补,全文重写放收尾。
+
+**里程碑节奏(已确认)** 每站:go vet/test/build 绿 + 中文里程碑式提交 + 停靠演示 → 下一站:
+- M1 数据层与新库(本提交):config 瘦身为 listen/db_path(**默认 gateway-v2.db**,旧库整文件留档);
+  `internal/domain`(v2 DTO,字段对齐 web-v2 types)、`internal/secret`(AES-GCM 渠道密钥,主密钥
+  GW_MASTER_KEY 或 DB 同目录 gateway.master.key)、`internal/store` 全量重写
+  (schema_migrations 版本化 + channels/models/model_offers/rules/tokens/admins/sessions/
+  request_logs/settings 仓库,含时区聚合/额度扣减/日志分页);server 仅留 /healthz 骨架。
+- M2 管理 REST + 账号登录 → M3 全真转发引擎 → M4 前端接线 → M5 收尾(删旧 web/、本文档全文重写)。
+
+关键口径:M1 内已定死、后续里程碑都遵循:
+- **时间**:ts/`*_at` 一律 UTC RFC3339Nano 落库;聚合小时/天桶、today 口径按 settings.tz_offset_min
+  (默认 480=Asia/Shanghai)换算(store/logs.go tzMod + LocalDayWindowUTC)。
+- **密钥**:渠道 api_key 只存密文(secret.Encrypt);访问令牌明文创建响应一次、库内 sha256(store tokens)。
+- **唯一性/级联**:channels/models 名唯一;(model, channel) offer 唯一;offers 随渠道/模型删除级联。
+
+---
+
 ## 1. 架构总览
 
 ```

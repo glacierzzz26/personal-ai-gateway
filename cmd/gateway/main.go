@@ -1,4 +1,4 @@
-// gateway 是 personal-ai-gateway 的入口:组装 config → store → router → proxy → server。
+// gateway 是 personal-ai-gateway 的入口:组装 config → 主密钥 → store(新库+迁移)→ server。
 package main
 
 import (
@@ -9,14 +9,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"personal-ai-gateway/internal/config"
-	"personal-ai-gateway/internal/pricing"
-	"personal-ai-gateway/internal/proxy"
-	"personal-ai-gateway/internal/quota"
-	"personal-ai-gateway/internal/router"
+	"personal-ai-gateway/internal/secret"
 	"personal-ai-gateway/internal/server"
 	"personal-ai-gateway/internal/store"
 )
@@ -27,10 +25,18 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	cfg, err := config.Load(*cfgPath)
-	if err != nil {
-		logger.Error("config", "err", err)
-		os.Exit(1)
+	// 配置文件缺失时用默认(空 config)→ listen :8787 / gateway-v2.db
+	cfg := config.Config{}
+	if _, err := os.Stat(*cfgPath); err == nil {
+		cfg, err = config.Load(*cfgPath)
+		if err != nil {
+			logger.Error("config", "err", err)
+			os.Exit(1)
+		}
+	} else {
+		cfg.Listen = ":8787"
+		cfg.DBPath = "gateway-v2.db"
+		logger.Info("no config file, using defaults", "listen", cfg.Listen, "db", cfg.DBPath)
 	}
 
 	st, err := store.Open(cfg.DBPath)
@@ -40,44 +46,17 @@ func main() {
 	}
 	defer st.Close()
 
-	// 订阅源以 DB upstreams 表为唯一权威(管理 API 增删改的落点),
-	// config.yaml 不再承载上游(见 DESIGN 决策 #13)。表空 = 空上游的合法启动态:
-	// 网关照常服务管理面与 /healthz,模型请求无源可路由 → 404(not_found_error)。
-	ups, err := st.LoadUpstreams()
-	if err != nil {
-		logger.Error("store", "err", err)
+	// 主密钥引导(渠道 api_key 加密用):GW_MASTER_KEY 优先,否则 DB 同目录自动生成。
+	if _, err := secret.BootstrapKey(filepath.Dir(abs(cfg.DBPath))); err != nil {
+		logger.Error("secret", "err", err)
 		os.Exit(1)
 	}
-	if len(ups) == 0 {
-		logger.Info("no upstreams configured",
-			"msg", "model requests will 404 until an upstream is added via /api/v1/upstreams")
-	}
-	// raw → resolved:展开 ${ENV} 并补默认值;router/quota/proxy 只用这份。
-	resolved := config.ResolveUpstreams(ups)
 
-	rt := router.New(resolved)
-	gw := proxy.New(rt, st, pricing.New(cfg.Pricing))
-	gw.Logger = logger
-
-	// 配额感知选路:P3。启用了 quota 的上游由管理器后台轮询,
-	// 快照实时推给 router(超过 hard 阈值的上游自动降级到备选)。
-	qm := quota.NewManager(resolved, &quota.HTTPFetcher{}, logger)
-	qm.SetUpdater(rt.SetQuota)
-	qctx, qcancel := context.WithCancel(context.Background())
-	defer qcancel()
-	go qm.Run(qctx)
-	quotaEnabled := 0
-	for _, u := range resolved {
-		if u.Quota != nil && u.Quota.Enabled {
-			quotaEnabled++
-		}
-	}
-	if quotaEnabled > 0 {
-		logger.Info("quota manager", "enabled_upstreams", quotaEnabled)
+	if err := st.PruneExpiredSessions(); err != nil {
+		logger.Warn("prune sessions", "err", err)
 	}
 
-	srv := server.New(&cfg, gw, logger)
-	srv.SetQuotaManager(qm)
+	srv := server.New(cfg, st)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
@@ -88,15 +67,8 @@ func main() {
 	logger.Info("gateway starting",
 		"listen", cfg.Listen,
 		"db", cfg.DBPath,
-		"keys", len(cfg.Keys),
 	)
-	for _, u := range resolved {
-		logger.Info("upstream",
-			"name", u.Name, "type", u.Type, "base", u.BaseURL,
-			"priority", u.Priority, "models", u.Models)
-	}
 
-	// 优雅退出:关停 http server
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
@@ -117,4 +89,12 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+func abs(p string) string {
+	a, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return a
 }

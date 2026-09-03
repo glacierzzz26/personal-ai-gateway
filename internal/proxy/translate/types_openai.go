@@ -16,9 +16,9 @@ type oChoiceNS struct {
 }
 
 type oMessage struct {
-	Content          string       `json:"content"`
-	ToolCalls        []oToolCall  `json:"tool_calls"`
-	ReasoningContent string       `json:"reasoning_content"` // DeepSeek-reasoner 等,v1 丢弃
+	Content          string      `json:"content"`
+	ToolCalls        []oToolCall `json:"tool_calls"`
+	ReasoningContent string      `json:"reasoning_content"` // DeepSeek-reasoner 等,v1 丢弃
 }
 
 type oToolCall struct {
@@ -41,9 +41,9 @@ type oUsage struct {
 // oChunk 是流式 chat.completion.chunk 的收敛字段。
 type oChunk struct {
 	Choices []struct {
-		Index        int            `json:"index"`
-		Delta        oChunkDelta    `json:"delta"`
-		FinishReason string         `json:"finish_reason"`
+		Index        int         `json:"index"`
+		Delta        oChunkDelta `json:"delta"`
+		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *oUsage `json:"usage"` // 兼容服务常在末块带;部分服务把它与 usage 一起给
 }
