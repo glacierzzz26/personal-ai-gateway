@@ -1,6 +1,6 @@
 // Package proxy 是网关数据面:接收一个已鉴权的模型请求,路由到上游并转发。
-// P1 只做"同协议透传"(anthropic↔anthropic / openai↔openai),带 failover 与熔断;
-// 跨协议翻译(a2o)后续在 internal/proxy/translate 实施。
+// 同协议走逐字节透传 fast path;跨协议(anthropic→openai,a2o)走 internal/proxy/translate,
+// 两者都带 failover 与熔断(候选循环里并行分支,见 tryRelay / tryRelayTranslate)。
 package proxy
 
 import (
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"personal-ai-gateway/internal/pricing"
+	"personal-ai-gateway/internal/proxy/translate"
 	"personal-ai-gateway/internal/router"
 	"personal-ai-gateway/internal/sess"
 	"personal-ai-gateway/internal/store"
@@ -93,12 +94,12 @@ func (g *Gateway) Relay(w http.ResponseWriter, r *http.Request, inProto, op stri
 	cands := g.Router.Candidates(probe.Model)
 	if len(cands) == 0 {
 		if g.Router.HasAny(probe.Model) {
-			// 有上游能出该模型,但都是异协议 → P1 跨协议翻译未实施,给明确提示
-			ent.Status = http.StatusNotImplemented
-			ent.Err = "cross-protocol translation not implemented"
+			// 有上游能出该模型但候选为空 → 熔断中/冷启动,与协议无关
+			ent.Status = http.StatusServiceUnavailable
+			ent.Err = "no candidate available"
 			WriteError(w, inProto, ent.Status, "api_error",
-				fmt.Sprintf("model %q is only served by upstreams of a different protocol "+
-					"(cross-protocol translation lands in a later milestone)", probe.Model))
+				fmt.Sprintf("model %q has configured upstreams but none is currently available "+
+					"(circuit open or warming up)", probe.Model))
 		} else {
 			ent.Status = http.StatusNotFound
 			ent.Err = "model unavailable"
@@ -108,17 +109,48 @@ func (g *Gateway) Relay(w http.ResponseWriter, r *http.Request, inProto, op stri
 		return
 	}
 
+	// count_tokens 特判:anthropic 腿才有准确计数端点;模型只由 openai 型上游出时本地估算
+	// (启发式,非计量;估算值不落 request_log 的 token 列)。anthropic 腿存在则照常走循环透传。
+	if op == OpCountTokens {
+		hasAnthropic := false
+		for _, up := range cands {
+			if up.Type == ProtoAnthropic {
+				hasAnthropic = true
+				break
+			}
+		}
+		if !hasAnthropic {
+			est := translate.EstimateMessagesInput(body)
+			ent.Status = http.StatusOK
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"input_tokens": est})
+			g.Logger.Debug("count_tokens: local estimate (openai-only upstreams)",
+				"model", probe.Model, "input_tokens", est)
+			return
+		}
+	}
+
 	var lastErr error
 	for _, up := range cands {
 		ent.Upstream = up.Name
-		if up.Type != inProto {
-			// 跨协议候选:P1 直接跳过,不改熔断状态
-			lastErr = fmt.Errorf("upstream %s speaks %s but client speaks %s (translation pending)",
-				up.Name, up.Type, inProto)
+		cross := up.Type != inProto
+		// 跨协议翻译目前只覆盖「messages op、anthropic→openai」;其余(op 不支持 / o2a)跳过。
+		translatable := op == OpMessages && translate.Supported(inProto, up.Type)
+		if cross && !translatable {
+			lastErr = fmt.Errorf("upstream %s speaks %s but client speaks %s (no translation for op %q)",
+				up.Name, up.Type, inProto, op)
 			continue
 		}
 
-		handled, status, err, tok := g.tryRelay(ctx, w, r, body, up, op, probe.Stream)
+		var handled bool
+		var status int
+		var err error
+		var tok usage
+		if cross {
+			handled, status, err, tok = g.tryRelayTranslate(ctx, inProto, probe.Model, w, r, body, up, op, probe.Stream)
+		} else {
+			handled, status, err, tok = g.tryRelay(ctx, w, r, body, up, op, probe.Stream)
+		}
 		if err == nil {
 			g.Router.RecordSuccess(up.Name)
 			ent.PromptTokens = tok.prompt
@@ -131,7 +163,7 @@ func (g *Gateway) Relay(w http.ResponseWriter, r *http.Request, inProto, op stri
 			return
 		}
 		if handled {
-			// 已向客户端写出最终响应(上游 4xx 透传 / 流式中途断开):不再重试
+			// 已向客户端写出最终响应(上游 4xx 重编码 / 翻译路径已写 / 流式中途断开):不再重试
 			ent.Status = status
 			ent.Err = err.Error()
 			g.Logger.Warn("relay ended", "upstream", up.Name, "model", probe.Model, "err", err)

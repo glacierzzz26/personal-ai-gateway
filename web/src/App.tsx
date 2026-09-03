@@ -4,6 +4,7 @@ import {
   AlertOutlined,
   ApiOutlined,
   DashboardOutlined,
+  KeyOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -23,6 +24,7 @@ import KeyGate from './KeyGate'
 import Overview from './pages/Overview'
 import UsageLogs from './pages/UsageLogs'
 import UpstreamsPage from './pages/UpstreamsPage'
+import KeysPage from './pages/KeysPage'
 import QuotaStatusPage from './pages/QuotaStatusPage'
 
 const { Header, Sider, Content } = Layout
@@ -32,11 +34,13 @@ const MENU = [
   { key: '/overview', icon: <DashboardOutlined />, label: '概览' },
   { key: '/usage', icon: <TableOutlined />, label: '用量明细' },
   { key: '/upstreams', icon: <ApiOutlined />, label: '订阅源' },
+  { key: '/keys', icon: <KeyOutlined />, label: 'API Keys' },
 ]
 const TITLES: Record<string, string> = {
   '/overview': '概览',
   '/usage': '用量明细',
   '/upstreams': '订阅源',
+  '/keys': 'API Keys',
   '/quota': '配额与告警',
 }
 
@@ -207,6 +211,7 @@ function Shell() {
               <Route path="/overview" element={<Overview />} />
               <Route path="/usage" element={<UsageLogs />} />
               <Route path="/upstreams" element={<UpstreamsPage />} />
+              <Route path="/keys" element={<KeysPage />} />
               <Route path="/quota" element={<QuotaStatusPage />} />
             </Routes>
           </div>

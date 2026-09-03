@@ -49,6 +49,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/upstreams/{name}", s.auth(http.HandlerFunc(s.apiUpstreamUpdate)))
 	mux.Handle("DELETE /api/v1/upstreams/{name}", s.auth(http.HandlerFunc(s.apiUpstreamDelete)))
 	mux.Handle("POST /api/v1/upstreams/{name}/test", s.auth(http.HandlerFunc(s.apiUpstreamTest)))
+	mux.Handle("GET /api/v1/keys", s.auth(http.HandlerFunc(s.apiKeyList)))
+	mux.Handle("POST /api/v1/keys", s.auth(http.HandlerFunc(s.apiKeyCreate)))
+	mux.Handle("POST /api/v1/keys/{name}/revoke", s.auth(http.HandlerFunc(s.apiKeyRevoke)))
 
 	// 兜底:未知路径给 JSON 404(协议形状按请求特征推断)
 	mux.Handle("/", s.auth(http.HandlerFunc(s.handleRoot)))

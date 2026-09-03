@@ -11,6 +11,7 @@ const key ctxKey = 0
 type Info struct {
 	KeyName string // 认证通过的统一 key 的名字
 	Tool    string // 来源工具(截断后的 User-Agent)
+	Admin   bool   // true = config 登录/管理 key(全权);false = DB 生成的模型面 key(仅 /v1/*)
 }
 
 func With(ctx context.Context, i Info) context.Context {

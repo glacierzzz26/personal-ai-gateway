@@ -61,6 +61,20 @@ CREATE TABLE IF NOT EXISTS upstreams (
   doc  TEXT NOT NULL,      -- 整条上游配置,存 YAML raw 形式(${ENV} 引用原样保留)
   ord  INTEGER NOT NULL    -- 列表顺序,与 ord 序一致地回读
 );
+
+-- 运行时生成的模型面 API key(与 config 登录 key 分开)。密钥只存 sha256,
+-- 明文仅创建响应出现一次(见 DESIGN)。revoked=1 即吊销(保留行做审计)。
+CREATE TABLE IF NOT EXISTS api_keys (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT    NOT NULL UNIQUE,
+  prefix     TEXT    NOT NULL,             -- 展示用(secret 前 12 字符)
+  sha256     TEXT    NOT NULL UNIQUE,      -- hex sha256(secret);绝不存明文
+  note       TEXT    NOT NULL DEFAULT '',
+  revoked    INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT    NOT NULL,
+  revoked_at TEXT    NOT NULL DEFAULT ''   -- RFC3339Nano UTC;'' = 激活
+);
+CREATE INDEX IF NOT EXISTS idx_apikeys_sha256 ON api_keys(sha256);
 `
 
 // Open 打开(必要时创建)SQLite 库并建表。父目录不存在会自动创建。

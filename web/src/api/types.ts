@@ -109,3 +109,19 @@ export interface ApiErrorBody {
     message?: string
   }
 }
+
+// 模型面 API Key 行(GET/POST /api/v1/keys)。绝不包含 secret/sha256;active 时 revoked_at 为空串。
+export interface ApiKeyRow {
+  id: number
+  name: string
+  prefix: string
+  note: string
+  revoked: boolean
+  created_at: string
+  revoked_at: string
+}
+
+// POST 创建成功:201 响应额外携带一次性 secret(明文仅此一次,不落库/日志/列表)。
+export interface ApiKeyCreated extends ApiKeyRow {
+  secret: string
+}
