@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"personal-ai-gateway/internal/domain"
@@ -23,8 +22,7 @@ func channelProbeReq(ch domain.ChannelRow) (*http.Request, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decrypt channel key: %w", err)
 	}
-	base := strings.TrimRight(ch.BaseURL, "/")
-	req, err := http.NewRequest(http.MethodGet, base+"/v1/models", nil)
+	req, err := http.NewRequest(http.MethodGet, apiRoot(ch.BaseURL)+"/v1/models", nil)
 	if err != nil {
 		return nil, err
 	}

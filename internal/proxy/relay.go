@@ -59,6 +59,17 @@ func OutProto(p domain.Provider) string {
 	return ProtoOpenAI
 }
 
+// apiRoot 渠道 base_url 归一为「协议根」:容忍用户按惯例填带尾缀 /v1 的地址
+// (https://api.deepseek.com/v1),也容忍只填根(https://api.deepseek.com)。
+// 调用方再统一拼 /v1/... 路径,避免 base+"/v1/models" 拼出 …/v1/v1/models。
+func apiRoot(base string) string {
+	b := strings.TrimRight(base, "/")
+	if strings.HasSuffix(b, "/v1") {
+		b = strings.TrimSuffix(b, "/v1")
+	}
+	return b
+}
+
 // outboundReq 一条候选的出站请求参数(密文已解密)。
 type outboundReq struct {
 	URL        string
@@ -76,7 +87,7 @@ func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []by
 	if err != nil {
 		return nil, fmt.Errorf("decrypt channel key: %w", err)
 	}
-	base := strings.TrimRight(ch.BaseURL, "/")
+	base := apiRoot(ch.BaseURL)
 	req := &outboundReq{APIKey: key, Proto: outProto, Stream: stream, Method: http.MethodPost}
 	if inProto == outProto {
 		req.Body = body // 同协议 fast path:原样透传
