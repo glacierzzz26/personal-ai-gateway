@@ -8,7 +8,8 @@
 *.db-wal
 *.db-shm
 config.yaml
-gateway.master.key   # 渠道密钥加密主密钥(自动生成,0600,不入库)
+# 渠道密钥加密主密钥(自动生成,0600,不入库)
+gateway.master.key
 
 # 环境
 .env
