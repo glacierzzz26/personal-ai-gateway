@@ -512,3 +512,20 @@ type SyncResp struct {
 	Updated int      `json:"updated"`
 	Models  []string `json:"models"`
 }
+
+// QuotaWindow 渠道 /v1/usage 单个窗口(rolling≈近5h/weekly/monthly)。
+// Status=="ok" 时 Percent 为该窗口已用百分比。
+type QuotaWindow struct {
+	Status  string  `json:"status"`
+	Percent float64 `json:"percent"`
+}
+
+// ChannelQuotaResp GET /channels/{id}/quota 返回。windows 仅含 status=ok 的窗口
+// (缺失/非 ok = 该窗口/该渠道不提供额度)。Available=false 时 error 给出原因。
+type ChannelQuotaResp struct {
+	Available bool                   `json:"available"`
+	PlanName  string                 `json:"planName,omitempty"`
+	Windows   map[string]QuotaWindow `json:"windows"`
+	LatencyMs int64                  `json:"latencyMs"`
+	Error     string                 `json:"error,omitempty"`
+}

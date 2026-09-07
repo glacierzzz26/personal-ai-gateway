@@ -15,6 +15,11 @@ import { CAP_LABEL, fmt } from '@/utils/format';
 import type { Capability, Channel, ModelCatalogItem, ModelDraft } from '@/types';
 
 type SortKey = 'price' | 'latency' | 'hot' | 'ctx';
+/** 启用状态筛选:all / 仅已启用 / 仅未启用 */
+type EnableState = 'all' | 'on' | 'off';
+
+/** 真实可用性:目录启用 且有至少一个启用供给源(与选路引擎口径一致)。 */
+const usable = (m: ModelCatalogItem): boolean => m.enabled && m.offers.some(o => o.enabled);
 
 /** 「新增模型」表单值 */
 interface ModelFormValues {
@@ -166,7 +171,7 @@ export default function Models() {
   const [cap, setCap] = useState<string>('');
   const [ctxRange, setCtxRange] = useState<string>('');
   const [sort, setSort] = useState<SortKey>('price');
-  const [onlyOn, setOnlyOn] = useState(false);
+  const [enableState, setEnableState] = useState<EnableState>('all');
   const [view, setView] = useState<string>('plaza');
   const [compare, setCompare] = useState<number[]>([]);
   const [drawerId, setDrawerId] = useState<number | null>(null);
@@ -252,7 +257,9 @@ export default function Models() {
       if (ctxRange === 's' && m.contextWindow >= 32000) return false;
       if (ctxRange === 'm' && (m.contextWindow < 32000 || m.contextWindow > 128000)) return false;
       if (ctxRange === 'l' && m.contextWindow <= 128000) return false;
-      if (onlyOn && !m.enabled) return false;
+      // 启用状态按“真实可用性”筛:目录启用 + 至少一个启用供给源
+      if (enableState === 'on' && !usable(m)) return false;
+      if (enableState === 'off' && usable(m)) return false;
       return true;
     });
     return [...filtered].sort((a, b) => {
@@ -263,7 +270,7 @@ export default function Models() {
       if (sort === 'hot') return b.todayRequests - a.todayRequests;
       return b.contextWindow - a.contextWindow;
     });
-  }, [models, kw, provider, cap, ctxRange, sort, onlyOn]);
+  }, [models, kw, provider, cap, ctxRange, sort, enableState]);
 
   const toggleCompare = (id: number) => {
     setCompare(prev => {
@@ -375,9 +382,16 @@ export default function Models() {
             { value: 'ctx', label: '按上下文' },
           ]}
         />
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--gw-text-2)' }}>
-          <Switch size="small" checked={onlyOn} onChange={setOnlyOn} />仅看已启用
-        </span>
+        <Segmented
+          size="small"
+          value={enableState}
+          onChange={v => setEnableState(v as EnableState)}
+          options={[
+            { value: 'all', label: '全部' },
+            { value: 'on', label: '仅已启用' },
+            { value: 'off', label: '仅未启用' },
+          ]}
+        />
         <div style={{ marginLeft: 'auto' }}>
           <Segmented
             value={view} onChange={setView}
@@ -390,7 +404,7 @@ export default function Models() {
         <Card>
           <Empty description="没有匹配的模型">
             <Button
-              onClick={() => { setKw(''); setProvider(''); setCap(''); setCtxRange(''); setOnlyOn(false); }}
+              onClick={() => { setKw(''); setProvider(''); setCap(''); setCtxRange(''); setEnableState('all'); }}
             >
               清除筛选
             </Button>

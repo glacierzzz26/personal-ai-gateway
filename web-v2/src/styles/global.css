@@ -66,8 +66,8 @@ body {
 }
 .gw-page {
   animation: gw-fade-in 0.18s ease;
-  max-width: 1440px;
-  margin: 0 auto;
+  /* 主内容铺满可用宽度(各页 Row/Col 已响应式;超宽列由表格横向滚动兜底) */
+  min-width: 0;
 }
 
 /* 卡片：1px 边框分层，hover 只改边框色 */

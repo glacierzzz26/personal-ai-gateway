@@ -106,6 +106,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("PATCH /api/v1/channels/{id}", s.handleChannelsUpdate)
 	m.HandleFunc("DELETE /api/v1/channels/{id}", s.handleChannelsDelete)
 	m.HandleFunc("POST /api/v1/channels/{id}/test", s.handleChannelTest)
+	m.HandleFunc("GET /api/v1/channels/{id}/quota", s.handleChannelQuota)
 	m.HandleFunc("POST /api/v1/channels/{id}/sync-models", s.handleChannelSyncModels)
 
 	m.HandleFunc("GET /api/v1/models", s.handleModelsList)

@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/proxy"
 )
 
 // handleChannelsList 渠道列表(含状态/延迟/今日用量/供给源数展示)。
@@ -99,6 +101,42 @@ func (s *Server) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleChannelQuota 渠道额度(GET {{apiRoot}}/v1/usage 的 rolling/weekly/monthly)。
+// 失败/不支持也回 200 + available=false + error(前端据此展示灰色占位,不抛查询异常)。
+func (s *Server) handleChannelQuota(w http.ResponseWriter, r *http.Request) {
+	id, ok := paramID(r, "id")
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "bad channel id")
+		return
+	}
+	ch, err := s.st.GetChannel(id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	settings, err := s.st.GetSettings()
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	resp := domain.ChannelQuotaResp{Available: true, Windows: map[string]domain.QuotaWindow{}}
+	plan, windows, lat, err := s.rl.FetchChannelQuota(r.Context(), s.rl.Client(settings), ch)
+	resp.PlanName = plan
+	resp.LatencyMs = lat
+	if err != nil {
+		resp.Available = false
+		if errors.Is(err, proxy.ErrQuotaUnsupported) {
+			resp.Error = "该渠道协议无 /v1/usage 额度接口"
+		} else {
+			resp.Error = err.Error()
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp.Windows = windows
 	writeJSON(w, http.StatusOK, resp)
 }
 

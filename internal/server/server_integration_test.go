@@ -296,3 +296,68 @@ func TestAdminCRUD(t *testing.T) {
 	code, _ = doJSON(t, c, http.MethodDelete, base+"/api/v1/logs", nil)
 	mustStatus(t, code, http.StatusOK, "clear logs")
 }
+
+// TestChannelQuota 渠道额度接口全链路:正常解析 / 非 ok 窗口略去 / Anthropic 判不支持。
+func TestChannelQuota(t *testing.T) {
+	srv, c, _ := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+
+	var hitUsage bool
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v1/usage") {
+			hitUsage = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"usage":{
+				"rolling":{"status":"ok","percent":12},
+				"weekly":{"status":"ok","percent":34},
+				"monthly":{"status":"error","percent":0}
+			}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(up.Close)
+
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels", map[string]any{
+		"name": "q-oa", "provider": "OpenAI", "baseUrl": up.URL, "apiKey": "sk-quota",
+	})
+	mustStatus(t, code, http.StatusOK, "create channel")
+	chID := int64(decode[map[string]any](t, body)["id"].(float64))
+
+	code, body = doJSON(t, c, http.MethodGet, fmt.Sprintf("%s/api/v1/channels/%d/quota", base, chID), nil)
+	mustStatus(t, code, http.StatusOK, "channel quota")
+	if !hitUsage {
+		t.Fatal("upstream /v1/usage was not called")
+	}
+	q := decode[map[string]any](t, body)
+	if q["available"] != true {
+		t.Fatalf("quota available = %v: %s", q["available"], body)
+	}
+	windows, ok := q["windows"].(map[string]any)
+	if !ok {
+		t.Fatalf("quota windows missing: %s", body)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("windows = %v, want only rolling/weekly (monthly status=error dropped)", windows)
+	}
+	if r, ok := windows["rolling"].(map[string]any); !ok || r["status"] != "ok" || r["percent"].(float64) != 12 {
+		t.Fatalf("rolling window = %v", windows["rolling"])
+	}
+
+	// Anthropic:协议无额度接口 → available=false + error(不打上游)
+	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/channels", map[string]any{
+		"name": "q-ant", "provider": "Anthropic", "baseUrl": up.URL, "apiKey": "sk-x",
+	})
+	mustStatus(t, code, http.StatusOK, "create anthropic channel")
+	antID := int64(decode[map[string]any](t, body)["id"].(float64))
+	code, body = doJSON(t, c, http.MethodGet, fmt.Sprintf("%s/api/v1/channels/%d/quota", base, antID), nil)
+	mustStatus(t, code, http.StatusOK, "anthropic quota")
+	aq := decode[map[string]any](t, body)
+	if aq["available"] != false {
+		t.Fatalf("anthropic quota available = %v, want false: %s", aq["available"], body)
+	}
+	if msg, _ := aq["error"].(string); msg == "" {
+		t.Fatalf("anthropic quota error missing: %s", body)
+	}
+}

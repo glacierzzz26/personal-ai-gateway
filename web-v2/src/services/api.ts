@@ -6,8 +6,8 @@
  * 这里统一除以 100 还原为 0..1 小数供 UI(fmt.pct)使用;errorRate 本身即小数。
  */
 import type {
-  AdminMe, Channel, ChannelDraft, ChannelTestResult, GatewayToken, LogFilters,
-  LogPage, MatchMode, MetricPoint, ModelCatalogItem, ModelDraft, ModelOffer,
+  AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, GatewayToken,
+  LogFilters, LogPage, MatchMode, MetricPoint, ModelCatalogItem, ModelDraft, ModelOffer,
   ModelUsageData, OfferDraft, OverviewData, RequestLogItem, RouteRule, RuleDraft,
   Settings, SyncResult, TokenCreateResult, TokenDraft, UsageDim, UsageRow,
 } from '@/types';
@@ -51,6 +51,8 @@ export const api = {
   },
   deleteChannel(id: number): Promise<unknown> { return http.del(`/channels/${id}`); },
   testChannel(id: number): Promise<ChannelTestResult> { return http.post(`/channels/${id}/test`); },
+  /** 渠道额度(上游 GET {{apiRoot}}/v1/usage);仅 OpenAI 协议渠道会查询 */
+  channelQuota(id: number): Promise<ChannelQuota> { return http.get(`/channels/${id}/quota`); },
   syncModels(id: number): Promise<SyncResult> { return http.post(`/channels/${id}/sync-models`); },
 
   /* —— 模型广场 —— */

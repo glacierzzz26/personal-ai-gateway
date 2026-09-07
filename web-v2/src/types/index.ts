@@ -248,6 +248,23 @@ export interface SyncResult {
   models: string[];
 }
 
+/** 渠道额度单窗口(status==="ok" 时 percent 为已用百分比,0-100)。 */
+export interface QuotaWindow {
+  status: string;
+  percent: number;
+}
+
+export type QuotaWindowKey = 'rolling' | 'weekly' | 'monthly';
+
+/** GET /channels/{id}/quota 返回:windows 仅含可用窗口;available=false 时 error 给出原因。 */
+export interface ChannelQuota {
+  available: boolean;
+  planName?: string;
+  windows?: Partial<Record<QuotaWindowKey, QuotaWindow>>;
+  latencyMs: number;
+  error?: string;
+}
+
 export interface TokenCreateResult {
   key: string;
   token: GatewayToken;

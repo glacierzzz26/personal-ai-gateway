@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import {
-  Alert, Button, Card, Descriptions, Drawer, Empty, Input, Select, Table, Tag,
+  Alert, Button, Card, Empty, Input, Select, Table, Tag,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import PageHeader from '@/components/PageHeader';
+import RequestLogDrawer from '@/components/RequestLogDrawer';
 import { api } from '@/services/api';
 import { fmt } from '@/utils/format';
 import type { LogFilters, RequestLogItem } from '@/types';
@@ -195,52 +196,7 @@ export default function Logs() {
         />
       </Card>
 
-      <Drawer
-        width={640}
-        open={!!detail}
-        onClose={() => setDetail(null)}
-        title={detail ? <span className="gw-mono">#{detail.id}</span> : null}
-        destroyOnClose
-      >
-        {detail && (
-          <>
-            {detail.error && (
-              <div
-                style={{
-                  border: '1px solid var(--gw-border)', borderLeft: '2px solid #EF4444',
-                  borderRadius: 6, padding: '10px 12px', fontSize: 13,
-                  color: 'var(--gw-text-2)', background: 'var(--gw-fill)', marginBottom: 16,
-                  wordBreak: 'break-all',
-                }}
-              >
-                {detail.error}
-              </div>
-            )}
-            <Descriptions column={1} size="small" bordered styles={{ label: { width: 116 } }}>
-              <Descriptions.Item label="请求 ID"><span className="gw-mono">{detail.id}</span></Descriptions.Item>
-              <Descriptions.Item label="时间">{detail.ts}</Descriptions.Item>
-              <Descriptions.Item label="模型"><span className="gw-mono">{detail.model}</span></Descriptions.Item>
-              <Descriptions.Item label="渠道">{detail.channelName || '—'}</Descriptions.Item>
-              <Descriptions.Item label="令牌">{detail.tokenName || '—'}</Descriptions.Item>
-              <Descriptions.Item label="来源 IP">{detail.ip || '—'}</Descriptions.Item>
-              <Descriptions.Item label="状态码">
-                {detail.statusCode}
-                {okCode(detail.statusCode) ? '' : ' (失败)'}
-              </Descriptions.Item>
-              <Descriptions.Item label="输入 Token"><span className="gw-num">{fmt.n(detail.inTokens)}</span></Descriptions.Item>
-              <Descriptions.Item label="输出 Token"><span className="gw-num">{fmt.n(detail.outTokens)}</span></Descriptions.Item>
-              {!!detail.cacheReadTokens && (
-                <Descriptions.Item label="缓存命中 Token">
-                  <span className="gw-num">{fmt.n(detail.cacheReadTokens!)}</span>
-                </Descriptions.Item>
-              )}
-              <Descriptions.Item label="首字延迟">{detail.firstTokenMs ? fmt.ms(detail.firstTokenMs) : '—'}</Descriptions.Item>
-              <Descriptions.Item label="总耗时">{fmt.ms(detail.totalMs)}</Descriptions.Item>
-              <Descriptions.Item label="花费">{fmt.usd(detail.costUsd, 6)}</Descriptions.Item>
-            </Descriptions>
-          </>
-        )}
-      </Drawer>
+      <RequestLogDrawer detail={detail} onClose={() => setDetail(null)} />
     </div>
   );
 }

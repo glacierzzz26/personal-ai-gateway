@@ -13,7 +13,6 @@ const Channels = lazy(() => import('@/pages/Channels'));
 const Routing = lazy(() => import('@/pages/Routing'));
 const Tokens = lazy(() => import('@/pages/Tokens'));
 const Logs = lazy(() => import('@/pages/Logs'));
-const Usage = lazy(() => import('@/pages/Usage'));
 const Settings = lazy(() => import('@/pages/Settings'));
 
 function PageLoading() {
@@ -78,7 +77,6 @@ export default function App() {
         <Route path="routing" element={<Suspense fallback={<PageLoading />}><Routing /></Suspense>} />
         <Route path="tokens" element={<Suspense fallback={<PageLoading />}><Tokens /></Suspense>} />
         <Route path="logs" element={<Suspense fallback={<PageLoading />}><Logs /></Suspense>} />
-        <Route path="usage" element={<Suspense fallback={<PageLoading />}><Usage /></Suspense>} />
         <Route path="settings" element={<Suspense fallback={<PageLoading />}><Settings /></Suspense>} />
         <Route
           path="*"

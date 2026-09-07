@@ -1,17 +1,18 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert, App, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select,
-  Space, Switch, Table, Typography,
+  Space, Spin, Switch, Table, Tooltip, Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { UseQueryResult } from '@tanstack/react-query';
 import PageHeader from '@/components/PageHeader';
 import ProviderMark from '@/components/ProviderMark';
 import StatusTag from '@/components/StatusTag';
 import { api } from '@/services/api';
 import { providers } from '@/constants';
 import { fmt } from '@/utils/format';
-import type { Channel, ChannelDraft, HealthStatus, Provider } from '@/types';
+import type { Channel, ChannelDraft, ChannelQuota, HealthStatus, Provider, QuotaWindowKey } from '@/types';
 
 const { Text } = Typography;
 
@@ -56,6 +57,66 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败,请稍后重试';
 }
 
+/** 额度窗口展示顺序与标签(rolling≈近5h)。 */
+const QUOTA_WINS: Array<{ key: QuotaWindowKey; label: string }> = [
+  { key: 'rolling', label: '5h' },
+  { key: 'weekly', label: '周' },
+  { key: 'monthly', label: '月' },
+];
+
+/** 百分比展示:整数不带小数,否则保留 1 位。 */
+const pctText = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
+/** 已用阈值着色:≥80% 红 / ≥50% 橙。 */
+const pctColor = (pct: number): string => (pct >= 80 ? '#EF4444' : pct >= 50 ? '#F59E0B' : 'inherit');
+
+const dash = <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
+
+/** 额度单元格:可用→"5h 12% · 周 34% · 月 56%" + 逐窗口已用/剩余 tooltip;失败/不支持→灰色占位。 */
+function QuotaCell({ q, provider }: { q: UseQueryResult<ChannelQuota, Error>; provider: Provider }) {
+  if (provider === 'Anthropic') {
+    return <Tooltip title="Anthropic 协议无 /v1/usage 额度接口">{dash}</Tooltip>;
+  }
+  if (q.isPending && !q.data) return <Spin size="small" />;
+  const quota = q.data;
+  if (q.isError || !quota || !quota.available) {
+    return <Tooltip title={quota?.error || '额度接口未响应'}>{dash}</Tooltip>;
+  }
+  const wins = QUOTA_WINS.filter(w => quota.windows?.[w.key]?.status === 'ok');
+  if (wins.length === 0) {
+    return <Tooltip title="该渠道未返回可用额度窗口(不支持或已耗尽未上报)">{dash}</Tooltip>;
+  }
+  const detail = (
+    <div style={{ fontSize: 12, lineHeight: 1.9, minWidth: 170 }}>
+      {quota.planName && <div style={{ opacity: 0.85 }}>套餐：{quota.planName}</div>}
+      {wins.map(w => {
+        const pct = quota.windows![w.key]!.percent;
+        return (
+          <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
+            <span>{w.label} 窗口</span>
+            <span className="gw-num">已用 {pctText(pct)}% · 剩余 {pctText(Math.max(0, 100 - pct))}%</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+  return (
+    <Tooltip title={detail}>
+      <span style={{ whiteSpace: 'nowrap' }} className="gw-num">
+        {wins.map((w, i) => {
+          const pct = quota.windows![w.key]!.percent;
+          return (
+            <span key={w.key}>
+              {i > 0 && <span style={{ margin: '0 4px', color: 'var(--gw-text-3)' }}>·</span>}
+              <span style={{ color: pctColor(pct) }}>{w.label} {pctText(pct)}%</span>
+            </span>
+          );
+        })}
+      </span>
+    </Tooltip>
+  );
+}
+
 export default function Channels() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
@@ -80,6 +141,22 @@ export default function Channels() {
     queryFn: api.getChannels,
     retry: 0,
   });
+
+  // 额度:对每条渠道并发查询上游 /v1/usage(Anthropic 协议渠道不查)。失败静默,UI 显示灰色占位。
+  const quotaQueries = useQueries({
+    queries: channels.map(ch => ({
+      queryKey: ['channel-quota', ch.id],
+      queryFn: () => api.channelQuota(ch.id),
+      enabled: ch.provider !== 'Anthropic',
+      retry: 0,
+      staleTime: 60_000,
+    })),
+  });
+  const quotaById = useMemo(() => {
+    const m = new Map<number, UseQueryResult<ChannelQuota, Error>>();
+    channels.forEach((ch, i) => m.set(ch.id, quotaQueries[i]));
+    return m;
+  }, [channels, quotaQueries]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['channels'] });
 
@@ -259,6 +336,13 @@ export default function Channels() {
       render: v => <span className="gw-num">{fmt.usd(v)}</span>,
     },
     {
+      title: '额度', key: 'quota', width: 200,
+      render: (_, r) => {
+        const q = quotaById.get(r.id);
+        return q ? <QuotaCell q={q} provider={r.provider} /> : dash;
+      },
+    },
+    {
       title: '状态', dataIndex: 'status',
       render: (_, r) => (
         <Space size={6}>
@@ -321,7 +405,7 @@ export default function Channels() {
           loading={isLoading}
           dataSource={list}
           columns={columns}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1480 }}
           pagination={{ pageSize: 10, showSizeChanger: false }}
         />
       </Card>

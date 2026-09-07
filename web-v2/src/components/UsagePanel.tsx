@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { Card, Col, Empty, Row, Segmented, Select, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
-import PageHeader from '@/components/PageHeader';
 import Chart from '@/components/Chart';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
@@ -16,7 +15,8 @@ const COL_LABEL: Record<UsageDim, string> = { model: '模型', channel: '渠道'
 /** "2026-09-03" → "09-03" */
 const dayLabel = (ts: string) => ts.slice(5);
 
-export default function Usage() {
+/** 用量维度钻取面板(原「用量统计」页核心):仅保留拆解部分,无独立页头/汇总卡,供 Dashboard 嵌入。 */
+export default function UsagePanel() {
   const c = useChartColors();
   const [dim, setDim] = useState<UsageDim>('model');
   const [days, setDays] = useState(7);
@@ -124,47 +124,27 @@ export default function Usage() {
     },
   ];
 
-  const statCards: Array<[label: string, value: string, color?: string]> = [
-    ['总请求', fmt.n(totals.requests)],
-    ['输入 Token', fmt.k(totals.inTokens)],
-    ['输出 Token', fmt.k(totals.outTokens)],
-    ['总花费', fmt.usd(totals.cost)],
-    ['平均错误率', fmt.pct(totals.errRate), totals.errRate > 0.01 ? '#EF4444' : totals.errRate > 0.005 ? '#F59E0B' : '#16A34A'],
-  ];
-
   return (
-    <div className="gw-page">
-      <PageHeader
-        title="用量统计"
-        desc="按模型 / 渠道 / 令牌维度拆解请求与成本"
-        extra={
-          <>
-            <Select
-              style={{ width: 130 }} value={days}
-              onChange={v => setDays(v)}
-              options={[{ value: 7, label: '近 7 天' }, { value: 30, label: '近 30 天' }]}
-            />
-            <Segmented
-              value={dim} onChange={v => setDim(v as UsageDim)}
-              options={(['model', 'channel', 'token'] as UsageDim[]).map(d => ({ value: d, label: DIM_LABEL[d] }))}
-            />
-          </>
-        }
-      />
-
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        {statCards.map(([label, value, color]) => (
-          <Col xs={24} sm={12} md={8} xl={4} key={label}>
-            <Card className="gw-card-hover">
-              <div style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>{label}</div>
-              <div className="gw-num" style={{ fontSize: 24, fontWeight: 600, marginTop: 8, letterSpacing: '-.4px', color }}>
-                {value}
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 12 }}>统计口径：近 {days} 天</div>
-            </Card>
-          </Col>
-        ))}
-      </Row>
+    <>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
+          <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
+            按 {COL_LABEL[dim]} × 近 {days} 天聚合请求与成本
+          </div>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <Select
+            style={{ width: 130 }} value={days}
+            onChange={v => setDays(v)}
+            options={[{ value: 7, label: '近 7 天' }, { value: 30, label: '近 30 天' }]}
+          />
+          <Segmented
+            value={dim} onChange={v => setDim(v as UsageDim)}
+            options={(['model', 'channel', 'token'] as UsageDim[]).map(d => ({ value: d, label: DIM_LABEL[d] }))}
+          />
+        </div>
+      </div>
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={24} xl={16}>
@@ -202,6 +182,6 @@ export default function Usage() {
           locale={{ emptyText: <Empty description={`所选时间范围内暂无${COL_LABEL[dim]}级别的用量记录`} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
         />
       </Card>
-    </div>
+    </>
   );
 }

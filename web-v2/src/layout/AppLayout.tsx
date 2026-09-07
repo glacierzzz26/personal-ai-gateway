@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ApartmentOutlined, AppstoreOutlined, BarChartOutlined, BulbOutlined,
+  ApartmentOutlined, AppstoreOutlined, BulbOutlined,
   DashboardOutlined, FileSearchOutlined, KeyOutlined, LogoutOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, NodeIndexOutlined,
   SettingOutlined, SunOutlined,
@@ -21,7 +21,6 @@ const NAV: Record<string, [group: string, label: string]> = {
   '/routing': ['资源', '路由规则'],
   '/tokens': ['访问', '访问令牌'],
   '/logs': ['观测', '请求日志'],
-  '/usage': ['观测', '用量统计'],
   '/settings': ['系统', '系统设置'],
 };
 
@@ -51,7 +50,6 @@ export default function AppLayout() {
       ] },
       { key: 'g4', type: 'group', label: '观测', children: [
         { key: '/logs', icon: <FileSearchOutlined />, label: '请求日志' },
-        { key: '/usage', icon: <BarChartOutlined />, label: '用量统计' },
       ] },
       { key: 'g5', type: 'group', label: '系统', children: [
         { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },

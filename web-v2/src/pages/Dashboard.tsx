@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { App, Button, Card, Col, Empty, Row, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -7,6 +8,8 @@ import PageHeader from '@/components/PageHeader';
 import Chart from '@/components/Chart';
 import Sparkline from '@/components/Sparkline';
 import StatusTag from '@/components/StatusTag';
+import RequestLogDrawer from '@/components/RequestLogDrawer';
+import UsagePanel from '@/components/UsagePanel';
 import { api } from '@/services/api';
 import { fmt } from '@/utils/format';
 import { useChartColors } from '@/hooks/useChartColors';
@@ -45,6 +48,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const c = useChartColors();
   const qc = useQueryClient();
+  const [detail, setDetail] = useState<RequestLogItem | null>(null);
 
   const { data: overview } = useQuery({ queryKey: ['overview'], queryFn: api.getOverview, refetchInterval: 15000 });
   const { data: channels = [] } = useQuery({ queryKey: ['channels'], queryFn: api.getChannels });
@@ -207,8 +211,12 @@ export default function Dashboard() {
           scroll={{ x: 860 }}
           pagination={false}
           locale={{ emptyText: <Empty description="暂无请求，快去创建渠道与令牌体验吧" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+          onRow={r => ({ onClick: () => setDetail(r), style: { cursor: 'pointer' } })}
         />
       </Card>
+
+      <UsagePanel />
+      <RequestLogDrawer detail={detail} onClose={() => setDetail(null)} />
     </div>
   );
 }
