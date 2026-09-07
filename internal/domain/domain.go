@@ -506,11 +506,13 @@ type TestResp struct {
 	Message   string `json:"message,omitempty"`
 }
 
-// SyncResp 从渠道同步模型结果。
+// SyncResp 从渠道同步模型结果。ModelCount 为该渠道同步后总关联供给源数
+// (口径与渠道列表 modelCount 一致,供弹窗展示权威总数)。
 type SyncResp struct {
-	Added   int      `json:"added"`
-	Updated int      `json:"updated"`
-	Models  []string `json:"models"`
+	Added      int      `json:"added"`
+	Updated    int      `json:"updated"`
+	Models     []string `json:"models"`
+	ModelCount int      `json:"modelCount"`
 }
 
 // QuotaWindow 渠道 /v1/usage 单个窗口(rolling≈近5h/weekly/monthly)。

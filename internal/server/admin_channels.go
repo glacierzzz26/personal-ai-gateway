@@ -101,6 +101,9 @@ func (s *Server) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+	// 测试成功即回写健康态:清熔断 + EWMA 计入探测延迟(与真实转发同一原语)。
+	// 无近 15 分钟真实流量的渠道,列表/仪表盘行延迟即显示 ≈ 最近探测值。
+	s.eng.RecordSuccess(ch.ID, lat)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -165,7 +168,13 @@ func (s *Server) handleChannelSyncModels(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if len(ids) == 0 {
-		writeJSON(w, http.StatusOK, domain.SyncResp{Added: 0, Updated: 0, Models: []string{}})
+		// 上游无返回 → 渠道已有关联保持不变,仍回权威总数。
+		n, err := s.st.ChannelModelCount(ch.ID)
+		if err != nil {
+			writeStoreErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, domain.SyncResp{Added: 0, Updated: 0, Models: []string{}, ModelCount: n})
 		return
 	}
 	resp := domain.SyncResp{Models: ids}
@@ -187,6 +196,13 @@ func (s *Server) handleChannelSyncModels(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	// 该渠道同步后总关联数(与列表「N 个模型」同口径),供前端弹窗与列表同屏一致。
+	n, err := s.st.ChannelModelCount(ch.ID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	resp.ModelCount = n
 	writeJSON(w, http.StatusOK, resp)
 }
 

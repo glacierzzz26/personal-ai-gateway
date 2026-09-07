@@ -134,7 +134,7 @@ export default function Channels() {
   const [submitting, setSubmitting] = useState(false);
 
   // 同步模型结果展示
-  const [syncRes, setSyncRes] = useState<{ name: string; added: number; updated: number; models: string[] } | null>(null);
+  const [syncRes, setSyncRes] = useState<{ name: string; added: number; updated: number; models: string[]; modelCount: number } | null>(null);
 
   const { data: channels = [], isLoading } = useQuery({
     queryKey: ['channels'],
@@ -167,6 +167,9 @@ export default function Channels() {
       const name = channels.find(c => c.id === id)?.name ?? '';
       if (r.ok) message.success(`${name} 探测成功 · ${fmt.ms(r.latencyMs)}`);
       else message.error(`${name} 探测失败:${r.message ?? '未知错误'}`);
+      // 后端已把探测结果写回(清熔断 + EWMA 延迟),刷新以让行内/仪表盘展示一致。
+      qc.invalidateQueries({ queryKey: ['channels'] });
+      qc.invalidateQueries({ queryKey: ['models'] });
     },
     onError: () => {
       setTestingId(null);
@@ -268,7 +271,13 @@ export default function Channels() {
     setSyncingId(row.id);
     try {
       const r = await api.syncModels(row.id);
-      setSyncRes({ name: row.name, added: r.added, updated: r.updated, models: r.models });
+      setSyncRes({ name: row.name, added: r.added, updated: r.updated, models: r.models, modelCount: r.modelCount });
+      // 弹窗总数取自后端同口径 modelCount;先把该行乐观对齐,再统一失效刷新,保证与列表同屏一致。
+      qc.setQueryData<Channel[]>(['channels'], old =>
+        (old ?? []).map(c => (c.id === row.id ? { ...c, modelCount: r.modelCount } : c)),
+      );
+      qc.invalidateQueries({ queryKey: ['channels'] });
+      qc.invalidateQueries({ queryKey: ['models'] });
     } catch (e) {
       message.error(`同步失败:${errText(e)}`);
     } finally {
@@ -516,7 +525,7 @@ export default function Channels() {
               type={syncRes.added > 0 ? 'success' : 'info'}
               showIcon
               style={{ marginBottom: 12 }}
-              message={`新增 ${syncRes.added} 个模型,更新关联 ${syncRes.updated} 个`}
+              message={`本渠道现关联 ${syncRes.modelCount} 个模型(本次新增 ${syncRes.added}、已存在 ${syncRes.updated})`}
               description="目录 / 供给源已刷新;新同步的模型默认停用,需到「模型广场」定价后启用。"
             />
             {syncRes.models.length > 0 ? (

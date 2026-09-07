@@ -168,6 +168,13 @@ func (s *Store) ChannelModelCounts() (map[int64]int, error) {
 	return out, rows.Err()
 }
 
+// ChannelModelCount 单渠道挂载供给源数(与 ChannelModelCounts 同口径)。
+func (s *Store) ChannelModelCount(chID int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM model_offers WHERE channel_id = ?`, chID).Scan(&n)
+	return n, err
+}
+
 type scanner interface{ Scan(dest ...any) error }
 
 func scanChannel(row scanner) (domain.ChannelRow, error) {

@@ -246,6 +246,8 @@ export interface SyncResult {
   added: number;
   updated: number;
   models: string[];
+  /** 该渠道同步后总关联供给源数(与渠道列表「N 个模型」同口径) */
+  modelCount: number;
 }
 
 /** 渠道额度单窗口(status==="ok" 时 percent 为已用百分比,0-100)。 */
