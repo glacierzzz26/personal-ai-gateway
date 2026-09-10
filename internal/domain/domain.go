@@ -81,6 +81,17 @@ const (
 	TokenExpired  TokenStatus = "expired"
 )
 
+// Role 账号角色。admin 可见/可改全部;user 只能自助管理自己的访问令牌。
+type Role string
+
+const (
+	RoleAdmin Role = "admin"
+	RoleUser  Role = "user"
+)
+
+// Valid 是否为受支持的角色值。
+func (r Role) Valid() bool { return r == RoleAdmin || r == RoleUser }
+
 // ---------- 渠道 ----------
 
 // ChannelInput 创建/更新渠道的请求体。apiKey 留空表示不改/不设置。
@@ -317,6 +328,7 @@ type RuleRead struct {
 // ---------- 访问令牌 ----------
 
 // TokenInput 创建/更新令牌。allowedModels "*" 或模型名单。
+// OwnerID 仅创建时生效(admin 可指定归属;user 由服务端强制为自己)。
 type TokenInput struct {
 	Name          string       `json:"name"`
 	AllowedModels []string     `json:"allowedModels"`
@@ -324,6 +336,7 @@ type TokenInput struct {
 	RpmLimit      int          `json:"rpmLimit"`
 	ExpiresAt     *string      `json:"expiresAt"`
 	Status        *TokenStatus `json:"status"`
+	OwnerID       *int64       `json:"ownerId,omitempty"`
 }
 
 func (t *TokenInput) Defaults() {
@@ -333,18 +346,22 @@ func (t *TokenInput) Defaults() {
 }
 
 // TokenRead 令牌展示结构。KeyMasked 为前缀+尾号掩码,明文只在创建响应出现一次。
+// KeyRetrievable=key_cipher 非空(本特性上线后创建的 key 才可回显/生成配置)。
 type TokenRead struct {
-	ID            int64       `json:"id"`
-	Name          string      `json:"name"`
-	KeyMasked     string      `json:"keyMasked"`
-	AllowedModels []string    `json:"allowedModels"`
-	QuotaUsd      float64     `json:"quotaUsd"`
-	UsedUsd       float64     `json:"usedUsd"`
-	RpmLimit      int         `json:"rpmLimit"`
-	ExpiresAt     *string     `json:"expiresAt"`
-	LastUsedAt    *string     `json:"lastUsedAt"`
-	Status        TokenStatus `json:"status"`
-	CreatedAt     time.Time   `json:"createdAt"`
+	ID             int64       `json:"id"`
+	Name           string      `json:"name"`
+	KeyMasked      string      `json:"keyMasked"`
+	AllowedModels  []string    `json:"allowedModels"`
+	QuotaUsd       float64     `json:"quotaUsd"`
+	UsedUsd        float64     `json:"usedUsd"`
+	RpmLimit       int         `json:"rpmLimit"`
+	ExpiresAt      *string     `json:"expiresAt"`
+	LastUsedAt     *string     `json:"lastUsedAt"`
+	Status         TokenStatus `json:"status"`
+	CreatedAt      time.Time   `json:"createdAt"`
+	OwnerID        *int64      `json:"ownerId"`
+	OwnerName      string      `json:"ownerName,omitempty"`
+	KeyRetrievable bool        `json:"keyRetrievable"`
 }
 
 // TokenRow 令牌存储行(内部)。
@@ -360,14 +377,16 @@ type TokenRow struct {
 	ExpiresAt     *string
 	LastUsedAt    *string
 	Status        TokenStatus
+	OwnerID       *int64
 }
 
-// ---------- 管理员与会话 ----------
+// ---------- 管理员 / 用户与会话 ----------
 
-// AdminUser 管理账号。
+// AdminUser 管理账号(兼 /auth/me 响应)。Role 决定管理台可见范围。
 type AdminUser struct {
 	ID        int64     `json:"id"`
 	Username  string    `json:"username"`
+	Role      Role      `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -377,11 +396,39 @@ type LoginReq struct {
 	Password string `json:"password"`
 }
 
-// MeResp 当前会话管理员信息。
+// MeResp 当前会话账号信息(与 AdminUser 同形)。
 type MeResp struct {
 	ID        int64     `json:"id"`
 	Username  string    `json:"username"`
+	Role      Role      `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// UserRead GET /users 行(管理员视角;KeyCount 为该用户名下的访问令牌数)。
+type UserRead struct {
+	ID        int64     `json:"id"`
+	Username  string    `json:"username"`
+	Role      Role      `json:"role"`
+	KeyCount  int       `json:"keyCount"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// UserCreateReq POST /users 请求体(管理员建号,设初始密码)。
+type UserCreateReq struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     Role   `json:"role"`
+}
+
+// PasswordChangeReq 改自己密码(需验旧密码)。
+type PasswordChangeReq struct {
+	OldPassword string `json:"oldPassword"`
+	NewPassword string `json:"newPassword"`
+}
+
+// PasswordResetReq 管理员重置他人密码(无需旧密码)。
+type PasswordResetReq struct {
+	NewPassword string `json:"newPassword"`
 }
 
 // ---------- 日志与用量 ----------
@@ -485,6 +532,9 @@ type Settings struct {
 	RecordRequestBody bool   `json:"recordRequestBody"`
 	SampleRatePct     int    `json:"sampleRatePct"` // 0-100
 	TZOffsetMin       int    `json:"tzOffsetMin"`   // 默认 480(Asia/Shanghai)
+	// PublicBaseURL 生成 Claude 配置时对外可见的网关基址(如 https://ai-gateway.lan)。
+	// 留空则按请求的 scheme+host 推断(X-Forwarded-Proto/Host 优先)。
+	PublicBaseURL string `json:"publicBaseUrl,omitempty"`
 }
 
 func (s *Settings) Defaults() {
@@ -513,6 +563,16 @@ type SyncResp struct {
 	Updated    int      `json:"updated"`
 	Models     []string `json:"models"`
 	ModelCount int      `json:"modelCount"`
+}
+
+// ClaudeConfigResp GET /tokens/{id}/claude-config 的返回:一段可逐字复制进
+// ~/.claude/settings.json 的配置(含真实 key),及其实用提示。
+type ClaudeConfigResp struct {
+	TokenID      int64             `json:"tokenId"`
+	BaseURL      string            `json:"baseUrl"`
+	SettingsJSON string            `json:"settingsJson"` // 缩进版 JSON 文本,前端原样展示/复制
+	ModelAliases map[string]string `json:"modelAliases"` // opus/sonnet/haiku → 实际模型名
+	Warnings     []string          `json:"warnings,omitempty"`
 }
 
 // QuotaWindow 渠道 /v1/usage 单个窗口(rolling≈近5h/weekly/monthly)。

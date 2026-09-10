@@ -12,6 +12,7 @@ package secret
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -49,6 +50,18 @@ func BootstrapKey(dbDir string) ([]byte, error) {
 // Current 返回已引导的主密钥;未引导返回 nil。
 func Current() []byte {
 	return current
+}
+
+// DeriveSubkey 从已引导的主密钥派生用途隔离的 32 字节子密钥(HMAC-SHA256,label 作域分隔)。
+// 用于会话 JWT 签名等「不复用主密钥本体」的场景;主密钥轮换即整族派生密钥全变。
+// 主密钥未引导时返回错误。
+func DeriveSubkey(label string) ([]byte, error) {
+	if !loaded || current == nil {
+		return nil, fmt.Errorf("master key not bootstrapped (set %s or keep %s)", EnvKey, KeyFile)
+	}
+	mac := hmac.New(sha256.New, current)
+	mac.Write([]byte(label))
+	return mac.Sum(nil), nil
 }
 
 func bootstrap(dbDir string) ([]byte, error) {
