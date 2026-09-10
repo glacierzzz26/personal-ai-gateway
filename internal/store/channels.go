@@ -137,16 +137,27 @@ func (s *Store) ListChannels() ([]domain.ChannelRow, error) {
 	return out, rows.Err()
 }
 
-// DeleteChannel 删除渠道(其 model_offers 级联删除)。
+// DeleteChannel 删除渠道:其 model_offers 级联删除,并清掉因此失去全部供给源的模型
+// (避免无供给源的孤儿模型残留在目录/模型广场)。整体一个事务。
 func (s *Store) DeleteChannel(id int64) error {
-	res, err := s.db.Exec(`DELETE FROM channels WHERE id=?`, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`DELETE FROM channels WHERE id=?`, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	// 删渠道已级联删其 offers;此处再删目录里没有任何供给源的模型。
+	if _, err := tx.Exec(`DELETE FROM models WHERE id NOT IN (SELECT model_id FROM model_offers)`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ChannelModelCounts 每个渠道挂载的供给源数量(map channelID→count),供列表回显。

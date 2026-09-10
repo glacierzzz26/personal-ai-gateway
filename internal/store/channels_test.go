@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -109,4 +110,42 @@ func (s *Store) createOfferForTest(modelID, channelID int64, priority int) error
 		RateLimitRpm: 60, Enabled: enabledPtr(true), Priority: intPtr(priority),
 	})
 	return err
+}
+
+// TestDeleteChannelPurgesOrphanModels:删渠道后,失去全部供给源的模型一并删除;
+// 仍有其他渠道供给源的模型保留;从未挂过供给源的孤儿模型也被清理。
+func TestDeleteChannelPurgesOrphanModels(t *testing.T) {
+	st := newTestStore(t)
+	a, _ := st.CreateChannel(domain.ChannelInput{Name: "A", Provider: domain.ProviderOpenAI, BaseURL: "http://a"})
+	b, _ := st.CreateChannel(domain.ChannelInput{Name: "B", Provider: domain.ProviderOpenAI, BaseURL: "http://b"})
+
+	onlyA, _ := st.CreateModel(domain.ModelInput{Name: "only-a"})         // 仅挂 A → 应删
+	bothAB, _ := st.CreateModel(domain.ModelInput{Name: "both-ab"})       // 挂 A+B → 保留
+	onlyB, _ := st.CreateModel(domain.ModelInput{Name: "only-b"})         // 仅挂 B → 保留
+	orphan, _ := st.CreateModel(domain.ModelInput{Name: "never-offered"}) // 无供给源 → 应删
+
+	mustNoErr(t, st.createOfferForTest(onlyA.ID, a.ID, 1), "offer only-a@A")
+	mustNoErr(t, st.createOfferForTest(bothAB.ID, a.ID, 1), "offer both@A")
+	mustNoErr(t, st.createOfferForTest(bothAB.ID, b.ID, 2), "offer both@B")
+	mustNoErr(t, st.createOfferForTest(onlyB.ID, b.ID, 1), "offer only-b@B")
+
+	mustNoErr(t, st.DeleteChannel(a.ID), "delete channel A")
+
+	if _, err := st.GetModel(onlyA.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("only-a should be purged, got err=%v", err)
+	}
+	if _, err := st.GetModel(orphan.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("orphan model should be purged, got err=%v", err)
+	}
+	if _, err := st.GetModel(bothAB.ID); err != nil {
+		t.Errorf("both-ab should survive (has offer on B): %v", err)
+	}
+	offers, err := st.ListModelOffers(bothAB.ID)
+	mustNoErr(t, err, "list offers both-ab")
+	if len(offers) != 1 || offers[0].ChannelID != b.ID {
+		t.Errorf("both-ab should keep only B offer, got %+v", offers)
+	}
+	if _, err := st.GetModel(onlyB.ID); err != nil {
+		t.Errorf("only-b should survive: %v", err)
+	}
 }
