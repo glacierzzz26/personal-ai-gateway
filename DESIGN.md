@@ -46,7 +46,7 @@ internal/domain v2 实体 DTO(JSON tag,兼 API body 与展示字段)
 internal/secret AES-GCM(渠道 api_key);主密钥 GW_MASTER_KEY 或 gateway.master.key(0600)
 internal/store  schema 版本化;channels/models/model_offers/rules/tokens/admins/sessions/
                 request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
-internal/auth   管理账号(bcrypt)+ 会话(随机 token,库存 sha256,httpOnly SameSite=Lax cookie)
+internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
 internal/engine 把目录+offers+规则+渠道健康编译为一次转发决策(候选/策略/重试/兜底)
 internal/proxy  relay 转发 + translate(anthropic↔openai 双向,流式状态机 + usage 权威计数)+ probe/ping
 internal/server 管理面 CRUD handler(会话)+ 模型面(令牌)+ 静态托管 web-v2/dist(SPA 回退)
@@ -55,8 +55,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 
 ## 3. 数据模型(新库 `gateway-v2.db`,schema_migrations 版本化)
 
-- `admins(id, username UNIQUE, password_bcrypt, created_at)` — config 不再承载账号。
-- `sessions(token UNIQUE, admin_id, created_at, expires_at)` — 随机 token,sha256 落库。
+- `admins(id, username UNIQUE, password_bcrypt, role TEXT DEFAULT 'admin', created_at)` — config 不再承载账号;
+  role 分 `admin`(全权)/`user`(仅能管理自己的令牌)。
 - `channels(id, name, provider, base_url, api_key_cipher, key_masked, priority, weight, timeout_ms,
    tags(json), enabled, max_failures, cooldown_sec, note, created_at, updated_at)`。
 - `models(id, name UNIQUE, context_window, capabilities(json), enabled, …)`。
@@ -64,23 +64,30 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
    priority, enabled, rate_limit_rpm, note, UNIQUE(model_id, channel_id))` — 渠道/模型删除级联。
 - `rules(id, name, enabled, match_mode(prefix|wildcard|regex), pattern, strategy(priority|weight|latency),
    channel_ids(json), weights(json), fallback_channel_id, retry, timeout_ms, sort, hit)`。
-- `tokens(id, name, sha256 UNIQUE, key_masked, allowed_models(json "*"|数组), quota_usd, used_usd,
-   rpm_limit, expires_at, status, last_used_at, …)` — 明文只在创建响应一次。
+- `tokens(id, name, sha256 UNIQUE, key_cipher, key_masked, allowed_models(json "*"|数组), quota_usd, used_usd,
+   rpm_limit, expires_at, status, last_used_at, owner_id FK→admins NULL, …)` — sha256 供鉴权,key_cipher
+   (AES-GCM)供回显/生成配置;owner_id=NULL 为全局 key;删用户级联删其令牌。m0002 之前建的旧 key 无密文。
 - `request_logs(id, ts UTC, model, channel_id/name, token_id/name, protocol, stream, status,
    in/out/cache tokens, cost, first_token_ms, total_ms, ip, err)` — idx ts/model/channel/token。
-- `settings(k PK, v)` — 网关参数 + `tz_offset_min`(默认 +480 Asia/Shanghai)。
+- `settings(k PK, v)` — 网关参数 + `tz_offset_min`(默认 +480 Asia/Shanghai)+ `public_base_url`(生成配置用)。
 
 **时间口径**:`ts/*_at` UTC RFC3339Nano 落库;小时/天桶、today、日志展示全部按 `settings.tz_offset_min`
 换算后再截串聚合(store logs.go tzMod / LocalDayWindowUTC),避免 UTC 桶与本地图表错位一天。
 
 ## 4. 鉴权模型
 
-- **管理面**(`/api/*`):管理员会话 cookie。`GET /auth/state` 匿名放行(仅回 `adminExists`,驱动首启引导);
-  其余管理端点在中间件按 session 校验,失败 401。
+- **管理面**(`/api/*`):会话 **JWT**(HS256,签名密钥由主密钥经 `secret.DeriveSubkey` 派生),写 httpOnly
+  cookie `gw_session`。无状态:登出=清 cookie;为让改密码/改角色/删号立即生效,中间件除验签外还用
+  `AdminByID` 复核角色与密码版本(`pv` claim)。`GET /auth/state` 匿名放行(仅回 `adminExists`,驱动首启引导)。
+- **角色授权**:`requireAdmin` 闸门保护 channels/models 写/rules/logs/settings/overview/usage/users;
+  `GET /models` 与 tokens 面为「已登录即可」。令牌端点按 owner 收束:user 只见/操作自己名下,越权回 404。
 - **模型面**(`/v1/*`):访问令牌。`extractSecret`(x-api-key | Authorization Bearer)→ sha256 查 tokens;
   校验 `status=active`、未过期、`used_usd < quota_usd`、RPM 滑动窗口,失败按协议回
-  `authentication_error / quota_exceeded / rate_limit_exceeded`(403/429)。
+  `authentication_error / quota_exceeded / rate_limit_exceeded`(403/429)。**cookie 永不接受于此,key 永不接受于管理面**。
 - 入口分流一律**闭死**(fail closed):无凭据、错凭据都拒绝,不泄漏内部结构。
+- **生成 Claude 配置**:`GET /tokens/{id}/claude-config` 解出 key 明文,按该令牌可用模型(∩ 目录启用且可路由)
+  自动挑 opus/sonnet/haiku,输出可逐字粘进 `~/.claude/settings.json` 的 `env` 块;基址取 `public_base_url`
+  或按请求 scheme+host(X-Forwarded-* 优先)推断。
 
 ## 5. 转发引擎语义(M3,M4 验证)
 
@@ -112,22 +119,27 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 
 | 方法与路径 | 作用 |
 |---|---|
-| `POST /api/v1/auth/bootstrap` / `login` / `logout` · `GET /me` | 首启建管理员(无则 409)/ 登录 / 登出 / 当前账号 |
+| `POST /api/v1/auth/bootstrap` / `login` / `logout` · `GET /me` | 首启建管理员(无则 409)/ 登录 / 登出 / 当前账号(含 role) |
+| `POST /api/v1/auth/password` | 改自己密码(验旧密码,成功后重签 cookie) |
 | `GET /api/v1/auth/state` | 匿名:回 `{adminExists}` 驱动首启引导 |
+| `GET/POST /users` · `PATCH /users/{id}/password` · `DELETE /users/{id}` | 用户管理(仅 admin):建号/列号/重置密码/删号 |
 | `GET/POST /channels` · `GET/PATCH/DELETE /channels/{id}` | 渠道 CRUD(改时 apiKey 留空=保持) |
 | `POST /channels/{id}/test` · `/sync-models` | 连通探测 `{ok,latencyMs}`;拉 `/v1/models` 补目录+停用 offer |
-| `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(聚合 offers 与展示字段)/新增/改(全量)/删 |
+| `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(聚合 offers 与展示字段)/新增/改(全量)/删;GET 全站可读 |
 | `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删 |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |
 | `GET /models/{id}/usage?days=7` | `{daily:[MetricPoint], byChannel:[{channelName,requests,costUsd}]}` |
-| `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key |
+| `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |
+| `GET /tokens/{id}/claude-config` | 生成可直接粘的 `~/.claude/settings.json` 片段(含真实 key;旧 key 无密文回 409) |
 | `GET/POST /rules` · `PATCH/DELETE /rules/{id}` · `PUT /rules/order` | 路由规则 CRUD + 重排 |
 | `GET /logs?model&channel&token&status(ok|error)&kw&page&size` | →`{items,total}` 服务端分页;ts 已本地化 |
 | `DELETE /logs` | 清空日志(设置页弹确认) |
 | `GET /usage?dim=model\|channel\|token&days=7\|30` | →`{rows:UsageRow[](errorRate 0..1), days}` |
 | `GET /overview` | `{hours[24], days[7], totalRequests, totalErrors, totalCostUsd, avgFirstTokenMs}`(近 7 天窗口) |
-| `GET/PATCH /settings` | 网关参数(超时/重试/降级/代理/TLS/日志保留/采样/记录请求体/时区) |
+| `GET/PATCH /settings` | 网关参数(超时/重试/降级/代理/TLS/日志保留/采样/记录请求体/时区/对外基址) |
 | `GET /healthz` | 健康检查 |
+
+标注「仅 admin」者经 `requireAdmin` 闸门;其余为「已登录即可」。令牌越权访问一律回 404(不泄露他人 key 存在)。
 
 展示字段(channel/offer/model 的 status·latencyMs·successRate·today·costUsd 等)由后端现算,前端只消费。
 
