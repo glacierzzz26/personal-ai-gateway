@@ -138,7 +138,8 @@ type attemptResult struct {
 	offer     domain.OfferRead
 	status    int
 	body      []byte // 非流成功:成功体;非流失败:错误体
-	latencyMs int64
+	latencyMs int64  // 整程耗时(非流:含读完体);用于日志/展示
+	ttfbMs    int64  // 首字节(响应头)耗时;渠道健康 EWMA 用,与流式 firstTTFB 同口径
 	upErr     string // 网络/超时类错误(无 body)
 }
 
@@ -168,13 +169,14 @@ func (r *Relay) doNonStream(ctx context.Context, client *http.Client, req *outbo
 	if err != nil {
 		return &attemptResult{channel: ch, offer: offer, upErr: err.Error()}, nil
 	}
+	ttfb := time.Since(t0).Milliseconds() // Do 返回即响应头到达 ≈ 首字节
 	defer resp.Body.Close()
 	body, rerr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	lat := time.Since(t0).Milliseconds()
 	if rerr != nil {
 		return &attemptResult{channel: ch, offer: offer, upErr: rerr.Error()}, nil
 	}
-	return &attemptResult{channel: ch, offer: offer, status: resp.StatusCode, body: body, latencyMs: lat}, nil
+	return &attemptResult{channel: ch, offer: offer, status: resp.StatusCode, body: body, latencyMs: lat, ttfbMs: ttfb}, nil
 }
 
 // fbGuard 首字节看门狗:流若在 timeout 内一个字节都不到,则中止并报 timeout(换候选)。

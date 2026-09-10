@@ -283,6 +283,7 @@ func (g *Gateway) forward(w http.ResponseWriter, r *http.Request, op, inProto st
 	if !settings.DegradeOnError && len(plan.Attempts) > 1 {
 		plan.Attempts = plan.Attempts[:1] // 关闭自动降级:只用首个候选
 	}
+	plan.Attempts = attemptSequence(plan.Attempts, plan.Retry)
 
 	client := g.rl.Client(settings)
 	if in.stream {
@@ -290,6 +291,22 @@ func (g *Gateway) forward(w http.ResponseWriter, r *http.Request, op, inProto st
 	} else {
 		g.forwardOnceNonStream(w, r, in, plan, client, inProto, settings)
 	}
+}
+
+// attemptSequence 按重试轮数展开候选:一轮走完所有候选后,若配置了 retry,再重复若干轮
+// (失败才继续,成功即 return;非可重试错误 break)。Retry<=0 原样返回;上限 10 轮防病态配置。
+func attemptSequence(attempts []engine.Attempt, retry int) []engine.Attempt {
+	if retry <= 0 || len(attempts) == 0 {
+		return attempts
+	}
+	if retry > 10 {
+		retry = 10
+	}
+	out := make([]engine.Attempt, 0, len(attempts)*(1+retry))
+	for i := 0; i <= retry; i++ {
+		out = append(out, attempts...)
+	}
+	return out
 }
 
 // attemptEnv 取候选渠道行(出站要用 provider/base_url/密钥)。
@@ -335,7 +352,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			continue
 		}
 		// 成功
-		g.eng.RecordSuccess(ch.ID, res.latencyMs)
+		g.eng.RecordSuccess(ch.ID, res.ttfbMs)
 		var tok translate.Usage
 		outBody := res.body
 		if inProto == outProto {
@@ -350,8 +367,13 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			var convErr error
 			outBody, tok, convErr = translate.ConvertNonStream(inProto, outProto, res.body)
 			if convErr != nil {
-				g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
-				firstErr = res
+				// 网关自身的跨协议翻译失败(上游响应形状意外):不是渠道故障,不计入渠道健康/熔断
+				// (否则一个翻译 bug 会把健康渠道打成 down)。记为首个错误供全败兜底,
+				// 状态用 502 以免把上游 2xx 误当成功回给客户端。
+				firstErr = &attemptResult{
+					channel: res.channel, offer: res.offer, status: http.StatusBadGateway,
+					body: []byte("response translation failed: " + convErr.Error()),
+				}
 				continue
 			}
 		}

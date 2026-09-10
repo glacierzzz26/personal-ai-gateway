@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"personal-ai-gateway/internal/auth"
@@ -342,5 +343,73 @@ func TestE2EQuotaAndAllowed(t *testing.T) {
 	code, _ = e.post("/v1/chat/completions", "sk-old", false, fmt.Sprintf(chatBody, "m-ok"))
 	if code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for expired token, got %d", code)
+	}
+}
+
+// TestE2ERetryRepeatsCandidates 配置的 retry 轮数应真的重跑候选(此前 Plan.Retry 算了没人读)。
+// 单渠道、上游前两次 500、第三次 200,默认 maxRetries=2 → 序列 [ch,ch,ch],第三次成功。
+func TestE2ERetryRepeatsCandidates(t *testing.T) {
+	e := newE2E(t)
+	var hits int32
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if n < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"boom","type":"server_error"}}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-r", "object": "chat.completion", "model": "m",
+			"choices": []any{map[string]any{"index": 0,
+				"message":       map[string]any{"role": "assistant", "content": "ok"},
+				"finish_reason": "stop"}},
+			"usage": map[string]any{"prompt_tokens": 3, "completion_tokens": 2},
+		})
+	})
+	up := httptest.NewServer(h)
+	t.Cleanup(up.Close)
+	chID := e.addChannel("flaky", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	model := "m-retry"
+	e.addModelOffer(model, chID, 1)
+	key := e.addToken("cli", []string{"*"}, 100)
+
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Fatalf("上游被调用 %d 次, want 3(1 轮 + 2 重试)", got)
+	}
+}
+
+// TestE2ETranslationErrorNotChannelFailure 跨协议响应翻译失败(网关侧问题)不应计入渠道健康/熔断。
+// anthropic 渠道回 200 但体非合法 anthropic message → o2a 翻译失败;maxFailures=1,若误记则渠道已熔断。
+func TestE2ETranslationErrorNotChannelFailure(t *testing.T) {
+	e := newE2E(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `not-a-json`)
+	}))
+	t.Cleanup(up.Close)
+	en := true
+	ch, err := e.st.CreateChannel(domain.ChannelInput{
+		Name: "bad-shape", Provider: domain.ProviderAnthropic, BaseURL: up.URL, APIKey: "sk-up",
+		Enabled: &en, TimeoutMs: 30000, MaxFailures: 1, CooldownSec: 10,
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	model := "m-badconv"
+	e.addModelOffer(model, ch.ID, 1)
+	key := e.addToken("cli", []string{"*"}, 100)
+
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusBadGateway {
+		t.Fatalf("status = %d body %s, want 502(翻译失败)", code, body)
+	}
+	if open, _ := e.gw.eng.CircuitOpen(ch.ID); open {
+		t.Fatalf("翻译失败被误记为渠道故障:渠道已熔断")
 	}
 }
