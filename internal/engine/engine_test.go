@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"math/rand"
 	"path/filepath"
 	"testing"
 
@@ -197,6 +198,52 @@ func TestSupportsModelWildcard(t *testing.T) {
 	for _, c := range cases {
 		if got := SupportsModel(c.allowed, c.model); got != c.want {
 			t.Errorf("SupportsModel(%v,%q)=%v want %v", c.allowed, c.model, got, c.want)
+		}
+	}
+}
+
+// TestWeightedOrderSplitsByWeight 验证 weight 策略真的按权重分流:首选候选 ~90% 落在高权重渠道。
+// 旧实现「权重降序 + 平手抛硬币」恒把高权重排第一,占比会接近 100%。
+func TestWeightedOrderSplitsByWeight(t *testing.T) {
+	pool := []domain.OfferRead{{ChannelID: 1, Priority: 1}, {ChannelID: 2, Priority: 1}}
+	w := map[int64]int{1: 9, 2: 1}
+	rnd := rand.New(rand.NewSource(42))
+	counts := map[int64]int{}
+	const n = 10000
+	for i := 0; i < n; i++ {
+		out := weightedOrder(pool, w, rnd)
+		if len(out) != 2 {
+			t.Fatalf("weightedOrder 长度 = %d, want 2", len(out))
+		}
+		counts[out[0].ChannelID]++
+	}
+	got := float64(counts[1]) / n
+	if got < 0.85 || got > 0.95 {
+		t.Errorf("高权重渠道为首选占比 = %.3f, want ~0.90", got)
+	}
+}
+
+// TestWeightedOrderKeepsAllOffersAndWithinChannelOrder 每个 offer 都出现,同渠道内保持 priority 序。
+func TestWeightedOrderKeepsAllOffersAndWithinChannelOrder(t *testing.T) {
+	pool := []domain.OfferRead{
+		{ID: 11, ChannelID: 1, Priority: 1},
+		{ID: 12, ChannelID: 1, Priority: 2},
+		{ID: 21, ChannelID: 2, Priority: 1},
+	}
+	rnd := rand.New(rand.NewSource(1))
+	for i := 0; i < 100; i++ {
+		out := weightedOrder(pool, map[int64]int{1: 1, 2: 1}, rnd)
+		if len(out) != 3 {
+			t.Fatalf("len = %d, want 3", len(out))
+		}
+		var ch1 []int64
+		for _, o := range out {
+			if o.ChannelID == 1 {
+				ch1 = append(ch1, o.ID)
+			}
+		}
+		if len(ch1) != 2 || ch1[0] != 11 || ch1[1] != 12 {
+			t.Fatalf("渠道 1 内 offer 序被打乱: %v", ch1)
 		}
 	}
 }

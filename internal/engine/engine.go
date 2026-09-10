@@ -173,12 +173,17 @@ func (e *Engine) applyRule(r *domain.RuleRead, cands []domain.OfferRead, byID ma
 	}
 	switch r.Strategy {
 	case domain.StrategyWeight:
+		// 规则显式给出的权重(含显式 0)优先;未列出的渠道回落到渠道 weight。
 		w := map[int64]int{}
+		explicit := map[int64]bool{}
 		for _, id := range r.ChannelIDs {
-			w[id] = r.Weights[id]
+			if v, ok := r.Weights[id]; ok {
+				w[id] = v
+				explicit[id] = true
+			}
 		}
 		for _, o := range pool {
-			if w[o.ChannelID] == 0 {
+			if !explicit[o.ChannelID] {
 				w[o.ChannelID] = byID[o.ChannelID].Weight
 			}
 		}
@@ -239,8 +244,10 @@ func sortByChannelPriority(pool []domain.OfferRead, byID map[int64]domain.Channe
 	})
 }
 
+// weightedOrder 按渠道权重做「不放回加权随机排列」:首个候选按权重概率选出(实现流量分流),
+// 其余为失败兜底序;同渠道内保留 offer.priority 序。
+// 原实现是「权重降序 + 平手抛硬币」,高权重渠道恒排第一 —— weight 策略退化成 priority,不分流。
 func weightedOrder(pool []domain.OfferRead, w map[int64]int, rnd *rand.Rand) []domain.OfferRead {
-	// 渠道去重按权重洗牌;同渠道保留 offer.priority 序
 	type grp struct {
 		ch     int64
 		offers []domain.OfferRead
@@ -257,18 +264,35 @@ func weightedOrder(pool []domain.OfferRead, w map[int64]int, rnd *rand.Rand) []d
 		}
 		g.offers = append(g.offers, o)
 	}
-	// Fisher-Yates 加权(正比权重多放前)简化:按权重轮盘重复抽前序不稳,
-	// 个人规模用「权重降序 + 小随机扰动」近似即可。
-	sortSlice(groups, func(a, b *grp) bool {
-		aw, bw := a.weight, b.weight
-		if aw == bw {
-			return rnd.Intn(2) == 0
-		}
-		return aw > bw
-	})
+
 	var out []domain.OfferRead
-	for _, g := range groups {
-		out = append(out, g.offers...)
+	for len(groups) > 0 {
+		total := 0
+		for _, g := range groups {
+			if g.weight > 0 {
+				total += g.weight
+			}
+		}
+		pick := 0
+		if total > 0 {
+			r := rnd.Intn(total)
+			acc := 0
+			for i, g := range groups {
+				if g.weight <= 0 {
+					continue
+				}
+				acc += g.weight
+				if r < acc {
+					pick = i
+					break
+				}
+			}
+		} else {
+			// 全为 0/负权重:退化为均匀随机,仍保证都被排入兜底序。
+			pick = rnd.Intn(len(groups))
+		}
+		out = append(out, groups[pick].offers...)
+		groups = append(groups[:pick], groups[pick+1:]...)
 	}
 	return out
 }
