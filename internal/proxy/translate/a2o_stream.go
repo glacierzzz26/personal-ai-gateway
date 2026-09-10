@@ -181,10 +181,10 @@ func (s *a2oStream) toolDelta(tc oToolDelta) error {
 			s.nextBlk++
 			s.openText = false
 		}
-		// 首见:拿 provider id 编码成 anthropic tool_use id;没有 id 就合成兜底(回程解码会失败,见 DESIGN)
+		// 首见:拿 provider id 编码成 anthropic tool_use id;没有 id 就合成一个可逆兜底。
 		aid := OpenAItoAnthropicToolID(tc.ID)
 		if tc.ID == "" {
-			aid = "toolu_" + randHex(8)
+			aid = OpenAItoAnthropicToolID("call_" + randHex(8))
 		}
 		s.toolID[idx] = aid
 		s.toolBlk[idx] = s.nextBlk
