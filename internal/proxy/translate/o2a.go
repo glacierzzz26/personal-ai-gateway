@@ -205,13 +205,15 @@ func stopToSeq(stop any) ([]string, bool) {
 	return nil, false
 }
 
-// o2aTools:openai tools → anthropic tools(input_schema=parameters)。
+// o2aTools:openai tools → anthropic tools。
+// anthropic 的工具元素是顶层 {name, description, input_schema}(无 openai 的 type/function 外壳),
+// 详见 types_anthropic.go 的 aTool;套错形状会被 /v1/messages 以 400 拒绝。
 func o2aTools(in []oReqTool) []map[string]any {
 	var out []map[string]any
 	for _, t := range in {
-		fn := map[string]any{"name": t.Function.Name}
+		tool := map[string]any{"name": t.Function.Name}
 		if t.Function.Description != "" {
-			fn["description"] = t.Function.Description
+			tool["description"] = t.Function.Description
 		}
 		params := map[string]any{"type": "object", "properties": map[string]any{}}
 		if len(t.Function.Parameters) > 0 {
@@ -220,8 +222,8 @@ func o2aTools(in []oReqTool) []map[string]any {
 				params = p
 			}
 		}
-		fn["input_schema"] = params
-		out = append(out, map[string]any{"type": "function", "function": fn})
+		tool["input_schema"] = params
+		out = append(out, tool)
 	}
 	return out
 }
