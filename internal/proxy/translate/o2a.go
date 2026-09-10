@@ -335,18 +335,22 @@ func convertO2ANonStream(raw []byte) (outBody []byte, tok Usage, err error) {
 	return outBody, Usage{Prompt: u.Prompt, Completion: u.Completion, CacheRead: u.CacheRead}, nil
 }
 
-// anthropicToOUsage:anthropic usage(input 不含缓存)→ openai 口径(prompt 含全部输入)。
+// anthropicToOUsage:anthropic usage(input 不含缓存)→ 归一化 Usage。
+// 遵守 Usage 不变式:Prompt 只含按正常输入价计费的部分(InputTokens + CacheCreation),
+// 缓存命中单列 CacheRead —— 否则 costUsd 会对缓存命中既按输入价、又按缓存价各收一次。
+// openai 客户端要看的 prompt_tokens(含全部输入)在 o2aUsageJSON 里由 Prompt+CacheRead 还原。
 func anthropicToOUsage(a *anthropicUsage) Usage {
 	return Usage{
-		Prompt:     a.InputTokens + a.CacheCreation + a.CacheRead,
+		Prompt:     a.InputTokens + a.CacheCreation,
 		Completion: a.OutputTokens,
 		CacheRead:  a.CacheRead,
 	}
 }
 
 func o2aUsageJSON(u Usage) map[string]any {
+	// openai 口径:prompt_tokens 含全部输入(含缓存命中),cached_tokens 单列明细。
 	return map[string]any{
-		"prompt_tokens":         u.Prompt,
+		"prompt_tokens":         u.Prompt + u.CacheRead,
 		"completion_tokens":     u.Completion,
 		"prompt_tokens_details": map[string]any{"cached_tokens": u.CacheRead},
 	}
