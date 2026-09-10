@@ -1,0 +1,8 @@
+# 生产部署产物/密钥一律不入库
+certs/
+.env
+data/
+*.pem
+*.key
+*.csr
+*.srl

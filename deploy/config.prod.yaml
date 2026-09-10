@@ -1,0 +1,5 @@
+# 生产网关配置(deploy.sh 拷贝进镜像 /app/config.yaml;DB 落在 bind mount /data)。
+# 主密钥经 GW_MASTER_KEY 环境变量注入(.env),不需要 key 文件。
+listen: ":8787"
+db_path: "/data/gateway-v2.db"
+web_dir: "web-v2"
