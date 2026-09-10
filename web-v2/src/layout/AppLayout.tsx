@@ -1,13 +1,14 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   ApartmentOutlined, AppstoreOutlined, BulbOutlined,
-  DashboardOutlined, FileSearchOutlined, KeyOutlined, LogoutOutlined,
+  DashboardOutlined, FileSearchOutlined, KeyOutlined, LockOutlined, LogoutOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, NodeIndexOutlined,
-  SettingOutlined, SunOutlined,
+  SettingOutlined, SunOutlined, TeamOutlined,
 } from '@ant-design/icons';
 import { App, Avatar, Dropdown, Layout, Menu, Typography } from 'antd';
 import type { MenuProps } from 'antd';
+import ChangePasswordModal from '@/components/ChangePasswordModal';
 import { useUi } from '@/stores/ui';
 import { useSession } from '@/stores/session';
 import { api } from '@/services/api';
@@ -21,6 +22,7 @@ const NAV: Record<string, [group: string, label: string]> = {
   '/routing': ['资源', '路由规则'],
   '/tokens': ['访问', '访问令牌'],
   '/logs': ['观测', '请求日志'],
+  '/users': ['系统', '用户管理'],
   '/settings': ['系统', '系统设置'],
 };
 
@@ -34,29 +36,39 @@ export default function AppLayout() {
   const toggleTheme = useUi(s => s.toggleTheme);
   const admin = useSession(s => s.admin);
   const setAdmin = useSession(s => s.setAdmin);
+  const isAdmin = admin?.role === 'admin';
+  const [pwOpen, setPwOpen] = useState(false);
 
-  const items: MenuProps['items'] = useMemo(
-    () => [
-      { key: 'g1', type: 'group', label: '概览', children: [
-        { key: '/dashboard', icon: <DashboardOutlined />, label: '运行总览' },
-      ] },
-      { key: 'g2', type: 'group', label: '资源', children: [
-        { key: '/channels', icon: <ApartmentOutlined />, label: '渠道管理' },
-        { key: '/models', icon: <AppstoreOutlined />, label: '模型广场' },
-        { key: '/routing', icon: <NodeIndexOutlined />, label: '路由规则' },
-      ] },
+  // 普通用户只保留「访问令牌」;管理员见全部。注意依赖 [isAdmin],否则菜单被首次渲染冻住。
+  const items: MenuProps['items'] = useMemo(() => {
+    const list: MenuProps['items'] = [
       { key: 'g3', type: 'group', label: '访问', children: [
         { key: '/tokens', icon: <KeyOutlined />, label: '访问令牌' },
       ] },
-      { key: 'g4', type: 'group', label: '观测', children: [
-        { key: '/logs', icon: <FileSearchOutlined />, label: '请求日志' },
-      ] },
-      { key: 'g5', type: 'group', label: '系统', children: [
-        { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
-      ] },
-    ],
-    [],
-  );
+    ];
+    if (isAdmin) {
+      list.unshift(
+        { key: 'g1', type: 'group', label: '概览', children: [
+          { key: '/dashboard', icon: <DashboardOutlined />, label: '运行总览' },
+        ] },
+        { key: 'g2', type: 'group', label: '资源', children: [
+          { key: '/channels', icon: <ApartmentOutlined />, label: '渠道管理' },
+          { key: '/models', icon: <AppstoreOutlined />, label: '模型广场' },
+          { key: '/routing', icon: <NodeIndexOutlined />, label: '路由规则' },
+        ] },
+      );
+      list.push(
+        { key: 'g4', type: 'group', label: '观测', children: [
+          { key: '/logs', icon: <FileSearchOutlined />, label: '请求日志' },
+        ] },
+        { key: 'g5', type: 'group', label: '系统', children: [
+          { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
+          { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+        ] },
+      );
+    }
+    return list;
+  }, [isAdmin]);
 
   const current = NAV[pathname];
   const username = admin?.username ?? '';
@@ -73,8 +85,11 @@ export default function AppLayout() {
         key: 'theme', icon: theme === 'dark' ? <SunOutlined /> : <MoonOutlined />,
         label: theme === 'dark' ? '切换亮色' : '切换暗色', onClick: toggleTheme,
       },
-      { key: 'settings', icon: <SettingOutlined />, label: '系统设置', onClick: () => navigate('/settings') },
-      { type: 'divider' },
+      { key: 'password', icon: <LockOutlined />, label: '修改密码', onClick: () => setPwOpen(true) },
+      ...(isAdmin
+        ? [{ key: 'settings', icon: <SettingOutlined />, label: '系统设置', onClick: () => navigate('/settings') }]
+        : []),
+      { type: 'divider' as const },
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true, onClick: logout },
     ],
   };
@@ -184,6 +199,8 @@ export default function AppLayout() {
           <Outlet />
         </Content>
       </Layout>
+
+      <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
     </Layout>
   );
 }

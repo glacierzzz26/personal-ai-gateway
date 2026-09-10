@@ -113,9 +113,13 @@ export interface GatewayToken {
   lastUsedAt: string | null;
   status: 'active' | 'disabled' | 'expired';
   createdAt?: string;
+  ownerId: number | null;
+  ownerName?: string;
+  /** key_cipher 非空才可回显/生成配置(本特性前建的旧 key 为 false) */
+  keyRetrievable: boolean;
 }
 
-/** 令牌创建/编辑入参(expiresAt 传 null 表示永不过期) */
+/** 令牌创建/编辑入参(expiresAt 传 null 表示永不过期;ownerId 仅创建时生效,admin 可指定) */
 export interface TokenDraft {
   name: string;
   allowedModels: string[];
@@ -123,6 +127,7 @@ export interface TokenDraft {
   rpmLimit: number;
   expiresAt: string | null;
   status?: 'active' | 'disabled';
+  ownerId?: number | null;
 }
 
 export type MatchMode = 'prefix' | 'wildcard' | 'regex';
@@ -228,12 +233,35 @@ export interface Settings {
   recordRequestBody: boolean;
   sampleRatePct: number;
   tzOffsetMin: number;
+  /** 生成 Claude 配置时对外可见的网关基址;留空=按访问地址推断 */
+  publicBaseUrl?: string;
 }
+
+export type Role = 'admin' | 'user';
 
 export interface AdminMe {
   id: number;
   username: string;
+  role: Role;
   createdAt: string;
+}
+
+/** 用户管理页行(管理员视角) */
+export interface UserAccount {
+  id: number;
+  username: string;
+  role: Role;
+  keyCount: number;
+  createdAt: string;
+}
+
+/** GET /tokens/{id}/claude-config 返回 */
+export interface ClaudeConfig {
+  tokenId: number;
+  baseUrl: string;
+  settingsJson: string;
+  modelAliases: Record<string, string>;
+  warnings?: string[];
 }
 
 export interface ChannelTestResult {

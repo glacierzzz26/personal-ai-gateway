@@ -174,6 +174,13 @@ export default function Settings() {
               onChange={v => s('tzOffsetMin', v)} options={TZ_OPTIONS} />
           ),
         },
+        {
+          key: 'publicBaseUrl', t: '对外基址', d: '生成 Claude 配置时的网关地址(如 https://ai-gateway.lan);留空则按访问地址推断',
+          render: (f, s) => (
+            <Input style={{ width: 320 }} placeholder="留空 = 按访问地址推断"
+              value={f.publicBaseUrl ?? ''} onChange={e => s('publicBaseUrl', e.target.value)} />
+          ),
+        },
       ],
     },
     {

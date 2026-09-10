@@ -6,10 +6,10 @@
  * 这里统一除以 100 还原为 0..1 小数供 UI(fmt.pct)使用;errorRate 本身即小数。
  */
 import type {
-  AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, GatewayToken,
+  AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig, GatewayToken,
   LogFilters, LogPage, MatchMode, MetricPoint, ModelCatalogItem, ModelDraft, ModelOffer,
   ModelUsageData, OfferDraft, OverviewData, RequestLogItem, RouteRule, RuleDraft,
-  Settings, SyncResult, TokenCreateResult, TokenDraft, UsageDim, UsageRow,
+  Settings, SyncResult, TokenCreateResult, TokenDraft, UsageDim, UsageRow, UserAccount,
 } from '@/types';
 import { http } from './http';
 
@@ -37,6 +37,19 @@ export const api = {
   bootstrap(username: string, password: string): Promise<AdminMe> { return http.post('/auth/bootstrap', { username, password }); },
   logout(): Promise<unknown> { return http.post('/auth/logout'); },
   me(): Promise<AdminMe> { return http.get('/auth/me'); },
+  changePassword(oldPassword: string, newPassword: string): Promise<AdminMe> {
+    return http.post('/auth/password', { oldPassword, newPassword });
+  },
+
+  /* —— 用户管理(管理员) —— */
+  getUsers(): Promise<UserAccount[]> { return http.get('/users'); },
+  createUser(body: { username: string; password: string; role: 'admin' | 'user' }): Promise<UserAccount> {
+    return http.post('/users', body);
+  },
+  resetUserPassword(id: number, newPassword: string): Promise<unknown> {
+    return http.patch(`/users/${id}/password`, { newPassword });
+  },
+  deleteUser(id: number): Promise<unknown> { return http.del(`/users/${id}`); },
 
   /* —— 概览 —— */
   getOverview(): Promise<OverviewData> { return http.get('/overview'); },
@@ -119,6 +132,7 @@ export const api = {
   createToken(body: TokenDraft): Promise<TokenCreateResult> { return http.post('/tokens', body); },
   updateToken(id: number, body: TokenDraft): Promise<GatewayToken> { return http.patch(`/tokens/${id}`, body); },
   deleteToken(id: number): Promise<unknown> { return http.del(`/tokens/${id}`); },
+  getClaudeConfig(id: number): Promise<ClaudeConfig> { return http.get(`/tokens/${id}/claude-config`); },
 
   /* —— 路由规则 —— */
   getRules(): Promise<RouteRule[]> { return http.get('/rules'); },

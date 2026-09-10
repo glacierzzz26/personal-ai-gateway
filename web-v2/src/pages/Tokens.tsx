@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  App, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal,
-  Radio, Select, Space, Switch, Table, Tag,
+  Alert, App, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal,
+  Radio, Select, Space, Switch, Table, Tag, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,8 +9,10 @@ import dayjs, { type Dayjs } from 'dayjs';
 import PageHeader from '@/components/PageHeader';
 import StatusTag from '@/components/StatusTag';
 import { api } from '@/services/api';
+import { useSession } from '@/stores/session';
+import { copyText } from '@/utils/clipboard';
 import { fmt } from '@/utils/format';
-import type { GatewayToken, ModelCatalogItem, TokenCreateResult, TokenDraft } from '@/types';
+import type { GatewayToken, ModelCatalogItem, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
 
@@ -23,17 +25,20 @@ interface TokenFormValues {
   rpmLimit: number;
   expiry: 'never' | 'date';
   expiresDate?: Dayjs | null;
+  ownerId?: number;
 }
 
-/** 新建/编辑令牌弹窗。允许模型走「允许全部 / 指定名单」二选一。 */
+/** 新建/编辑令牌弹窗。允许模型走「允许全部 / 指定名单」二选一;管理员可指定归属用户。 */
 function TokenModal(props: {
   open: boolean;
   initial: GatewayToken | null;
   models: ModelCatalogItem[];
+  isAdmin: boolean;
+  users: UserAccount[];
   onCancel: () => void;
   onSubmit: (draft: TokenDraft, id?: number) => Promise<void>;
 }) {
-  const { open, initial, models, onCancel, onSubmit } = props;
+  const { open, initial, models, isAdmin, users, onCancel, onSubmit } = props;
   const { message } = App.useApp();
   const [form] = Form.useForm<TokenFormValues>();
   const [saving, setSaving] = useState(false);
@@ -55,12 +60,13 @@ function TokenModal(props: {
         rpmLimit: initial.rpmLimit,
         expiry: initial.expiresAt ? 'date' : 'never',
         expiresDate: initial.expiresAt ? dayjs(initial.expiresAt) : null,
+        ownerId: initial.ownerId ?? 0,
       });
     } else {
       form.resetFields();
       form.setFieldsValue({
         name: '', enabled: true, allModels: true, modelNames: [], quotaUsd: 0,
-        rpmLimit: 60, expiry: 'never', expiresDate: null,
+        rpmLimit: 60, expiry: 'never', expiresDate: null, ownerId: 0,
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -86,6 +92,8 @@ function TokenModal(props: {
       expiresAt: v.expiry === 'never' ? null
         : (v.expiresDate ? v.expiresDate.format('YYYY-MM-DD') : null),
       status: v.enabled ? 'active' : 'disabled',
+      // 归属仅创建时生效;user 由服务端强制为自己,不传
+      ownerId: isAdmin ? (v.ownerId ? v.ownerId : null) : undefined,
     };
     setSaving(true);
     try {
@@ -123,6 +131,18 @@ function TokenModal(props: {
         >
           <Input placeholder="例如:CI 构建 / 本地 Claude Code" maxLength={64} />
         </Form.Item>
+
+        {isAdmin && (
+          <Form.Item name="ownerId" label="归属用户" extra="仅创建时生效;选「全局」则不属于任何用户">
+            <Select
+              disabled={!!initial}
+              options={[
+                { value: 0, label: '全局(管理员)' },
+                ...users.map(u => ({ value: u.id, label: u.username })),
+              ]}
+            />
+          </Form.Item>
+        )}
 
         <Form.Item label="允许访问的模型">
           <Form.Item name="allModels" valuePropName="checked" noStyle>
@@ -185,14 +205,79 @@ function TokenModal(props: {
   );
 }
 
+/** 「生成 Claude 配置」弹窗:拉取含真实 key 的 settings.json 片段,供逐字复制。 */
+function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => void }) {
+  const { token, onClose } = props;
+  const { message } = App.useApp();
+  const { data, error, isLoading } = useQuery({
+    queryKey: ['claude-config', token?.id],
+    queryFn: () => api.getClaudeConfig(token!.id),
+    enabled: !!token,
+    retry: false,
+  });
+  const err = error instanceof Error ? error.message : error ? '生成失败' : '';
+
+  const copy = (text: string) => {
+    copyText(text).then(
+      ok => (ok ? message.success('已复制') : message.warning('复制失败，请手动选择')),
+    );
+  };
+
+  return (
+    <Modal
+      title={token ? `Claude 配置 · ${token.name}` : 'Claude 配置'}
+      open={!!token}
+      onCancel={onClose}
+      footer={<Button type="primary" onClick={onClose}>关闭</Button>}
+      destroyOnHidden
+      width={640}
+    >
+      {err && (
+        <Alert type="error" showIcon style={{ marginBottom: 12 }} message={err} />
+      )}
+      {data?.warnings?.map(w => (
+        <Alert key={w} type="warning" showIcon style={{ marginBottom: 12 }} message={w} />
+      ))}
+      <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 8 }}>
+        把下面整段合并进 <span className="gw-mono">~/.claude/settings.json</span> 的顶层(已有 <span className="gw-mono">env</span> 则合并其键值),然后重启 Claude Code。
+      </div>
+      <div style={{ position: 'relative' }}>
+        <pre className="gw-json" style={{ maxHeight: 360, overflow: 'auto', margin: 0 }}>
+          {isLoading ? '生成中…' : (data?.settingsJson ?? '')}
+        </pre>
+        <Button
+          size="small"
+          style={{ position: 'absolute', top: 8, right: 8 }}
+          disabled={!data}
+          onClick={() => data && copy(data.settingsJson)}
+        >
+          复制
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function Tokens() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
+  const isAdmin = useSession(s => s.admin?.role) === 'admin';
   const [editor, setEditor] = useState<{ open: boolean; initial: GatewayToken | null }>({ open: false, initial: null });
   const [created, setCreated] = useState<TokenCreateResult | null>(null);
+  const [configToken, setConfigToken] = useState<GatewayToken | null>(null);
+  const [ownerFilter, setOwnerFilter] = useState<number | 'all'>('all');
 
   const { data: tokens = [], isLoading } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
   const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
+  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, enabled: isAdmin });
+
+  // 管理员可按归属过滤(数据量小,客户端过滤即可)
+  const view = useMemo(
+    () => (!isAdmin || ownerFilter === 'all'
+      ? tokens
+      : tokens.filter(t => (ownerFilter === 0 ? t.ownerId == null : t.ownerId === ownerFilter))),
+    [tokens, isAdmin, ownerFilter],
+  );
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['tokens'] });
 
@@ -231,14 +316,22 @@ export default function Tokens() {
   };
 
   const copyKey = (text: string) => {
-    navigator.clipboard?.writeText(text).then(
-      () => message.success('已复制'),
-      () => message.warning('复制失败，请手动选择'),
+    copyText(text).then(
+      ok => (ok ? message.success('已复制') : message.warning('复制失败，请手动选择')),
     );
   };
 
-  const columns: ColumnsType<GatewayToken> = [
+  const columns: ColumnsType<GatewayToken> = useMemo(() => [
     { title: '名称', dataIndex: 'name', render: v => <b style={{ fontWeight: 500 }}>{v}</b> },
+    ...(isAdmin
+      ? [{
+          title: '归属', dataIndex: 'ownerName', width: 120,
+          render: (_: unknown, r: GatewayToken) =>
+            r.ownerId == null
+              ? <span style={{ color: 'var(--gw-text-3)' }}>全局</span>
+              : <Tag>{r.ownerName}</Tag>,
+        }] as ColumnsType<GatewayToken>
+      : []),
     {
       title: 'Key', dataIndex: 'keyMasked', width: 200,
       render: v => (
@@ -318,15 +411,20 @@ export default function Tokens() {
       render: v => <StatusTag status={v} />,
     },
     {
-      title: '', align: 'right', width: 120,
+      title: '', align: 'right', width: 200,
       render: (_, r) => (
         <Space size={4}>
+          <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
+            <Button size="small" disabled={!r.keyRetrievable} onClick={() => setConfigToken(r)}>
+              生成配置
+            </Button>
+          </Tooltip>
           <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
           <Button size="small" danger onClick={() => confirmDelete(r)}>删除</Button>
         </Space>
       ),
     },
-  ];
+  ], [isAdmin]);
 
   return (
     <div className="gw-page">
@@ -334,9 +432,23 @@ export default function Tokens() {
         title="访问令牌"
         desc="对外分发的网关 Key，可独立设额度、限流与过期时间"
         extra={
-          <Button type="primary" onClick={() => setEditor({ open: true, initial: null })}>
-            新建令牌
-          </Button>
+          <Space>
+            {isAdmin && (
+              <Select
+                value={ownerFilter}
+                style={{ width: 180 }}
+                onChange={setOwnerFilter}
+                options={[
+                  { value: 'all', label: '全部归属' },
+                  { value: 0, label: '全局(管理员)' },
+                  ...users.map(u => ({ value: u.id, label: u.username })),
+                ]}
+              />
+            )}
+            <Button type="primary" onClick={() => setEditor({ open: true, initial: null })}>
+              新建令牌
+            </Button>
+          </Space>
         }
       />
 
@@ -345,7 +457,7 @@ export default function Tokens() {
           rowKey="id"
           size="middle"
           loading={isLoading}
-          dataSource={tokens}
+          dataSource={view}
           columns={columns}
           scroll={{ x: 1320 }}
           pagination={false}
@@ -356,9 +468,13 @@ export default function Tokens() {
         open={editor.open}
         initial={editor.initial}
         models={models}
+        isAdmin={isAdmin}
+        users={users}
         onCancel={() => setEditor({ open: false, initial: null })}
         onSubmit={saveToken}
       />
+
+      <ClaudeConfigModal token={configToken} onClose={() => setConfigToken(null)} />
 
       <Modal
         open={!!created}
@@ -375,7 +491,7 @@ export default function Tokens() {
                 color: 'var(--gw-text-2)', background: 'var(--gw-fill)', marginBottom: 16,
               }}
             >
-              密钥只显示一次，关闭后无法再次查看完整 Key，请妥善保存。
+              密钥已加密存储;之后可在列表用「生成配置」再次获取完整 Key。
             </div>
             <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 6 }}>
               掩码形式

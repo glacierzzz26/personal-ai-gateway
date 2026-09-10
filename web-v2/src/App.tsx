@@ -14,6 +14,20 @@ const Routing = lazy(() => import('@/pages/Routing'));
 const Tokens = lazy(() => import('@/pages/Tokens'));
 const Logs = lazy(() => import('@/pages/Logs'));
 const Settings = lazy(() => import('@/pages/Settings'));
+const Users = lazy(() => import('@/pages/Users'));
+
+/** 仅管理员可达;普通用户重定向到访问令牌页。 */
+function AdminOnly({ children }: { children: React.ReactNode }) {
+  const admin = useSession(s => s.admin);
+  if (admin?.role !== 'admin') return <Navigate to="/tokens" replace />;
+  return <>{children}</>;
+}
+
+/** 首页按角色分流:管理员到模型广场,普通用户到访问令牌。 */
+function Home() {
+  const admin = useSession(s => s.admin);
+  return <Navigate to={admin?.role === 'admin' ? '/models' : '/tokens'} replace />;
+}
 
 function PageLoading() {
   return (
@@ -67,17 +81,18 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<AppLayout />}>
-        <Route index element={<Navigate to="/models" replace />} />
+        <Route index element={<Home />} />
         <Route
           path="dashboard"
-          element={<Suspense fallback={<PageLoading />}><Dashboard /></Suspense>}
+          element={<AdminOnly><Suspense fallback={<PageLoading />}><Dashboard /></Suspense></AdminOnly>}
         />
-        <Route path="models" element={<Suspense fallback={<PageLoading />}><Models /></Suspense>} />
-        <Route path="channels" element={<Suspense fallback={<PageLoading />}><Channels /></Suspense>} />
-        <Route path="routing" element={<Suspense fallback={<PageLoading />}><Routing /></Suspense>} />
+        <Route path="models" element={<AdminOnly><Suspense fallback={<PageLoading />}><Models /></Suspense></AdminOnly>} />
+        <Route path="channels" element={<AdminOnly><Suspense fallback={<PageLoading />}><Channels /></Suspense></AdminOnly>} />
+        <Route path="routing" element={<AdminOnly><Suspense fallback={<PageLoading />}><Routing /></Suspense></AdminOnly>} />
         <Route path="tokens" element={<Suspense fallback={<PageLoading />}><Tokens /></Suspense>} />
-        <Route path="logs" element={<Suspense fallback={<PageLoading />}><Logs /></Suspense>} />
-        <Route path="settings" element={<Suspense fallback={<PageLoading />}><Settings /></Suspense>} />
+        <Route path="logs" element={<AdminOnly><Suspense fallback={<PageLoading />}><Logs /></Suspense></AdminOnly>} />
+        <Route path="settings" element={<AdminOnly><Suspense fallback={<PageLoading />}><Settings /></Suspense></AdminOnly>} />
+        <Route path="users" element={<AdminOnly><Suspense fallback={<PageLoading />}><Users /></Suspense></AdminOnly>} />
         <Route
           path="*"
           element={
