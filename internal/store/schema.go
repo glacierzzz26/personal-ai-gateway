@@ -10,7 +10,23 @@ import (
 var migrations = []string{
 	// v1:全量业务表(新库首装,无历史包袱)
 	m0001Init,
+	// v2:多用户(账号角色 + 令牌归属 + 可回放密文)
+	m0002MultiUser,
 }
+
+const m0002MultiUser = `
+-- 账号角色。常量默认值直接回填既有管理员行为 admin,无需额外 UPDATE。
+ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'admin';
+
+-- 令牌归属(NULL=历史/全局 key)与可回放密文(供显示 key / 生成 Claude 配置)。
+ALTER TABLE tokens ADD COLUMN owner_id  INTEGER REFERENCES admins(id) ON DELETE CASCADE;
+ALTER TABLE tokens ADD COLUMN key_cipher TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_tokens_owner ON tokens (owner_id);
+
+-- 会话改为无状态 JWT,cookie 里不再落库,sessions 表退役。
+DROP TABLE IF EXISTS sessions;
+`
 
 const m0001Init = `
 CREATE TABLE IF NOT EXISTS channels (

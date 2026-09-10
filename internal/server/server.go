@@ -91,50 +91,63 @@ func (s *Server) distDir() string {
 // apiMux 管理面全部子路由(仍受会话中间件约束)。
 func (s *Server) apiMux() *http.ServeMux {
 	m := http.NewServeMux()
+	adm := s.requireAdmin // 管理员专用;其余为「已登录即可」
 
+	// 会话/账号:登录态即可
 	m.HandleFunc("POST /api/v1/auth/bootstrap", s.handleBootstrap)
 	m.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	m.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	m.HandleFunc("GET /api/v1/auth/me", s.handleMe)
 	m.HandleFunc("GET /api/v1/auth/state", s.handleAuthState)
+	m.HandleFunc("POST /api/v1/auth/password", s.handleChangeOwnPassword)
 
-	m.HandleFunc("GET /api/v1/overview", s.handleOverview)
-	m.HandleFunc("GET /api/v1/usage", s.handleUsage)
+	// 管理台数据:管理员专用
+	m.HandleFunc("GET /api/v1/overview", adm(s.handleOverview))
+	m.HandleFunc("GET /api/v1/usage", adm(s.handleUsage))
 
-	m.HandleFunc("GET /api/v1/channels", s.handleChannelsList)
-	m.HandleFunc("POST /api/v1/channels", s.handleChannelsCreate)
-	m.HandleFunc("PATCH /api/v1/channels/{id}", s.handleChannelsUpdate)
-	m.HandleFunc("DELETE /api/v1/channels/{id}", s.handleChannelsDelete)
-	m.HandleFunc("POST /api/v1/channels/{id}/test", s.handleChannelTest)
-	m.HandleFunc("GET /api/v1/channels/{id}/quota", s.handleChannelQuota)
-	m.HandleFunc("POST /api/v1/channels/{id}/sync-models", s.handleChannelSyncModels)
+	m.HandleFunc("GET /api/v1/channels", adm(s.handleChannelsList))
+	m.HandleFunc("POST /api/v1/channels", adm(s.handleChannelsCreate))
+	m.HandleFunc("PATCH /api/v1/channels/{id}", adm(s.handleChannelsUpdate))
+	m.HandleFunc("DELETE /api/v1/channels/{id}", adm(s.handleChannelsDelete))
+	m.HandleFunc("POST /api/v1/channels/{id}/test", adm(s.handleChannelTest))
+	m.HandleFunc("GET /api/v1/channels/{id}/quota", adm(s.handleChannelQuota))
+	m.HandleFunc("POST /api/v1/channels/{id}/sync-models", adm(s.handleChannelSyncModels))
 
+	// 模型目录:GET 全站可读(用户建令牌需选模型);写操作管理员专用
 	m.HandleFunc("GET /api/v1/models", s.handleModelsList)
-	m.HandleFunc("POST /api/v1/models", s.handleModelsCreate)
-	m.HandleFunc("PATCH /api/v1/models/{id}", s.handleModelsUpdate)
-	m.HandleFunc("DELETE /api/v1/models/{id}", s.handleModelsDelete)
-	m.HandleFunc("GET /api/v1/models/{id}/usage", s.handleModelUsage)
-	m.HandleFunc("POST /api/v1/models/{id}/offers", s.handleOffersCreate)
-	m.HandleFunc("PUT /api/v1/models/{id}/offers/order", s.handleOffersReorder)
-	m.HandleFunc("PATCH /api/v1/offers/{oid}", s.handleOffersUpdate)
-	m.HandleFunc("DELETE /api/v1/offers/{oid}", s.handleOffersDelete)
+	m.HandleFunc("POST /api/v1/models", adm(s.handleModelsCreate))
+	m.HandleFunc("PATCH /api/v1/models/{id}", adm(s.handleModelsUpdate))
+	m.HandleFunc("DELETE /api/v1/models/{id}", adm(s.handleModelsDelete))
+	m.HandleFunc("GET /api/v1/models/{id}/usage", adm(s.handleModelUsage))
+	m.HandleFunc("POST /api/v1/models/{id}/offers", adm(s.handleOffersCreate))
+	m.HandleFunc("PUT /api/v1/models/{id}/offers/order", adm(s.handleOffersReorder))
+	m.HandleFunc("PATCH /api/v1/offers/{oid}", adm(s.handleOffersUpdate))
+	m.HandleFunc("DELETE /api/v1/offers/{oid}", adm(s.handleOffersDelete))
 
-	m.HandleFunc("GET /api/v1/rules", s.handleRulesList)
-	m.HandleFunc("POST /api/v1/rules", s.handleRulesCreate)
-	m.HandleFunc("PATCH /api/v1/rules/{id}", s.handleRulesUpdate)
-	m.HandleFunc("DELETE /api/v1/rules/{id}", s.handleRulesDelete)
-	m.HandleFunc("PUT /api/v1/rules/order", s.handleRulesReorder)
+	m.HandleFunc("GET /api/v1/rules", adm(s.handleRulesList))
+	m.HandleFunc("POST /api/v1/rules", adm(s.handleRulesCreate))
+	m.HandleFunc("PATCH /api/v1/rules/{id}", adm(s.handleRulesUpdate))
+	m.HandleFunc("DELETE /api/v1/rules/{id}", adm(s.handleRulesDelete))
+	m.HandleFunc("PUT /api/v1/rules/order", adm(s.handleRulesReorder))
 
+	// 访问令牌:登录态即可,作用域在 handler 内按角色收束(user 只见自己名下)
 	m.HandleFunc("GET /api/v1/tokens", s.handleTokensList)
 	m.HandleFunc("POST /api/v1/tokens", s.handleTokensCreate)
 	m.HandleFunc("PATCH /api/v1/tokens/{id}", s.handleTokensUpdate)
 	m.HandleFunc("DELETE /api/v1/tokens/{id}", s.handleTokensDelete)
+	m.HandleFunc("GET /api/v1/tokens/{id}/claude-config", s.handleTokenClaudeConfig)
 
-	m.HandleFunc("GET /api/v1/logs", s.handleLogsList)
-	m.HandleFunc("DELETE /api/v1/logs", s.handleLogsClear)
+	m.HandleFunc("GET /api/v1/logs", adm(s.handleLogsList))
+	m.HandleFunc("DELETE /api/v1/logs", adm(s.handleLogsClear))
 
-	m.HandleFunc("GET /api/v1/settings", s.handleSettingsGet)
-	m.HandleFunc("PATCH /api/v1/settings", s.handleSettingsPatch)
+	m.HandleFunc("GET /api/v1/settings", adm(s.handleSettingsGet))
+	m.HandleFunc("PATCH /api/v1/settings", adm(s.handleSettingsPatch))
+
+	// 用户管理:管理员专用
+	m.HandleFunc("GET /api/v1/users", adm(s.handleUsersList))
+	m.HandleFunc("POST /api/v1/users", adm(s.handleUsersCreate))
+	m.HandleFunc("PATCH /api/v1/users/{id}/password", adm(s.handleUserResetPassword))
+	m.HandleFunc("DELETE /api/v1/users/{id}", adm(s.handleUserDelete))
 
 	return m
 }

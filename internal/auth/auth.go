@@ -35,16 +35,6 @@ func HashSecret(secret string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// NewSessionToken 生成会话 token;返回明文(写 cookie)与 sha256(落库)。
-func NewSessionToken() (raw, hashed string, err error) {
-	b := make([]byte, 32)
-	if _, err = rand.Read(b); err != nil {
-		return "", "", err
-	}
-	raw = hex.EncodeToString(b)
-	return raw, HashSecret(raw), nil
-}
-
 // NewModelKey 生成模型面令牌明文 "sk-gw-"+32字节hex 与落库哈希。
 func NewModelKey() (plain, hashed string, err error) {
 	b := make([]byte, 32)

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 	"time"
 
 	"personal-ai-gateway/internal/domain"
@@ -12,16 +13,17 @@ import (
 var ErrQuotaExceeded = errors.New("token quota exceeded")
 
 // CreateToken 落库新令牌。sha/masked 由调用方(鉴权层)按密钥生成;
-// status 恒为 active,后续用 SetTokenStatus 停用。返回带派生状态的读结构。
-func (s *Store) CreateToken(name string, allowed []string, quotaUsd float64, rpm int,
-	expiresAt *string, sha, masked string) (domain.TokenRead, error) {
+// keyCipher 为明文的 AES-GCM 密文(供回显/生成配置;空=不可回显);
+// ownerID 为归属账号(nil=全局 key)。status 恒为 active,后续用 SetTokenStatus 停用。
+func (s *Store) CreateToken(name string, ownerID *int64, keyCipher string, allowed []string,
+	quotaUsd float64, rpm int, expiresAt *string, sha, masked string) (domain.TokenRead, error) {
 	now := formatRFC3339(s.nowUTC())
 	_, err := s.db.Exec(`INSERT INTO tokens (
 		name, sha256, key_masked, allowed_models, quota_usd, used_usd, rpm_limit,
-		expires_at, status, created_at, updated_at
-	) VALUES (?,?,?,?,?,0,?,?, 'active', ?,?)`,
+		expires_at, status, created_at, updated_at, owner_id, key_cipher
+	) VALUES (?,?,?,?,?,0,?,?, 'active', ?,?,?,?)`,
 		name, sha, masked, encodeJSON(allowed), quotaUsd, rpm,
-		expiresAt, now, now)
+		expiresAt, now, now, ownerID, keyCipher)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.TokenRead{}, ErrConflict
@@ -37,7 +39,7 @@ func (s *Store) CreateToken(name string, allowed []string, quotaUsd float64, rpm
 
 // GetToken 读单条令牌(派生 expired 状态)。
 func (s *Store) GetToken(id int64) (domain.TokenRead, error) {
-	row := s.db.QueryRow(tokenCols+` WHERE id=?`, id)
+	row := s.db.QueryRow(tokenCols+` WHERE t.id=?`, id)
 	tk, err := scanToken(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.TokenRead{}, ErrNotFound
@@ -45,9 +47,16 @@ func (s *Store) GetToken(id int64) (domain.TokenRead, error) {
 	return tk, err
 }
 
-// ListTokens 全部令牌,新建在前。
-func (s *Store) ListTokens() ([]domain.TokenRead, error) {
-	rows, err := s.db.Query(tokenCols + ` ORDER BY id DESC`)
+// ListTokens 令牌列表,新建在前。ownerID=nil 返回全部(管理员);非 nil 只返回该账号名下。
+func (s *Store) ListTokens(ownerID *int64) ([]domain.TokenRead, error) {
+	q := tokenCols
+	args := []any{}
+	if ownerID != nil {
+		q += ` WHERE t.owner_id = ?`
+		args = append(args, *ownerID)
+	}
+	q += ` ORDER BY t.id DESC`
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +70,16 @@ func (s *Store) ListTokens() ([]domain.TokenRead, error) {
 		out = append(out, tk)
 	}
 	return out, rows.Err()
+}
+
+// TokenKeyCipher 读单条令牌的明文密文(仅生成配置端点使用;不进入列表读结构)。
+func (s *Store) TokenKeyCipher(id int64) (string, error) {
+	var cipher string
+	err := s.db.QueryRow(`SELECT key_cipher FROM tokens WHERE id=?`, id).Scan(&cipher)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return cipher, err
 }
 
 // LookupTokenBySHA256 模型面鉴权用:按密钥哈希精确查。
@@ -186,21 +205,29 @@ func isExpired(e sql.NullString) bool {
 	return !t.After(time.Now().UTC())
 }
 
-const tokenCols = `SELECT id,name,sha256,key_masked,allowed_models,quota_usd,used_usd,
-	rpm_limit,expires_at,status,last_used_at,created_at FROM tokens`
+// tokenCols 令牌列表/详情读结构:LEFT JOIN 账号取归属名,并以 key_cipher 是否为空
+// 派生「可回显」(不把密文本身带出)。
+const tokenCols = `SELECT t.id, t.name, t.sha256, t.key_masked, t.allowed_models, t.quota_usd, t.used_usd,
+	t.rpm_limit, t.expires_at, t.status, t.last_used_at, t.created_at,
+	t.owner_id, COALESCE(a.username, ''), (t.key_cipher <> '')
+	FROM tokens t LEFT JOIN admins a ON a.id = t.owner_id`
 
-// scanToken 按 tokenCols(12 列)顺序扫;sha256 不展露,用占位变量丢弃。
+// scanToken 按 tokenCols(15 列)顺序扫;sha256 不展露,用占位变量丢弃。
 func scanToken(row scanner) (domain.TokenRead, error) {
 	var tk domain.TokenRead
 	var shaIgnored string
 	var allowed string
-	var expires, lastUsed sql.NullString
+	var expires, lastUsed, ownerID sql.NullString
 	var created string
+	var retrievable int
 	if err := row.Scan(&tk.ID, &tk.Name, &shaIgnored, &tk.KeyMasked, &allowed,
-		&tk.QuotaUsd, &tk.UsedUsd, &tk.RpmLimit, &expires, &tk.Status, &lastUsed, &created); err != nil {
+		&tk.QuotaUsd, &tk.UsedUsd, &tk.RpmLimit, &expires, &tk.Status, &lastUsed, &created,
+		&ownerID, &tk.OwnerName, &retrievable); err != nil {
 		return domain.TokenRead{}, err
 	}
 	tk.AllowedModels = decodeStringList(allowed)
+	tk.OwnerID = nullInt64Ptr(ownerID)
+	tk.KeyRetrievable = retrievable == 1
 	if expires.Valid {
 		v := expires.String
 		tk.ExpiresAt = &v
@@ -214,4 +241,15 @@ func scanToken(row scanner) (domain.TokenRead, error) {
 	}
 	tk.CreatedAt, _ = parseTime(created)
 	return tk, nil
+}
+
+func nullInt64Ptr(n sql.NullString) *int64 {
+	if !n.Valid {
+		return nil
+	}
+	v, err := strconv.ParseInt(n.String, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &v
 }

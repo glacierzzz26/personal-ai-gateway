@@ -87,7 +87,7 @@ func (e *e2eEnv) addToken(name string, allowed []string, quota float64) string {
 	if err != nil {
 		e.t.Fatalf("new key: %v", err)
 	}
-	if _, err := e.st.CreateToken(name, allowed, quota, 1000, nil, hashed, domain.MaskKey(plain)); err != nil {
+	if _, err := e.st.CreateToken(name, nil, "", allowed, quota, 1000, nil, hashed, domain.MaskKey(plain)); err != nil {
 		e.t.Fatalf("create token: %v", err)
 	}
 	return plain
@@ -337,7 +337,7 @@ func TestE2EQuotaAndAllowed(t *testing.T) {
 	}
 	// 过期令牌 → 401
 	exp := "2000-01-01"
-	if _, err := e.st.CreateToken("old", []string{"*"}, 100, 10, &exp, auth.HashSecret("sk-old"), "sk-o••••old"); err != nil {
+	if _, err := e.st.CreateToken("old", nil, "", []string{"*"}, 100, 10, &exp, auth.HashSecret("sk-old"), "sk-o••••old"); err != nil {
 		t.Fatalf("create expired token: %v", err)
 	}
 	code, _ = e.post("/v1/chat/completions", "sk-old", false, fmt.Sprintf(chatBody, "m-ok"))

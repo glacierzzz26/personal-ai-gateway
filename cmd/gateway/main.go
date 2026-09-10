@@ -52,10 +52,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := st.PruneExpiredSessions(); err != nil {
-		logger.Warn("prune sessions", "err", err)
-	}
-
 	srv := server.New(cfg, st)
 
 	httpSrv := &http.Server{

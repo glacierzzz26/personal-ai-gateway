@@ -7,11 +7,19 @@ import (
 
 	"personal-ai-gateway/internal/auth"
 	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/secret"
+	"personal-ai-gateway/internal/store"
 )
 
-// handleTokensList 令牌列表。
+// handleTokensList 令牌列表。user 只见自己名下;admin 见全部。
 func (s *Server) handleTokensList(w http.ResponseWriter, r *http.Request) {
-	tokens, err := s.st.ListTokens()
+	me := s.currentAdmin(r)
+	var owner *int64
+	if me.Role == domain.RoleUser {
+		id := me.ID
+		owner = &id
+	}
+	tokens, err := s.st.ListTokens(owner)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -20,6 +28,27 @@ func (s *Server) handleTokensList(w http.ResponseWriter, r *http.Request) {
 		tokens = []domain.TokenRead{}
 	}
 	writeJSON(w, http.StatusOK, tokens)
+}
+
+// loadManageableToken 取该账号有权管理的令牌:admin 任意;user 仅自己名下。
+// 越权一律按「不存在」返回 404,避免泄露他人 key 的存在。
+func (s *Server) loadManageableToken(w http.ResponseWriter, r *http.Request, param string) (domain.TokenRead, bool) {
+	id, ok := paramID(r, param)
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "bad token id")
+		return domain.TokenRead{}, false
+	}
+	tr, err := s.st.GetToken(id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return domain.TokenRead{}, false
+	}
+	me := s.currentAdmin(r)
+	if me.Role != domain.RoleAdmin && (tr.OwnerID == nil || *tr.OwnerID != me.ID) {
+		writeStoreErr(w, store.ErrNotFound)
+		return domain.TokenRead{}, false
+	}
+	return tr, true
 }
 
 // handleTokensCreate 新建令牌:明文 key 仅此响应出现一次,后续只剩掩码。
@@ -43,12 +72,30 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	in.ExpiresAt = ne
 	in.Defaults()
+	// 归属:user 强制自己;admin 可用 ownerId 指定(校验存在),缺省为全局(NULL)。
+	me := s.currentAdmin(r)
+	var ownerID *int64
+	if me.Role == domain.RoleUser {
+		id := me.ID
+		ownerID = &id
+	} else if in.OwnerID != nil {
+		if _, _, err := s.st.AdminByID(*in.OwnerID); err != nil {
+			apiErr(w, http.StatusBadRequest, "validation", "owner does not exist")
+			return
+		}
+		ownerID = in.OwnerID
+	}
 	plain, hashed, err := auth.NewModelKey()
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
-	tr, err := s.st.CreateToken(in.Name, in.AllowedModels, in.QuotaUsd, in.RpmLimit,
+	cipher, err := secret.Encrypt(plain)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	tr, err := s.st.CreateToken(in.Name, ownerID, cipher, in.AllowedModels, in.QuotaUsd, in.RpmLimit,
 		in.ExpiresAt, hashed, domain.MaskKey(plain))
 	if err != nil {
 		writeStoreErr(w, err)
@@ -62,6 +109,9 @@ func (s *Server) handleTokensUpdate(w http.ResponseWriter, r *http.Request) {
 	id, ok := paramID(r, "id")
 	if !ok {
 		apiErr(w, http.StatusBadRequest, "validation", "bad token id")
+		return
+	}
+	if _, ok := s.loadManageableToken(w, r, "id"); !ok {
 		return
 	}
 	var in domain.TokenInput
@@ -84,12 +134,11 @@ func (s *Server) handleTokensUpdate(w http.ResponseWriter, r *http.Request) {
 
 // handleTokensDelete 删除令牌。
 func (s *Server) handleTokensDelete(w http.ResponseWriter, r *http.Request) {
-	id, ok := paramID(r, "id")
+	tr, ok := s.loadManageableToken(w, r, "id")
 	if !ok {
-		apiErr(w, http.StatusBadRequest, "validation", "bad token id")
 		return
 	}
-	if err := s.st.DeleteToken(id); err != nil {
+	if err := s.st.DeleteToken(tr.ID); err != nil {
 		writeStoreErr(w, err)
 		return
 	}

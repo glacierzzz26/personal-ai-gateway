@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"personal-ai-gateway/internal/domain"
 )
@@ -41,6 +42,8 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, "validation", "tzOffsetMin out of range [-720, 840]")
 		return
 	}
+	// 对外基址:规范化(去空白与尾斜杠);留空=按访问地址推断。
+	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
 	if err := s.st.SaveSettings(in); err != nil {
 		writeStoreErr(w, err)
 		return

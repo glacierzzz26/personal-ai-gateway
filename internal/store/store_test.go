@@ -61,10 +61,14 @@ func TestOpenMigratesAndIdempotent(t *testing.T) {
 		t.Errorf("migration version = %d, want %d", version, len(migrations))
 	}
 	// 业务表应就绪(抽查几张三件套)
-	for _, table := range []string{"channels", "models", "model_offers", "rules", "tokens", "request_logs", "settings", "admins", "sessions"} {
+	for _, table := range []string{"channels", "models", "model_offers", "rules", "tokens", "request_logs", "settings", "admins"} {
 		var n int
 		err := st2.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n)
 		mustNoErr(t, err, "sqlite_master")
 		mustEqual(t, n, 1, "table "+table+" exists")
 	}
+	// m0002 后 sessions 已退役(JWT 无状态)
+	var gone int
+	mustNoErr(t, st2.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'`).Scan(&gone), "check sessions gone")
+	mustEqual(t, gone, 0, "sessions table dropped")
 }

@@ -17,11 +17,12 @@ const (
 	keyRecordBody     = "record_request_body"
 	keySampleRate     = "sample_rate_pct"
 	keyTZOffsetMin    = "tz_offset_min"
+	keyPublicBaseURL  = "public_base_url"
 )
 
 var settingsKeys = []string{
 	keyRequestTimeout, keyMaxRetries, keyDegradeOnError, keyHTTPProxy, keySkipTLSVerify,
-	keyLogRetention, keyRecordBody, keySampleRate, keyTZOffsetMin,
+	keyLogRetention, keyRecordBody, keySampleRate, keyTZOffsetMin, keyPublicBaseURL,
 }
 
 // GetSettings 读取全部设置;表为空返回默认值(不落库)。
@@ -54,6 +55,7 @@ func (s *Store) GetSettings() (domain.Settings, error) {
 	cfg.RecordRequestBody = boolOr(cfg.RecordRequestBody, raw[keyRecordBody])
 	cfg.SampleRatePct = intOr(cfg.SampleRatePct, raw[keySampleRate])
 	cfg.TZOffsetMin = intOr(cfg.TZOffsetMin, raw[keyTZOffsetMin])
+	cfg.PublicBaseURL = strOr(raw[keyPublicBaseURL])
 	return cfg, nil
 }
 
@@ -69,6 +71,7 @@ func (s *Store) SaveSettings(cfg domain.Settings) error {
 		keyRecordBody:     boolStr(cfg.RecordRequestBody),
 		keySampleRate:     strconv.Itoa(cfg.SampleRatePct),
 		keyTZOffsetMin:    strconv.Itoa(cfg.TZOffsetMin),
+		keyPublicBaseURL:  cfg.PublicBaseURL,
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

@@ -42,7 +42,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	if _, err := s.st.CreateAdmin(strings.TrimSpace(req.Username), hash); err != nil {
+	if _, err := s.st.CreateAdmin(strings.TrimSpace(req.Username), hash, domain.RoleAdmin); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			writeJSON(w, http.StatusConflict, map[string]any{
 				"error": map[string]any{"type": "conflict", "message": "username taken"},
@@ -52,10 +52,10 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	s.loginAs(w, strings.TrimSpace(req.Username), req.Password, true)
+	s.loginAs(w, r, strings.TrimSpace(req.Username), req.Password, true)
 }
 
-// handleLogin 会话登录:校验密码后建会话。
+// handleLogin 会话登录:校验密码后签发会话 JWT。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req domain.LoginReq
 	if !decodeBody(w, r, &req) {
@@ -68,18 +68,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	_, _, err := s.st.AdminByUsername(req.Username)
-	if errors.Is(err, store.ErrUnauthorized) || err != nil {
-		// 统一提示,避免枚举用户名
-		writeJSON(w, http.StatusUnauthorized, map[string]any{
-			"error": map[string]any{"type": "unauthorized", "message": "invalid username or password"},
-		})
-		return
-	}
-	s.loginAs(w, req.Username, req.Password, false)
+	s.loginAs(w, r, req.Username, req.Password, false)
 }
 
-func (s *Server) loginAs(w http.ResponseWriter, username, password string, expectBootstrap bool) {
+func (s *Server) loginAs(w http.ResponseWriter, r *http.Request, username, password string, expectBootstrap bool) {
 	admin, hash, err := s.st.AdminByUsername(username)
 	if err != nil || !auth.CheckPassword(hash, password) {
 		if expectBootstrap {
@@ -93,17 +85,13 @@ func (s *Server) loginAs(w http.ResponseWriter, username, password string, expec
 		})
 		return
 	}
-	raw, hashed, err := auth.NewSessionToken()
+	token, err := auth.IssueSession(admin.ID, admin.Username, admin.Role, hash)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
-	if _, err := s.st.CreateSession(admin.ID, hashed, auth.SessionTTL); err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	setSessionCookie(w, raw, int(auth.SessionTTL/time.Second))
-	writeJSON(w, http.StatusOK, domain.MeResp{ID: admin.ID, Username: admin.Username, CreatedAt: admin.CreatedAt})
+	setSessionCookie(w, r, token, int(auth.SessionTTL/time.Second))
+	writeJSON(w, http.StatusOK, domain.MeResp{ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: admin.CreatedAt})
 }
 
 // handleAuthState 匿名可访问:登录页需区分「首启建管理员」与「普通登录」。
@@ -116,26 +104,38 @@ func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"adminExists": n > 0})
 }
 
-// handleLogout 删除当前会话并清 cookie(失败也照清)。
+// handleLogout 清当前会话 cookie(JWT 无状态,登出即客户端丢弃)。
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(auth.SessionCookie); err == nil && c.Value != "" {
-		_ = s.st.DeleteSession(auth.HashSecret(c.Value))
-	}
-	setSessionCookie(w, "", -1)
+	setSessionCookie(w, r, "", -1)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.currentAdmin(r))
+	a := s.currentAdmin(r)
+	writeJSON(w, http.StatusOK, domain.MeResp{ID: a.ID, Username: a.Username, Role: a.Role, CreatedAt: a.CreatedAt})
 }
 
-func setSessionCookie(w http.ResponseWriter, value string, maxAge int) {
+// setSessionCookie 写会话 cookie。Secure 依请求是否 HTTPS(TLS 直连或反代 X-Forwarded-Proto)。
+func setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.SessionCookie,
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   requestIsHTTPS(r),
 		MaxAge:   maxAge,
 	})
+}
+
+// requestIsHTTPS 判断原始请求是否经 HTTPS(TLS 直连,或反代在 X-Forwarded-Proto 声明)。
+func requestIsHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if i := strings.IndexByte(proto, ','); i >= 0 {
+		proto = proto[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
