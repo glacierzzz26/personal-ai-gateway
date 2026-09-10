@@ -163,12 +163,24 @@ func (s *Store) ChargeToken(id int64, costUsd float64) error {
 	return nil
 }
 
+// parseExpires 解析 tokens.expires_at:库内新写入为 UTC RFC3339Nano,但历史/直连测试
+// 可能落宽松格式(YYYY-MM-DD、带空格的本地时间)。统一在此容错,避免与数据面 parseDate
+// 口径分裂 —— 管理台显示状态与网关放行判定必须一致。
+func parseExpires(s string) (time.Time, bool) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 func isExpired(e sql.NullString) bool {
 	if !e.Valid || e.String == "" {
 		return false
 	}
-	t, err := parseTime(e.String)
-	if err != nil {
+	t, ok := parseExpires(e.String)
+	if !ok {
 		return false
 	}
 	return !t.After(time.Now().UTC())

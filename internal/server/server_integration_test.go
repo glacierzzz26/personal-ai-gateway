@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"personal-ai-gateway/internal/config"
 	"personal-ai-gateway/internal/secret"
@@ -295,6 +296,55 @@ func TestAdminCRUD(t *testing.T) {
 	mustStatus(t, code, http.StatusOK, "patch settings")
 	code, _ = doJSON(t, c, http.MethodDelete, base+"/api/v1/logs", nil)
 	mustStatus(t, code, http.StatusOK, "clear logs")
+}
+
+// TestTokenExpiryCanonicalized 管理台输入宽松日期(YYYY-MM-DD)→ 库内规范为 UTC RFC3339Nano,
+// 且列表状态与数据面判定一致(过期即 expired,不再出现"管理台 active / 网关 401"的矛盾)。
+func TestTokenExpiryCanonicalized(t *testing.T) {
+	srv, c, _ := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/tokens",
+		map[string]any{"name": "old", "allowedModels": []string{"*"}, "quotaUsd": 0, "rpmLimit": 10, "expiresAt": "2000-01-01"})
+	mustStatus(t, code, http.StatusOK, "create expired token")
+
+	code, body = doJSON(t, c, http.MethodGet, base+"/api/v1/tokens", nil)
+	mustStatus(t, code, http.StatusOK, "list tokens")
+	list := decode[[]map[string]any](t, body)
+	if len(list) != 1 {
+		t.Fatalf("tokens len = %d", len(list))
+	}
+	exp, _ := list[0]["expiresAt"].(string)
+	if _, err := time.Parse(time.RFC3339Nano, exp); err != nil {
+		t.Errorf("expiresAt 未规范化为 RFC3339Nano: %q (%v)", exp, err)
+	}
+	if list[0]["status"] != "expired" {
+		t.Errorf("过期令牌 status = %v, want expired", list[0]["status"])
+	}
+
+	// 未来日期 → active,且同样规范化
+	code, _ = doJSON(t, c, http.MethodPost, base+"/api/v1/tokens",
+		map[string]any{"name": "future", "allowedModels": []string{"*"}, "quotaUsd": 0, "rpmLimit": 10, "expiresAt": "2099-01-01"})
+	mustStatus(t, code, http.StatusOK, "create future token")
+	code, body = doJSON(t, c, http.MethodGet, base+"/api/v1/tokens", nil)
+	mustStatus(t, code, http.StatusOK, "list tokens again")
+	for _, row := range decode[[]map[string]any](t, body) {
+		if row["name"] != "future" {
+			continue
+		}
+		if row["status"] != "active" {
+			t.Errorf("未来令牌 status = %v, want active", row["status"])
+		}
+		if _, err := time.Parse(time.RFC3339Nano, row["expiresAt"].(string)); err != nil {
+			t.Errorf("未来令牌 expiresAt 未规范化: %v (%v)", row["expiresAt"], err)
+		}
+	}
+
+	// 非法日期 → 400
+	code, _ = doJSON(t, c, http.MethodPost, base+"/api/v1/tokens",
+		map[string]any{"name": "bad", "allowedModels": []string{"*"}, "expiresAt": "not-a-date"})
+	mustStatus(t, code, http.StatusBadRequest, "reject bad expiresAt")
 }
 
 // TestChannelQuota 渠道额度接口全链路:正常解析 / 非 ok 窗口略去 / Anthropic 判不支持。

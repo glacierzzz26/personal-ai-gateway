@@ -36,12 +36,12 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 	if in.AllowedModels == nil {
 		in.AllowedModels = []string{"*"}
 	}
-	if in.ExpiresAt != nil && *in.ExpiresAt != "" {
-		if _, ok := parseDateLoose(*in.ExpiresAt); !ok {
-			apiErr(w, http.StatusBadRequest, "validation", "expiresAt must be RFC3339 or YYYY-MM-DD")
-			return
-		}
+	ne, ok := normalizeExpiresAt(in.ExpiresAt)
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "expiresAt must be RFC3339 or YYYY-MM-DD")
+		return
 	}
+	in.ExpiresAt = ne
 	in.Defaults()
 	plain, hashed, err := auth.NewModelKey()
 	if err != nil {
@@ -68,6 +68,12 @@ func (s *Server) handleTokensUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &in) {
 		return
 	}
+	ne, ok := normalizeExpiresAt(in.ExpiresAt)
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "expiresAt must be RFC3339 or YYYY-MM-DD")
+		return
+	}
+	in.ExpiresAt = ne
 	tr, err := s.st.UpdateToken(id, in)
 	if err != nil {
 		writeStoreErr(w, err)
@@ -98,4 +104,20 @@ func parseDateLoose(s string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// normalizeExpiresAt 把用户输入的宽松日期规范成库内统一口径 UTC RFC3339Nano。
+// 否则管理台可存「2000-01-01」而 store 端 parseTime(RFC3339Nano)解不出 → 列表恒显 active,
+// 数据面却按宽松格式判为过期,同一令牌两处结论矛盾。nil / 空串表「无有效期」,原样返回;
+// 无法解析返回 ok=false,由调用方回 400。
+func normalizeExpiresAt(p *string) (*string, bool) {
+	if p == nil || *p == "" {
+		return p, true
+	}
+	t, ok := parseDateLoose(*p)
+	if !ok {
+		return nil, false
+	}
+	s := t.UTC().Format(time.RFC3339Nano)
+	return &s, true
 }
