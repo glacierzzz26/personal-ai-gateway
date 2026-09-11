@@ -9,6 +9,11 @@ import (
 	"personal-ai-gateway/internal/domain"
 )
 
+// errCond 「这行算错误」的统一 SQL 口径:状态 >=400 或带 err 文本,
+// 但排除 499(客户端主动断开/取消)—— 它既不是网关故障也不是上游故障,
+// 计入错误率会把「用户按 Esc」变成渠道健康问题。
+const errCond = "((status >= 400 OR err IS NOT NULL) AND status <> 499)"
+
 // LogFilter 列表查询条件(空值 = 不过滤)。
 type LogFilter struct {
 	Model   string // 精确
@@ -95,7 +100,10 @@ func logWhere(f LogFilter) (string, []any) {
 	case "ok":
 		conds = append(conds, "status BETWEEN 100 AND 399")
 	case "error":
-		conds = append(conds, "(status >= 400 OR err IS NOT NULL)")
+		conds = append(conds, "("+errCond+")")
+	case "canceled":
+		conds = append(conds, "status = ?")
+		args = append(args, domain.StatusClientClosed)
 	}
 	if f.Keyword != "" {
 		kw := "%" + lower(f.Keyword) + "%"
@@ -182,7 +190,7 @@ func (s *Store) QuerySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin in
 	n := MetricBucket(bucket)
 	rows, err := s.db.Query(`SELECT substr(datetime(ts, ?), 1, ?) AS bkt,
 			COUNT(*),
-			SUM(CASE WHEN status >= 400 OR err IS NOT NULL THEN 1 ELSE 0 END),
+			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
 			COALESCE(SUM(cost), 0)
 		FROM request_logs
 		WHERE ts >= ? AND ts < ?
@@ -229,7 +237,7 @@ func (s *Store) QueryDimSummary(dim string, fromUTC, toUTC time.Time, limit int)
 			COALESCE(SUM(prompt_tokens),0),
 			COALESCE(SUM(completion_tokens),0),
 			COALESCE(SUM(cost),0),
-			SUM(CASE WHEN status >= 400 OR err IS NOT NULL THEN 1 ELSE 0 END)
+			SUM(CASE WHEN ` + errCond + ` THEN 1 ELSE 0 END)
 		FROM request_logs
 		WHERE ts >= ? AND ts < ?
 		GROUP BY g ORDER BY COUNT(*) DESC`
@@ -274,7 +282,7 @@ type ChannelStat struct {
 func (s *Store) ChannelStatsSince(sinceUTC time.Time) (map[int64]ChannelStat, error) {
 	rows, err := s.db.Query(`SELECT channel_id,
 			COUNT(*),
-			SUM(CASE WHEN status >= 400 OR err IS NOT NULL THEN 1 ELSE 0 END),
+			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
 			COALESCE(SUM(total_ms),0),
 			COALESCE(SUM(prompt_tokens + completion_tokens + cache_read_tokens),0),
 			COALESCE(SUM(cost),0)

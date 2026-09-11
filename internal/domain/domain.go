@@ -72,6 +72,10 @@ const (
 	StrategyLatency  Strategy = "latency"  // 按 EWMA 延迟升序
 )
 
+// StatusClientClosed 客户端主动断开的日志状态码(non-standard 499)。
+// 不是任何一方的故障:不计入错误率、不触发渠道熔断,日志页显示为「中断」。
+const StatusClientClosed = 499
+
 // TokenStatus 令牌状态。
 type TokenStatus string
 

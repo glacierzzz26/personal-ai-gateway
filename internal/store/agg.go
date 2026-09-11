@@ -27,7 +27,7 @@ func (s *Store) QueryModelSeries(model, bucket string, fromUTC, toUTC time.Time,
 	n := MetricBucket(bucket)
 	rows, err := s.db.Query(`SELECT substr(datetime(ts, ?), 1, ?) AS bkt,
 			COUNT(*),
-			SUM(CASE WHEN status >= 400 OR err IS NOT NULL THEN 1 ELSE 0 END),
+			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
 			COALESCE(SUM(cost), 0)
 		FROM request_logs
 		WHERE model = ? AND ts >= ? AND ts < ?
@@ -78,7 +78,7 @@ func (s *Store) QueryModelChannels(model string, fromUTC, toUTC time.Time) ([]do
 func (s *Store) WindowTotals(fromUTC, toUTC time.Time) (reqs, errs int, cost float64, err error) {
 	var e sql.NullInt64
 	err = s.db.QueryRow(`SELECT COUNT(*),
-			COALESCE(SUM(CASE WHEN status >= 400 OR err IS NOT NULL THEN 1 ELSE 0 END),0),
+			COALESCE(SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),0),
 			COALESCE(SUM(cost),0)
 		FROM request_logs WHERE ts >= ? AND ts < ?`,
 		formatRFC3339(fromUTC), formatRFC3339(toUTC)).Scan(&reqs, &e, &cost)

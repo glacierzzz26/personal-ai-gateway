@@ -142,3 +142,74 @@ func TestLogInsertListBuckets(t *testing.T) {
 	_, totalAfter, _ := st.ListLogs(LogFilter{}, 480)
 	mustEqual(t, totalAfter, 0, "cleared")
 }
+
+// TestClientClosedExcludedFromErrorRate 499(客户端主动断开)不参与任何错误统计口径:
+// 错误率只反映网关/上游故障,「用户按 Esc」不该被算成渠道不健康。
+func TestClientClosedExcludedFromErrorRate(t *testing.T) {
+	st := newTestStore(t)
+	chID := mkChannel(t, st, "Anthropic 主")
+
+	logs := []domain.LogRow{
+		{TS: ts(2026, 9, 2, 10, 0), Model: "claude-3-5-sonnet", ChannelID: chID,
+			ChannelName: "Anthropic 主", TokenName: "ci", Protocol: "anthropic",
+			Status: 200, PromptTokens: 100, Completion: 50, CostUsd: 0.01,
+			FirstTokenMs: 300, TotalMs: 900, IP: "1.2.3.4"},
+		{TS: ts(2026, 9, 2, 11, 0), Model: "claude-3-5-sonnet", ChannelID: chID,
+			ChannelName: "Anthropic 主", TokenName: "ci", Protocol: "anthropic",
+			Status: 500, PromptTokens: 5, Completion: 0, CostUsd: 0,
+			FirstTokenMs: 0, TotalMs: 120, IP: "1.2.3.4", Err: errPtr("boom")},
+		{TS: ts(2026, 9, 2, 12, 0), Model: "claude-3-5-sonnet", ChannelID: chID,
+			ChannelName: "Anthropic 主", TokenName: "ci", Protocol: "anthropic",
+			Status: domain.StatusClientClosed, PromptTokens: 40, Completion: 0, CostUsd: 0.001,
+			FirstTokenMs: 200, TotalMs: 3000, IP: "1.2.3.4"},
+		// 断连时若已写下 err 文本,同样不得计入(状态口径优先)。
+		{TS: ts(2026, 9, 2, 13, 0), Model: "claude-3-5-sonnet", ChannelID: chID,
+			ChannelName: "Anthropic 主", TokenName: "ci", Protocol: "anthropic",
+			Status: domain.StatusClientClosed, PromptTokens: 30, Completion: 0, CostUsd: 0.001,
+			FirstTokenMs: 210, TotalMs: 2500, IP: "1.2.3.4", Err: errPtr("use of closed connection")},
+	}
+	for _, l := range logs {
+		mustNoErr(t, st.InsertLog(l), "insert log")
+	}
+
+	from, to := ts(2026, 9, 2, 0, 0), ts(2026, 9, 3, 0, 0)
+
+	// 合计口径:4 请求,只有那条 500 是错误
+	reqs, errs, _, err := st.WindowTotals(from, to)
+	mustNoErr(t, err, "window totals")
+	mustEqual(t, reqs, 4, "window requests")
+	mustEqual(t, errs, 1, "window errors(499 不得计入)")
+
+	// 时间桶
+	series, err := st.QuerySeries("day", from, to, 480)
+	mustNoErr(t, err, "day series")
+	if len(series) != 1 || series[0].Requests != 4 || series[0].Errors != 1 {
+		t.Errorf("day series = %+v, want req=4 err=1", series)
+	}
+
+	// 维度聚合的错误率:1/4,而非 3/4
+	dims, err := st.QueryDimSummary("channel", from, to, 0)
+	mustNoErr(t, err, "channel dim")
+	if len(dims) != 1 || dims[0].Requests != 4 {
+		t.Fatalf("channel dim = %+v", dims)
+	}
+	if dims[0].ErrorRate < 0.24 || dims[0].ErrorRate > 0.26 {
+		t.Errorf("channel errorRate = %v, want 0.25(499 被计入)", dims[0].ErrorRate)
+	}
+
+	// 渠道健康统计同样只认 1 条错误
+	stats, err := st.ChannelStatsSince(from)
+	mustNoErr(t, err, "channel stats")
+	if s := stats[chID]; s.Errors != 1 || s.Requests != 4 {
+		t.Errorf("channel stats = %+v, want req=4 err=1", s)
+	}
+
+	// 列表筛选:ok / error / canceled 三桶互斥且覆盖全部
+	_, nOK, _ := st.ListLogs(LogFilter{Status: "ok"}, 480)
+	_, nErr, _ := st.ListLogs(LogFilter{Status: "error"}, 480)
+	_, nCanceled, _ := st.ListLogs(LogFilter{Status: "canceled"}, 480)
+	mustEqual(t, nOK, 1, "ok bucket")
+	mustEqual(t, nErr, 1, "error bucket")
+	mustEqual(t, nCanceled, 2, "canceled bucket")
+	mustEqual(t, nOK+nErr+nCanceled, 4, "三桶应覆盖全部 4 条")
+}
