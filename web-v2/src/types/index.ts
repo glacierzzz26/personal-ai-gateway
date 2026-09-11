@@ -187,7 +187,8 @@ export interface LogFilters {
   model?: string;
   channel?: string;
   token?: string;
-  status?: 'ok' | 'error' | '';
+  /** canceled = 客户端主动断开(499),不计入错误率。 */
+  status?: 'ok' | 'error' | 'canceled' | '';
   kw?: string;
 }
 

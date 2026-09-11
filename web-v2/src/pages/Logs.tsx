@@ -46,6 +46,8 @@ export default function Logs() {
   };
 
   const okCode = (code: number) => code >= 100 && code < 400;
+  // 499 = 客户端主动断开(按 Esc/断网),既非成功也非故障,单列以免污染错误率观感。
+  const CANCELED = 499;
 
   const columns: ColumnsType<RequestLogItem> = [
     {
@@ -55,6 +57,9 @@ export default function Logs() {
     {
       title: '状态', dataIndex: 'statusCode', width: 84,
       render: (v, r) => {
+        if (v === CANCELED) {
+          return <Tag color="default" style={{ marginInlineEnd: 0 }}>中断</Tag>;
+        }
         const ok = okCode(v);
         return (
           <Tag color={ok ? 'success' : 'error'} style={{ marginInlineEnd: 0 }}>
@@ -133,6 +138,7 @@ export default function Logs() {
           options={[
             { value: 'ok', label: '成功' },
             { value: 'error', label: '失败' },
+            { value: 'canceled', label: '中断' },
           ]}
         />
         <Input.Search

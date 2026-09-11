@@ -105,9 +105,37 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 3. 转发:出站协议按 provider(Anthropic → anthropic 原生;OpenAI/Azure/DeepSeek/通义/智谱/Moonshot/聚合
    中转 → openai 兼容;Azure 补 api-version)。跨协议 → translate(a2o / o2a),非流式整包 + 流式 SSE 逐块翻译。
    **一旦开始回 2xx 流即不可换上游**(failover 窗口 = 首字节前)。
-4. 记账:cost = 命中 offer 单价 × token;流式以结束块权威计数;写 request_logs;`token.used_usd` 事务累加;
-   今天/曲线统计由日志实时 GROUP BY(个人规模不建 rollup 表)。
-5. `/v1/models` = enabled 且有启用 offer 的模型(anthropic/openai 双形状)。
+   出站 client 按 (proxy, skipTLS, 请求超时) 三元组缓存复用 Transport(连接池不再每请求重建);
+   该超时只作**响应头阶段**硬上限(`ResponseHeaderTimeout`),流式拿到响应头后交给看门狗。
+4. **流式超时口径**(见 §5.1)。
+5. 记账:cost = 命中 offer 单价 × token;流式以结束块权威计数(流被中断时用已嗅探到的部分 + 输入估算兜底);
+   写 request_logs;`token.used_usd` 事务累加;今天/曲线统计由日志实时 GROUP BY(个人规模不建 rollup 表)。
+6. `/v1/models` = enabled 且有启用 offer 的模型(anthropic/openai 双形状)。
+
+### 5.1 流式看门狗、断连与错误率口径
+
+流式成功(200)后整条流**不再设全局 ctx 超时**——实测有 169s 的长流,一刀切会误杀。受约束的只有两种故障形态,
+由 `stallGuard` 的两级看门狗分别盯住,任一触发即关掉底层连接并交回可归因的错误(而非裸的
+"use of closed network connection"):
+
+| 窗口 | 起点 / 重置 | 触发 |
+|---|---|---|
+| 首字节 `first` | 拿到响应头起算,**永不重置** | `errFirstByteTimeout` → 504,此时尚未向客户端写字节 |
+| 中途静默 `idle` | 每读到一块数据重置 | `errStreamIdle` → 504(客户端已收到 200,仅落账) |
+
+`first` = 本次候选超时;`idle = max(first, minStreamIdle=120s)`——流一旦开始再掐断无法换渠道,判定必须宽松,
+否则上游一次正常的长思考停顿就被记成故障。
+
+归因与落账:
+
+- **客户端断连**(`r.Context()` 取消):记 `499 StatusClientClosed`,**不写 err 字段**、不 `RecordFailure`、不熔断渠道。
+  上游请求同步取消,避免额度白烧。
+- **上游停滞**:504,err 文案区分首字节(`no data…`)与中途静默(`mid-stream…`)。
+- **部分 usage**:流被中断时上游往往还没下发 usage 末块。此时用已嗅探到的部分;若一个 token 都没观测到,
+  兜底填入输入侧估算(`EstimateOpenAIChatInput`),不整条丢账。
+
+**错误率口径**(SQL 常量 `store.errCond`):错误 = `(status >= 400 OR err IS NOT NULL) AND status <> 499`。
+「用户按 Esc」既非网关也非上游故障,计入会把交互行为变成渠道健康问题。日志列表按 ok / error / canceled(499)三桶互斥筛选。
 
 ### 关键坑位(实现时对照)
 - 管理端 PATCH 是**全量替换**(Update* 仓库方法会清零未传字段)。前端启停类操作用「先取全量快照再整包提交」
@@ -115,7 +143,10 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 成功率口径:后端 successRate 用 0..100 百分数;前端统一除 100 还原 0..1 再 `×100` 展示(api.ts `frac`)。
 - modernc.org/sqlite:`strftime` 返回 TEXT,与整型参数比较 `<=` 恒假 —— 一律 `CAST(... AS INTEGER)` 再比;
   聚合列包 `COALESCE(...,0)`(空窗口 SUM=NULL 会 Scan 报错)。
-- 客户端断连必须取消上游请求(`ctx` / `resp.Body.Close()`),否则额度白烧。
+- 客户端断连必须取消上游请求(`ctx` / `resp.Body.Close()`),否则额度白烧;并归因成 499 而非渠道失败(§5.1)。
+- 流式看门狗**不得在每次 Read 时重置首字节定时器**:那样「首字节窗口」会退化成「任意两次数据间隔」窗口,
+  把上游的正常停顿全记成 502(生产实测 18 条误报)。首字节只盯一次,中途停顿时长另用宽松的 idle 窗口。
+- 错误率统计一律走 `errCond`,勿再手写 `status >= 400`——否则 499 会污染渠道健康度。
 - SQLite WAL,个人读多写少足够;管理端写操作集中在事务内(额度扣减等)。
 
 ## 6. 管理 REST 契约(v2;会话鉴权)
@@ -161,6 +192,9 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 开发期:`cd web-v2 && npm run dev`(Vite :5178,`/api`、`/v1` 已代理到 :8787),改前端热更。
 - 冒烟路径:起网关(空库)→ 浏览器创建管理员 → 建渠道(指向假/真上游)+ 测试 → 同步或手工建模型 + offer 定价 →
   建令牌 → 用令牌打 `/v1/chat/completions`(或 `/v1/messages`)→ 刷新日志/用量/概览/渠道统计应实时变化。
+- **失败率排障**:日志页状态筛选有 ok / error / **中断**(499)。概览的失败率只统计 error,
+  「中断」占比高说明是客户端在取消(如 Claude Code 按 Esc),不指向渠道问题;按 err 文案可区分
+  首字节超时与 `mid-stream` 静默(§5.1)。
 
 ### 8.1 生产部署(Go 自终止 TLS 双口 + frp 隧道;无 Caddy)
 
