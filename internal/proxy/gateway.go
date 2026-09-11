@@ -6,6 +6,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -285,11 +286,10 @@ func (g *Gateway) forward(w http.ResponseWriter, r *http.Request, op, inProto st
 	}
 	plan.Attempts = attemptSequence(plan.Attempts, plan.Retry)
 
-	client := g.rl.Client(settings)
 	if in.stream {
-		g.forwardStream(w, r, in, plan, client, inProto)
+		g.forwardStream(w, r, in, plan, settings, inProto)
 	} else {
-		g.forwardOnceNonStream(w, r, in, plan, client, inProto, settings)
+		g.forwardOnceNonStream(w, r, in, plan, settings, inProto)
 	}
 }
 
@@ -317,7 +317,7 @@ func (g *Gateway) attemptEnv(at engine.Attempt) (domain.ChannelRow, bool) {
 
 // —— 非流 ——
 
-func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, client *http.Client, inProto string, settings domain.Settings) {
+func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, settings domain.Settings, inProto string) {
 	start := time.Now()
 	var firstErr *attemptResult // 兜底展示(保留首个错误)
 	for _, at := range plan.Attempts {
@@ -331,12 +331,17 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
 		}
+		client := g.rl.Client(settings, at.TimeoutMs)
 		res, err := g.rl.doNonStream(r.Context(), client, ob, ch, at.Offer, at.TimeoutMs)
 		if err != nil {
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
 			continue
 		}
 		if res.upErr != "" {
+			if clientGone(r.Context(), nil) {
+				g.logDisconnect(in, ch, at.Offer, time.Since(start).Milliseconds(), nil)
+				return
+			}
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
 			firstErr = res
 			continue
@@ -412,7 +417,7 @@ func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq,
 
 // —— 流式 ——
 
-func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, client *http.Client, inProto string) {
+func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, settings domain.Settings, inProto string) {
 	start := time.Now()
 	var firstErr *streamOutcome
 	for _, at := range plan.Attempts {
@@ -426,12 +431,18 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
 		}
+		client := g.rl.Client(settings, at.TimeoutMs)
 		res, err := g.rl.doStream(r.Context(), client, ob, ch, at.Offer, at.TimeoutMs)
 		if err != nil {
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
 			continue
 		}
 		if res.upErr != "" {
+			// 客户端自己走了(按 Esc / 断网):不是渠道故障,别熔断健康渠道。
+			if clientGone(r.Context(), nil) {
+				g.logDisconnect(in, ch, at.Offer, time.Since(start).Milliseconds(), nil)
+				return
+			}
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
 			firstErr = res
 			continue
@@ -448,32 +459,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 		}
 		// 200:开始向客户端回推;中途失败无法再换渠道。
 		g.eng.RecordSuccess(ch.ID, res.firstTTFB.Milliseconds())
-		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		var tok translate.Usage
-		var streamErr error
-		if inProto == outProto {
-			var u usage
-			u, streamErr = passthroughSSE(w, res.body, outProto)
-			tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead}
-		} else {
-			estIn := 0
-			if inProto == ProtoAnthropic {
-				estIn = translate.EstimateMessagesInput(in.body)
-			}
-			tok, streamErr = translate.ConvertStream(inProto, outProto, res.body, w, in.model, estIn)
-		}
-		res.body.Close()
-		total := time.Since(start).Milliseconds()
-		if streamErr != nil {
-			// 客户端/上游中断:无法补发,记一条错误日志不收费。
-			msg := "stream interrupted: " + streamErr.Error()
-			g.writeLog(in, ch, at.Offer, http.StatusBadGateway, tok, res.firstTTFB.Milliseconds(), total, &msg)
-			return
-		}
-		cost := costUsd(at.Offer, tok)
-		_ = g.st.ChargeToken(in.token.ID, cost)
-		g.writeLog(in, ch, at.Offer, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil)
+		g.streamFrom(w, r, in, res, ch, at.Offer, inProto, outProto, start)
 		return
 	}
 	total := time.Since(start).Milliseconds()
@@ -494,6 +480,115 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 		total, nil, upstreamMsg(firstErr.status, firstErr.errBody))
 }
 
+// streamFrom 已选定上游且响应头为 200:把 SSE 流转给客户端并记账。
+//
+// 流一旦开始就无法再换渠道,所以这里的重点是「记对账、归对因」:
+//   - 客户端断开(context canceled)→ 499 client_disconnect,不是渠道故障;
+//   - 上游停住(看门狗的 first-byte / idle 超时)→ 504 并说明停在哪一段;
+//   - 其余(上游协议错、翻译失败、真的被对方切断)→ 502。
+//
+// 中断时拿不到权威 usage,但上游已生成并计费了这部分 token,故用本地估算兜底落账
+// (只对已观测到的部分计费),否则网关账面上的成本会系统性偏低。
+func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inboundReq, res *streamOutcome, ch domain.ChannelRow, offer domain.OfferRead, inProto, outProto string, start time.Time) {
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	hw := &headWriter{ResponseWriter: w}
+
+	// 客户端一走就立刻掐掉上游:否则上游继续生成、继续计费,纯属白烧额度。
+	// (此前只在写回客户端失败时才发现断开,响应头间歇性错误无法及时归因。)
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go func() {
+		select {
+		case <-r.Context().Done():
+			_ = res.body.Close()
+		case <-stopWatch:
+		}
+	}()
+
+	var tok translate.Usage
+	var streamErr error
+	if inProto == outProto {
+		var u usage
+		u, streamErr = passthroughSSE(hw, res.body, outProto)
+		tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead}
+	} else {
+		estIn := 0
+		if inProto == ProtoAnthropic {
+			estIn = translate.EstimateMessagesInput(in.body)
+		}
+		tok, streamErr = translate.ConvertStream(inProto, outProto, res.body, hw, in.model, estIn)
+	}
+	_ = res.body.Close()
+	total := time.Since(start).Milliseconds()
+
+	if streamErr == nil {
+		cost := costUsd(offer, tok)
+		_ = g.st.ChargeToken(in.token.ID, cost)
+		g.writeLog(in, ch, offer, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil)
+		return
+	}
+
+	// 客户端侧断开优先判定:此时 ctx 已取消,底层错误裹的多半就是它。
+	if clientGone(r.Context(), streamErr) {
+		g.logDisconnect(in, ch, offer, total, &tok)
+		return
+	}
+	if tok.Prompt == 0 && tok.Completion == 0 && tok.CacheRead == 0 {
+		tok.Prompt = estInTokens(in)
+	}
+	status, msg := http.StatusBadGateway, "stream interrupted: "+streamErr.Error()
+	switch {
+	case errors.Is(streamErr, errFirstByteTimeout):
+		status, msg = http.StatusGatewayTimeout, "upstream returned 200 but sent no data within the first-byte window"
+	case errors.Is(streamErr, errStreamIdle):
+		status, msg = http.StatusGatewayTimeout, "upstream stalled mid-stream (no data for the idle window)"
+	}
+	// 还没向客户端写过任何字节 → 按失败语义回明确错误,别让客户端拿到空 200(会被当成「成功但无内容」)。
+	if !hw.wrote {
+		gateError(w, inProto, status, "api_error", msg)
+	}
+	g.writeLog(in, ch, offer, status, tok, res.firstTTFB.Milliseconds(), total, &msg)
+}
+
+// headWriter 记录「是否已向客户端写过字节」,用于判断中断能否补一个错误响应。
+// 保留 Flush 转发,翻译层依赖 http.Flusher 做流式推送。
+type headWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (h *headWriter) Write(p []byte) (int, error) {
+	h.wrote = true
+	return h.ResponseWriter.Write(p)
+}
+
+func (h *headWriter) Flush() {
+	if f, ok := h.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// estInTokens 入站请求的输入 token 本地估算(中断流无权威 usage 时的兜底)。
+func estInTokens(in *inboundReq) int {
+	if in.op == countOp {
+		return 0
+	}
+	if in.inProto == ProtoAnthropic {
+		return translate.EstimateMessagesInput(in.body)
+	}
+	return translate.EstimateOpenAIChatInput(in.body)
+}
+
+// clientGone 判断失败是否由客户端断开导致:请求 ctx 已取消,或错误链里含 context.Canceled
+// (也可能是本次尝试自身的超时 —— 那属于渠道问题,故用 ctx 是否已取消来区分)。
+func clientGone(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	return err != nil && errors.Is(err, context.Canceled)
+}
+
 // —— 计费与日志 ——
 
 // costUsd 按命中 offer 单价 × token(每百万)算成本。
@@ -505,7 +600,7 @@ func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 // writeLog 请求日志落库。ok=true 成功;errMsg 非空记录错误。
 func (g *Gateway) writeLog(in *inboundReq, ch domain.ChannelRow, offer domain.OfferRead, status int, tok translate.Usage, firstMs, totalMs int64, errMsg *string) {
 	var errField *string
-	if status >= 400 || errMsg != nil {
+	if logIsError(status) || errMsg != nil {
 		e := errMsg
 		if e == nil {
 			s := http.StatusText(status)
@@ -562,6 +657,38 @@ func (g *Gateway) logFailure(in *inboundReq, ch domain.ChannelRow, offer domain.
 		IP:           in.ip,
 		Err:          errField,
 	})
+}
+
+// logDisconnect 客户端主动断开(Claude Code 按 Esc / 关窗 / 网络掉):单列一条账,
+// 不写 err 字段、状态码用 499,让聚合口径把它排除在「错误率」之外 —— 它不是任何一方的故障。
+func (g *Gateway) logDisconnect(in *inboundReq, ch domain.ChannelRow, offer domain.OfferRead, totalMs int64, tok *translate.Usage) {
+	var t translate.Usage
+	if tok != nil {
+		t = *tok
+	}
+	_ = g.st.InsertLog(domain.LogRow{
+		TS:           g.nowFn().UTC(),
+		Model:        in.model,
+		ChannelID:    ch.ID,
+		ChannelName:  ch.Name,
+		TokenID:      in.token.ID,
+		TokenName:    in.token.Name,
+		ClientTool:   in.tool,
+		Protocol:     in.inProto,
+		Stream:       in.stream,
+		Status:       domain.StatusClientClosed,
+		PromptTokens: t.Prompt,
+		Completion:   t.Completion,
+		CacheRead:    t.CacheRead,
+		CostUsd:      costUsd(offer, t),
+		TotalMs:      int(totalMs),
+		IP:           in.ip,
+	})
+}
+
+// logIsError 一条日志是否算「错误」:客户端断开(499)不计入。
+func logIsError(status int) bool {
+	return status >= 400 && status != domain.StatusClientClosed
 }
 
 // upstreamMsg 从上游错误体抽一句人读信息(兼容 {"error":{message}} 两形状),无则状态文案。

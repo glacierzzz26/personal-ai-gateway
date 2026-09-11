@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,29 +27,76 @@ import (
 type Relay struct {
 	st  *store.Store
 	cfg relayConfig
+
+	cmu     sync.Mutex
+	clients map[clientKey]*http.Client // 出站 client 缓存(见 Client)
 }
 
 // relayConfig 出站全局参数(每次请求可由 settings 覆盖的部分在调用方)。
 type relayConfig struct {
 	DialTimeout time.Duration
+	// StreamIdleTimeout 流式中途静默窗口的下限(见 minStreamIdle);
+	// 独立成字段以便测试缩短窗口,生产恒为 minStreamIdle。
+	StreamIdleTimeout time.Duration
 }
 
 func NewRelay(st *store.Store) *Relay {
-	return &Relay{st: st, cfg: relayConfig{DialTimeout: 10 * time.Second}}
+	return &Relay{
+		st: st,
+		cfg: relayConfig{
+			DialTimeout:       10 * time.Second,
+			StreamIdleTimeout: minStreamIdle,
+		},
+		clients: map[clientKey]*http.Client{},
+	}
 }
 
-// Client 依据设置构造出站 HTTP client(代理/跳过 TLS)。
-func (r *Relay) Client(settings domain.Settings) *http.Client {
+// clientKey 出站 client 的复用键:同键共用一个 Transport(连接池)。
+type clientKey struct {
+	proxy      string
+	skipTLS    bool
+	headerWait time.Duration
+}
+
+// Client 依据设置构造出站 HTTP client(代理/跳过 TLS/响应头超时)。
+//
+// 同一组参数复用同一份 Transport:此前每请求新建 Transport,连接池随之丢弃,
+// 到上游的 TCP+TLS 握手每次重做,是常态延迟 3~10s 与长尾抖动的一大来源。
+// timeoutMs 为本次请求的候选超时,作为响应头阶段的硬上限(流式同样适用:
+// 拿到响应头后由 stallGuard 接管,整条长流不再受全局超时约束)。
+func (r *Relay) Client(settings domain.Settings, timeoutMs int) *http.Client {
+	if timeoutMs <= 0 {
+		timeoutMs = settings.RequestTimeoutMs
+	}
+	if timeoutMs <= 0 {
+		timeoutMs = defaultRequestTimeoutMs
+	}
+	k := clientKey{
+		proxy:      settings.HTTPProxy,
+		skipTLS:    settings.SkipTLSVerify,
+		headerWait: time.Duration(timeoutMs) * time.Millisecond,
+	}
+
+	r.cmu.Lock()
+	defer r.cmu.Unlock()
+	if c, ok := r.clients[k]; ok {
+		return c
+	}
 	t := &http.Transport{
-		DialContext:     (&net.Dialer{Timeout: r.cfg.DialTimeout}).DialContext,
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: settings.SkipTLSVerify},
+		DialContext:           (&net.Dialer{Timeout: r.cfg.DialTimeout}).DialContext,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: settings.SkipTLSVerify},
+		ResponseHeaderTimeout: k.headerWait,
+		MaxIdleConns:          64,
+		IdleConnTimeout:       90 * time.Second,
 	}
 	if settings.HTTPProxy != "" {
 		if u, err := url.Parse(settings.HTTPProxy); err == nil {
 			t.Proxy = http.ProxyURL(u)
 		}
 	}
-	return &http.Client{Transport: t}
+	c := &http.Client{Transport: t}
+	r.clients[k] = c
+	return c
 }
 
 // OutProto 由渠道 provider 定出站协议。
@@ -179,44 +227,106 @@ func (r *Relay) doNonStream(ctx context.Context, client *http.Client, req *outbo
 	return &attemptResult{channel: ch, offer: offer, status: resp.StatusCode, body: body, latencyMs: lat, ttfbMs: ttfb}, nil
 }
 
-// fbGuard 首字节看门狗:流若在 timeout 内一个字节都不到,则中止并报 timeout(换候选)。
-type fbGuard struct {
+// defaultRequestTimeoutMs settings 缺省值兜底(与 domain.Settings.Defaults 一致)。
+const defaultRequestTimeoutMs = 60000
+
+// 流式中断的两种可归因超时。看门狗触发时交回这两个(而不是底层的
+// "use of closed network connection"),上层才能区分「上游没吐字」与「客户端走了」。
+var (
+	errFirstByteTimeout = errors.New("upstream first byte timeout")
+	errStreamIdle       = errors.New("upstream stream idle timeout")
+)
+
+// minStreamIdle 中途静默窗口的下限。
+//
+// 首字节窗口可以等于请求超时(此时还没向客户端写任何字节,掐断等同一次普通超时);
+// 但流一旦开始,再掐断客户端只能拿到半截响应、且已无法换渠道,判定要宽松得多,
+// 否则上游一次正常的长思考停顿就被误判成故障(量级对齐常见反代的 read timeout)。
+const minStreamIdle = 120 * time.Second
+
+// stallGuard 给响应体加两级静默看门狗,任一触发即关掉底层连接并交回可归因的错误:
+//
+//	first  响应头已到但体一个字节都没来 —— 窗口从拿到响应头起算,只盯首字节,永不重置;
+//	idle   流已开始但中途长时间无数据 —— 每读到数据就重置。
+//
+// 与旧实现的区别:旧版在每次 Read 时都重新武装定时器,于是「首字节看门狗」实际退化成了
+// 「任意两次数据间隔超过 timeout 就掐断」,把上游的正常停顿记成了 502。
+type stallGuard struct {
 	r      io.Reader
 	closer io.Closer
-	d      time.Duration
-	mu     sync.Mutex
-	timer  *time.Timer
-	fired  bool
+	first  time.Duration // 首字节窗口(<=0 关闭)
+	idle   time.Duration // 中途静默窗口(<=0 关闭)
+
+	mu       sync.Mutex
+	gotFirst bool
+	timer    *time.Timer
+	fired    error
 }
 
-func (g *fbGuard) Close() error { return g.closer.Close() }
+// newStallGuard 立刻武装首字节看门狗(不等第一次 Read)。
+func newStallGuard(body io.ReadCloser, first, idle time.Duration) *stallGuard {
+	g := &stallGuard{r: body, closer: body, first: first, idle: idle}
+	if first > 0 {
+		g.timer = time.AfterFunc(first, func() { g.fire(errFirstByteTimeout) })
+	}
+	return g
+}
 
-func (g *fbGuard) Read(p []byte) (int, error) {
+// fire 记下触发原因并关掉底层连接(幂等;只有首个原因保留)。
+func (g *stallGuard) fire(reason error) {
 	g.mu.Lock()
-	if g.timer == nil && !g.fired {
-		g.timer = time.AfterFunc(g.d, func() {
-			g.mu.Lock()
-			g.fired = true
-			g.mu.Unlock()
-			_ = g.closer.Close()
-		})
+	if g.fired == nil {
+		g.fired = reason
 	}
 	g.mu.Unlock()
+	_ = g.closer.Close()
+}
+
+func (g *stallGuard) failure() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.fired
+}
+
+func (g *stallGuard) Read(p []byte) (int, error) {
 	n, err := g.r.Read(p)
 	if n > 0 {
 		g.mu.Lock()
-		if g.timer != nil {
-			g.timer.Stop()
-			g.timer = nil
+		if !g.gotFirst || g.idle > 0 {
+			g.gotFirst = true
+			if g.timer != nil {
+				g.timer.Stop()
+			}
+			if g.idle > 0 {
+				g.timer = time.AfterFunc(g.idle, func() { g.fire(errStreamIdle) })
+			} else {
+				g.timer = nil
+			}
 		}
 		g.mu.Unlock()
+	}
+	if err != nil {
+		if f := g.failure(); f != nil {
+			return n, f // 看门狗关的连接:换成可归因的错误
+		}
 	}
 	return n, err
 }
 
+func (g *stallGuard) Close() error {
+	g.mu.Lock()
+	if g.timer != nil {
+		g.timer.Stop()
+		g.timer = nil
+	}
+	g.mu.Unlock()
+	return g.closer.Close()
+}
+
 // doStream 单候选流式请求:返回 2xx 的响应流与失败信息。
 // 成功时 resp.Body 由调用方负责耗尽/关闭;失败返回非 2xx 的完整错误体。
-// 首个字节超过 ttfbMs 视为超时失败。
+// timeoutMs 为候选超时:作响应头阶段上限(client 的 ResponseHeaderTimeout),
+// 并作首字节窗口;拿到首字节后再按 minStreamIdle 宽松判定中途静默。
 type streamOutcome struct {
 	channel   domain.ChannelRow
 	offer     domain.OfferRead
@@ -227,7 +337,7 @@ type streamOutcome struct {
 	firstTTFB time.Duration
 }
 
-func (r *Relay) doStream(ctx context.Context, client *http.Client, req *outboundReq, ch domain.ChannelRow, offer domain.OfferRead, ttfbMs int) (*streamOutcome, error) {
+func (r *Relay) doStream(ctx context.Context, client *http.Client, req *outboundReq, ch domain.ChannelRow, offer domain.OfferRead, timeoutMs int) (*streamOutcome, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, req.URL, bytes.NewReader(req.Body))
 	if err != nil {
 		return nil, err
@@ -244,8 +354,17 @@ func (r *Relay) doStream(ctx context.Context, client *http.Client, req *outbound
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return &streamOutcome{channel: ch, offer: offer, status: resp.StatusCode, errBody: body, firstTTFB: ttfb}, nil
 	}
-	// 200:包首字节看门狗
-	resp.Body = &fbGuard{r: resp.Body, closer: resp.Body, d: time.Duration(ttfbMs) * time.Millisecond}
+	// 200:两级看门狗。整条流不再设 ctx 超时——长流(实测有 169s 的)会被误杀;
+	// 出问题的形态只有「上游不吐字」与「上游中途停住」两种,分别盯住即可。
+	first := time.Duration(timeoutMs) * time.Millisecond
+	if first <= 0 {
+		first = time.Duration(defaultRequestTimeoutMs) * time.Millisecond
+	}
+	idle := first
+	if floor := r.cfg.StreamIdleTimeout; idle < floor {
+		idle = floor
+	}
+	resp.Body = newStallGuard(resp.Body, first, idle)
 	return &streamOutcome{channel: ch, offer: offer, status: 200, body: resp.Body, firstTTFB: ttfb}, nil
 }
 

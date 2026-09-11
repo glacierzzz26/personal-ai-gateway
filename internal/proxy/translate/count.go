@@ -50,6 +50,15 @@ func estimateRequest(in *aMessagesRequest) int {
 	return int(math.Ceil(n))
 }
 
+// EstimateOpenAIChatInput 按 OpenAI /chat/completions 请求体估算输入 token(o2a 方向的中断兜底)。
+func EstimateOpenAIChatInput(body []byte) int {
+	var in oReq
+	if json.Unmarshal(body, &in) != nil {
+		return ceilTokens(string(body))
+	}
+	return o2aEstimate(&in)
+}
+
 // tokensOfText 启发式:ASCII 4 字符≈1 token,CJK 等每字≈1 token。
 func tokensOfText(s string) float64 {
 	n := 0.0

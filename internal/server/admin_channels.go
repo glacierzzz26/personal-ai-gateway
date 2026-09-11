@@ -94,7 +94,7 @@ func (s *Server) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	lat, err := s.rl.Probe(r.Context(), s.rl.Client(settings), ch)
+	lat, err := s.rl.Probe(r.Context(), s.rl.Client(settings, 0), ch)
 	resp := domain.TestResp{OK: err == nil, LatencyMs: lat}
 	if err != nil {
 		resp.Message = err.Error()
@@ -126,7 +126,7 @@ func (s *Server) handleChannelQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := domain.ChannelQuotaResp{Available: true, Windows: map[string]domain.QuotaWindow{}}
-	plan, windows, lat, err := s.rl.FetchChannelQuota(r.Context(), s.rl.Client(settings), ch)
+	plan, windows, lat, err := s.rl.FetchChannelQuota(r.Context(), s.rl.Client(settings, 0), ch)
 	resp.PlanName = plan
 	resp.LatencyMs = lat
 	if err != nil {
@@ -162,7 +162,7 @@ func (s *Server) handleChannelSyncModels(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	ids, _, err := s.rl.FetchModels(ctx, s.rl.Client(settings), ch)
+	ids, _, err := s.rl.FetchModels(ctx, s.rl.Client(settings, 0), ch)
 	if err != nil {
 		apiErr(w, http.StatusBadGateway, "upstream_error", "sync failed: "+err.Error())
 		return
