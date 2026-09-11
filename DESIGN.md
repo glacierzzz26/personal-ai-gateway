@@ -170,6 +170,17 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 **局限**:缓存是进程内内存,丢了就不回填——进程重启、超过 TTL、或网关没见过的历史(如切到别的网关),
 对应那一轮仍会 400。这是有意的取舍:宁可那一轮失败,也不猜上游要不要这个字段。
 
+**为什么是「时不时」而不是稳定复现**(2026-09-11 定位):拿到的 5 条 400,响应体里带着
+`providerMetadata.gateway.routing` / `AI_APICallError` / `canonicalSlug` —— 说明渠道背后是一个**聚合网关**
+(它自己还会重试:`providerAttemptCount=2`,第 1 次 429/502、第 2 次才报这个 400)。是否进入 thinking 模式
+取决于它这次把 `deepseek/deepseek-v4.1-flash` 落到哪个后端,**不由客户端决定**——所以无法按需复现。
+另外 a2o 请求侧本就**不转发 `thinking` 参数**(静默丢弃,与 `top_k`/`metadata` 同),客户端也左右不了它。
+这也反过来印证了「只在缓存命中时回填」是对的:上游给过才回填,与它这次是不是 thinking 后端天然对齐。
+
+> 复现只能靠测试而非线上:见 `TestE2EThinkingReasoningBackfill`(假上游稳定吐 reasoning)。把
+> `backfillReasoning` 里的注入注掉,该测试立刻红,失败现场就是线上那条——assistant 消息只剩 `tool_calls`、
+> 没有 `reasoning_content`。
+
 ### 关键坑位(实现时对照)
 - 管理端 PATCH 是**全量替换**(Update* 仓库方法会清零未传字段)。前端启停类操作用「先取全量快照再整包提交」
   (services/api.ts 的 toggle*/offerDraft 帮助器),勿发部分 body。
