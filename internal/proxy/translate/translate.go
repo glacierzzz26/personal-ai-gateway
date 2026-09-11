@@ -44,14 +44,16 @@ func Supported(inProto, outProto string) bool {
 //   - 返回改写的 outOp(anthropic messages → openai chat / openai chat → anthropic messages,
 //     供 outbound 取路径);
 //   - outBody 是重写的 JSON;estIn 是本地估算的输入 token(仅 a2o 的 message_start 展示用)。
+//   - look 为推理回填查找器(a2o 专用;o2a 方向忽略,可传 nil):命中则给 assistant 消息
+//     补回 reasoning_content。传 nil 即完全不回填(行为同回填上线前)。
 //   - 返回的错误是「入站体无法翻译」→ 上层按客户端 400 处理,不回退。
-func BuildRequest(inProto, outProto, op string, body []byte, stream bool) (outOp string, outBody []byte, estIn int, err error) {
+func BuildRequest(inProto, outProto, op string, body []byte, stream bool, look ReasoningLookup) (outOp string, outBody []byte, estIn int, err error) {
 	switch {
 	case inProto == ProtoAnthropic && outProto == ProtoOpenAI:
 		if op != OpMessages {
 			return "", nil, 0, fmt.Errorf("translate: op %q has no a2o outbound (only messages)", op)
 		}
-		return buildA2ORequest(body, stream)
+		return buildA2ORequest(body, stream, look)
 	case inProto == ProtoOpenAI && outProto == ProtoAnthropic:
 		if op != OpChat {
 			return "", nil, 0, fmt.Errorf("translate: op %q has no o2a outbound (only chat)", op)
@@ -62,26 +64,30 @@ func BuildRequest(inProto, outProto, op string, body []byte, stream bool) (outOp
 }
 
 // ConvertNonStream 把整段上游非流响应转成入站协议响应。
-func ConvertNonStream(inProto, outProto string, raw []byte) (outBody []byte, tok Usage, err error) {
+// 第三个返回值是本轮可回填的推理/工具调用信息(见 Capture;o2a 恒为零值)。
+func ConvertNonStream(inProto, outProto string, raw []byte) (outBody []byte, tok Usage, cap Capture, err error) {
 	switch {
 	case inProto == ProtoAnthropic && outProto == ProtoOpenAI:
 		return convertA2ONonStream(raw)
 	case inProto == ProtoOpenAI && outProto == ProtoAnthropic:
-		return convertO2ANonStream(raw)
+		outBody, tok, err = convertO2ANonStream(raw)
+		return outBody, tok, Capture{}, err
 	}
-	return nil, Usage{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
+	return nil, Usage{}, Capture{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
 }
 
 // ConvertStream 把上游 SSE 流边读边转成入站协议 SSE 事件流,直接写到 w。
 // model/estIn 来自入站解析(同协议 fast path 不经过这里)。
-func ConvertStream(inProto, outProto string, src io.Reader, w http.ResponseWriter, model string, estIn int) (Usage, error) {
+// 第二个返回值是本轮可回填的推理/工具调用信息(见 Capture;o2a 恒为零值)。
+func ConvertStream(inProto, outProto string, src io.Reader, w http.ResponseWriter, model string, estIn int) (Usage, Capture, error) {
 	switch {
 	case inProto == ProtoAnthropic && outProto == ProtoOpenAI:
 		return convertA2OStream(src, w, model, estIn)
 	case inProto == ProtoOpenAI && outProto == ProtoAnthropic:
-		return convertO2AStream(src, w, model)
+		u, err := convertO2AStream(src, w, model)
+		return u, Capture{}, err
 	}
-	return Usage{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
+	return Usage{}, Capture{}, fmt.Errorf("translate: unsupported %s→%s", inProto, outProto)
 }
 
 // A2OError 把上游非 2xx 错误体分类成入站(anthropic)协议的错误 type+message。

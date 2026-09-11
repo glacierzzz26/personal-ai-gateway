@@ -15,7 +15,10 @@ import (
 //   - message_start 恒最先;message_stop 恰一次收尾;
 //   - 所有 content_block_stop 先于 message_delta;
 //   - message_delta.usage.output_tokens 用真实 completion 而非 0。
-func convertA2OStream(src io.Reader, w http.ResponseWriter, model string, estIn int) (Usage, error) {
+//
+// reasoning_content 不转成任何客户端事件(anthropic 无此字段,响应形状不变),
+// 只累进 Capture 供下一轮回填(见 reasoning.go)。
+func convertA2OStream(src io.Reader, w http.ResponseWriter, model string, estIn int) (Usage, Capture, error) {
 	st := &a2oStream{
 		w:       w,
 		model:   model,
@@ -25,7 +28,7 @@ func convertA2OStream(src io.Reader, w http.ResponseWriter, model string, estIn 
 		toolID:  map[int]string{},
 	}
 	if err := st.emitMessageStart(); err != nil {
-		return Usage{}, err
+		return Usage{}, Capture{}, err
 	}
 
 	br := bufio.NewReaderSize(src, 32<<10)
@@ -40,7 +43,7 @@ func convertA2OStream(src io.Reader, w http.ResponseWriter, model string, estIn 
 		case line == "":
 			if data.Len() > 0 {
 				if ferr := st.feed(data.String()); ferr != nil {
-					return st.usage, ferr
+					return st.usage, st.capture(), ferr
 				}
 				data.Reset()
 			}
@@ -48,14 +51,14 @@ func convertA2OStream(src io.Reader, w http.ResponseWriter, model string, estIn 
 		if err == io.EOF {
 			if data.Len() > 0 { // 上游没发空行就 EOF:把残余事件喂完
 				if ferr := st.feed(data.String()); ferr != nil {
-					return st.usage, ferr
+					return st.usage, st.capture(), ferr
 				}
 			}
 			st.finish()
-			return st.usage, nil
+			return st.usage, st.capture(), nil
 		}
 		if err != nil {
-			return st.usage, err
+			return st.usage, st.capture(), err
 		}
 	}
 }
@@ -72,10 +75,24 @@ type a2oStream struct {
 	toolID    map[int]string
 	toolOrder []int // openai tool_call index 首见顺序(finalize 按块序关)
 
+	reasoning strings.Builder // 上游 reasoning_content 累积(不回客户端,只供回填)
+	text      strings.Builder // 上游文本累积(供回填的文本键兜底)
+
 	stopReason string
 	gotUsage   bool
 	usage      Usage
 	finished   bool
+}
+
+// capture 汇总本轮可回填的内容;reasoning 为空表示该上游没在用这个字段。
+func (s *a2oStream) capture() Capture {
+	c := Capture{Reasoning: s.reasoning.String(), Text: s.text.String()}
+	for _, idx := range s.toolOrder {
+		if id := s.toolID[idx]; id != "" {
+			c.ToolUseIDs = append(c.ToolUseIDs, id)
+		}
+	}
+	return c
 }
 
 func (s *a2oStream) emit(event string, payload any) error {
@@ -137,6 +154,9 @@ func (s *a2oStream) feed(payload string) error {
 		if ch.FinishReason != "" {
 			s.stopReason = mapFinishReason(ch.FinishReason) // 按住,收尾时再用
 		}
+		if ch.Delta.ReasoningContent != "" {
+			s.reasoning.WriteString(ch.Delta.ReasoningContent) // 只累积,不 emit
+		}
 		if ch.Delta.Content != "" {
 			if err := s.textDelta(ch.Delta.Content); err != nil {
 				return err
@@ -152,6 +172,7 @@ func (s *a2oStream) feed(payload string) error {
 }
 
 func (s *a2oStream) textDelta(text string) error {
+	s.text.WriteString(text)
 	if !s.openText {
 		idx := s.nextBlk
 		if err := s.emit("content_block_start", map[string]any{

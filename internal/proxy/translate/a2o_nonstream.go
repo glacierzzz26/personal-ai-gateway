@@ -7,10 +7,11 @@ import (
 )
 
 // convertA2ONonStream 把 openai chat.completion 整包响应转成 anthropic message 响应 JSON。
-func convertA2ONonStream(raw []byte) (outBody []byte, tok Usage, err error) {
+// reasoning_content 不进响应体(anthropic 无此字段,客户端形状不变),只装进 Capture 供回填。
+func convertA2ONonStream(raw []byte) (outBody []byte, tok Usage, cap Capture, err error) {
 	var o oChatCompletion
 	if err := json.Unmarshal(raw, &o); err != nil {
-		return nil, Usage{}, fmt.Errorf("translate a2o: invalid openai response: %w", err)
+		return nil, Usage{}, Capture{}, fmt.Errorf("translate a2o: invalid openai response: %w", err)
 	}
 
 	content := []anthropicContentBlock{}
@@ -18,13 +19,17 @@ func convertA2ONonStream(raw []byte) (outBody []byte, tok Usage, err error) {
 	if len(o.Choices) > 0 {
 		c := o.Choices[0]
 		finish = c.FinishReason
+		cap.Reasoning = c.Message.ReasoningContent
+		cap.Text = c.Message.Content
 		if c.Message.Content != "" {
 			content = append(content, anthropicContentBlock{Type: "text", Text: c.Message.Content})
 		}
 		for _, tc := range c.Message.ToolCalls {
+			aid := OpenAItoAnthropicToolID(tc.ID)
+			cap.ToolUseIDs = append(cap.ToolUseIDs, aid)
 			content = append(content, anthropicContentBlock{
 				Type:  "tool_use",
-				ID:    OpenAItoAnthropicToolID(tc.ID),
+				ID:    aid,
 				Name:  tc.Function.Name,
 				Input: toolInput(tc.Function.Arguments),
 			})
@@ -53,9 +58,9 @@ func convertA2ONonStream(raw []byte) (outBody []byte, tok Usage, err error) {
 	}
 	outBody, err = json.Marshal(out)
 	if err != nil {
-		return nil, Usage{}, fmt.Errorf("translate a2o: marshal anthropic response: %w", err)
+		return nil, Usage{}, Capture{}, fmt.Errorf("translate a2o: marshal anthropic response: %w", err)
 	}
-	return outBody, Usage{Prompt: in, Completion: u.CompletionTokens, CacheRead: u.Details.CachedTokens}, nil
+	return outBody, Usage{Prompt: in, Completion: u.CompletionTokens, CacheRead: u.Details.CachedTokens}, cap, nil
 }
 
 // —— anthropic message 响应侧结构 ——

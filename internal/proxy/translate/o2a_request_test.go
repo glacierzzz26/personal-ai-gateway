@@ -20,7 +20,7 @@ func TestBuildO2ARequestToolsShape(t *testing.T) {
 			}
 		}]
 	}`
-	op, out, _, err := BuildRequest(ProtoOpenAI, ProtoAnthropic, OpChat, []byte(body), false)
+	op, out, _, err := BuildRequest(ProtoOpenAI, ProtoAnthropic, OpChat, []byte(body), false, nil)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestBuildO2ARequestToolChoiceNamed(t *testing.T) {
 		"tools": [{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{}}}}],
 		"tool_choice": {"type": "function", "function": {"name": "get_weather"}}
 	}`
-	_, out, _, err := BuildRequest(ProtoOpenAI, ProtoAnthropic, OpChat, []byte(body), false)
+	_, out, _, err := BuildRequest(ProtoOpenAI, ProtoAnthropic, OpChat, []byte(body), false, nil)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}

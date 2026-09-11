@@ -20,7 +20,7 @@ func TestO2AUsageCacheExcludedFromPrompt(t *testing.T) {
 		"content": [{"type": "text", "text": "hi"}],
 		"usage": {"input_tokens": 100, "output_tokens": 50, "cache_creation_input_tokens": 10, "cache_read_input_tokens": 900}
 	}`
-	out, tok, err := ConvertNonStream(ProtoOpenAI, ProtoAnthropic, []byte(raw))
+	out, tok, _, err := ConvertNonStream(ProtoOpenAI, ProtoAnthropic, []byte(raw))
 	if err != nil {
 		t.Fatalf("ConvertNonStream: %v", err)
 	}

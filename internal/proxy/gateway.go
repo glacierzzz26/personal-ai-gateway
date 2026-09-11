@@ -30,12 +30,17 @@ type Gateway struct {
 	rl  *Relay
 	log *slog.Logger
 
-	rpm   sync.Map // tokenID → *rpmWindow
-	nowFn func() time.Time
+	rpm    sync.Map // tokenID → *rpmWindow
+	reason *reasonCache
+	nowFn  func() time.Time
 }
 
 func NewGateway(st *store.Store, eng *engine.Engine, rl *Relay) *Gateway {
-	return &Gateway{st: st, eng: eng, rl: rl, log: slog.Default(), nowFn: time.Now}
+	return &Gateway{
+		st: st, eng: eng, rl: rl, log: slog.Default(),
+		reason: newReasonCache(reasonCacheTTL, reasonCacheMax),
+		nowFn:  time.Now,
+	}
 }
 
 // handler 方法
@@ -326,7 +331,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			continue
 		}
 		outProto := OutProto(ch.Provider)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false)
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -370,7 +375,8 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead}
 		} else {
 			var convErr error
-			outBody, tok, convErr = translate.ConvertNonStream(inProto, outProto, res.body)
+			var cap translate.Capture
+			outBody, tok, cap, convErr = translate.ConvertNonStream(inProto, outProto, res.body)
 			if convErr != nil {
 				// 网关自身的跨协议翻译失败(上游响应形状意外):不是渠道故障,不计入渠道健康/熔断
 				// (否则一个翻译 bug 会把健康渠道打成 down)。记为首个错误供全败兜底,
@@ -381,6 +387,8 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 				}
 				continue
 			}
+			// 只在成功且翻译通过时记,供下一轮 a2o 回填 reasoning_content。
+			g.reason.Put(in.token.ID, cap)
 		}
 		g.finish(w, r, in, res.latencyMs, res.status, outBody, ch, at.Offer, tok, start)
 		return
@@ -426,7 +434,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 			continue
 		}
 		outProto := OutProto(ch.Provider)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true)
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -507,6 +515,7 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 	}()
 
 	var tok translate.Usage
+	var cap translate.Capture
 	var streamErr error
 	if inProto == outProto {
 		var u usage
@@ -517,7 +526,7 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 		if inProto == ProtoAnthropic {
 			estIn = translate.EstimateMessagesInput(in.body)
 		}
-		tok, streamErr = translate.ConvertStream(inProto, outProto, res.body, hw, in.model, estIn)
+		tok, cap, streamErr = translate.ConvertStream(inProto, outProto, res.body, hw, in.model, estIn)
 	}
 	_ = res.body.Close()
 	total := time.Since(start).Milliseconds()
@@ -525,6 +534,7 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 	if streamErr == nil {
 		cost := costUsd(offer, tok)
 		_ = g.st.ChargeToken(in.token.ID, cost)
+		g.reason.Put(in.token.ID, cap) // 只在流正常收尾时记,半截流出错不污染下一轮
 		g.writeLog(in, ch, offer, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil)
 		return
 	}

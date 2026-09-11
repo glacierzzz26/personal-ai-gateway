@@ -2,6 +2,7 @@ package translate
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func TestConvertNonStreamTextAndUsage(t *testing.T) {
 		"choices": [{"message": {"role": "assistant", "content": "你好"}, "finish_reason": "stop"}],
 		"usage": {"prompt_tokens": 20, "completion_tokens": 7, "prompt_tokens_details": {"cached_tokens": 5}}
 	}`
-	out, tok, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
+	out, tok, _, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
 	if err != nil {
 		t.Fatalf("ConvertNonStream: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestConvertNonStreamToolUse(t *testing.T) {
 			"finish_reason": "tool_calls"}],
 		"usage": {"prompt_tokens": 10, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 0}}
 	}`
-	out, _, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
+	out, _, _, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
 	if err != nil {
 		t.Fatalf("ConvertNonStream: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestConvertNonStreamBadArgumentsFallsBackToRaw(t *testing.T) {
 			"finish_reason": "tool_calls"}],
 		"usage": {"prompt_tokens": 1, "completion_tokens": 1}
 	}`
-	out, _, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
+	out, _, _, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
 	if err != nil {
 		t.Fatalf("ConvertNonStream: %v", err)
 	}
@@ -136,20 +137,31 @@ func TestConvertNonStreamBadArgumentsFallsBackToRaw(t *testing.T) {
 	}
 }
 
-func TestConvertNonStreamReasoningContentDropped(t *testing.T) {
-	// DeepSeek-reasoner 的 reasoning_content 不进 anthropic body(客户端只见最终 content)
+func TestConvertNonStreamReasoningCapturedNotLeaked(t *testing.T) {
+	// DeepSeek-reasoner 的 reasoning_content 不进 anthropic body(客户端只见最终 content),
+	// 但要被 Capture 记下来供下一轮回填(否则 thinking 模式多轮必 400)。
 	raw := `{
 		"model": "deepseek-reasoner",
 		"choices": [{"message": {"role": "assistant",
 			"content": "答案是 4", "reasoning_content": "思考过程……"}, "finish_reason": "stop"}],
 		"usage": {"prompt_tokens": 3, "completion_tokens": 2}
 	}`
-	out, _, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
+	out, _, cap, err := ConvertNonStream(ProtoAnthropic, ProtoOpenAI, []byte(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if cap.Reasoning != "思考过程……" {
+		t.Fatalf("capture.reasoning = %q, want 思考过程……", cap.Reasoning)
+	}
+	if cap.Text != "答案是 4" {
+		t.Fatalf("capture.text = %q", cap.Text)
+	}
 	if !json.Valid(out) {
 		t.Fatalf("out not valid json")
+	}
+	// 响应体里绝不能出现 reasoning(客户端形状不变)
+	if strings.Contains(string(out), "reasoning") {
+		t.Fatalf("reasoning leaked into anthropic response: %s", out)
 	}
 	// 不要有 reasoning 字段泄漏;content 只有 text 块
 	var m map[string]any

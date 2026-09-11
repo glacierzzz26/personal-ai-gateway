@@ -15,7 +15,7 @@ func TestBuildRequestSystemArrayToSystemMessage(t *testing.T) {
 		"max_tokens": 64,
 		"messages": [{"role": "user", "content": "你好"}]
 	}`
-	outOp, out, estIn, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false)
+	outOp, out, estIn, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, nil)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestBuildRequestSystemArrayToSystemMessage(t *testing.T) {
 
 func TestBuildRequestStreamSetsIncludeUsage(t *testing.T) {
 	body := `{"model": "glm-4-flash", "messages": [{"role": "user", "content": "hi"}]}`
-	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), true)
+	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), true, nil)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestBuildRequestToolUseToToolCalls(t *testing.T) {
 			]}
 		]
 	}`
-	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false)
+	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, nil)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestBuildRequestToolResultFollowedByResidualText(t *testing.T) {
 			{"type": "text", "text": "那它的平方呢"}
 		]}]
 	}`
-	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false)
+	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, nil)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestBuildRequestTopKAndThinkingDropped(t *testing.T) {
 		"metadata": {"user_id": "x"},
 		"messages": [{"role": "user", "content": "hi"}]
 	}`
-	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false)
+	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, nil)
 	if err != nil {
 		t.Fatalf("BuildRequest: %v", err)
 	}
@@ -286,6 +286,103 @@ func TestSupportedMatrix(t *testing.T) {
 	} {
 		if Supported(p[0], p[1]) {
 			t.Errorf("Supported(%s→%s) should be false", p[0], p[1])
+		}
+	}
+}
+
+// fakeLookup 记录被查询的键并回固定 reasoning。
+type fakeLookup struct {
+	reasoning string
+	gotIDs    []string
+	gotText   string
+	calls     int
+}
+
+func (f *fakeLookup) Lookup(toolUseIDs []string, text string) string {
+	f.calls++
+	f.gotIDs = toolUseIDs
+	f.gotText = text
+	return f.reasoning
+}
+
+// TestBuildRequestBackfillsReasoning 命中缓存时给 assistant 消息补回 reasoning_content。
+// 这是 thinking 模式多轮不再 400 的关键:客户端(anthropic)根本回传不了这个字段。
+func TestBuildRequestBackfillsReasoning(t *testing.T) {
+	encID := OpenAItoAnthropicToolID("call_abc")
+	body := `{
+		"model": "deepseek/deepseek-v4.1-flash",
+		"max_tokens": 128,
+		"messages": [
+			{"role": "user", "content": "北京天气如何?"},
+			{"role": "assistant", "content": [
+				{"type": "text", "text": "我来查"},
+				{"type": "tool_use", "id": "` + encID + `", "name": "get_weather", "input": {"city": "北京"}}
+			]},
+			{"role": "user", "content": [
+				{"type": "tool_result", "tool_use_id": "` + encID + `", "content": "晴,25 度"}
+			]}
+		]
+	}`
+	look := &fakeLookup{reasoning: "先调用天气工具"}
+	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, look)
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	// 查询用的应是 anthropic 侧(编码后)的 tool_use id 与文本
+	if len(look.gotIDs) != 1 || look.gotIDs[0] != encID {
+		t.Errorf("lookup ids = %v, want [%s]", look.gotIDs, encID)
+	}
+	if look.gotText != "我来查" {
+		t.Errorf("lookup text = %q, want 我来查", look.gotText)
+	}
+
+	var got struct {
+		Messages []struct {
+			Role             string `json:"role"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []any  `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	var asst *struct {
+		Role             string `json:"role"`
+		ReasoningContent string `json:"reasoning_content"`
+		ToolCalls        []any  `json:"tool_calls"`
+	}
+	for i := range got.Messages {
+		if got.Messages[i].Role == "assistant" {
+			asst = &got.Messages[i]
+		}
+	}
+	if asst == nil {
+		t.Fatalf("no assistant message in %s", out)
+	}
+	if asst.ReasoningContent != "先调用天气工具" {
+		t.Fatalf("reasoning_content = %q, want 先调用天气工具", asst.ReasoningContent)
+	}
+}
+
+// TestBuildRequestNoBackfillWhenMiss 未命中(或 look 为 nil)时不注入字段,
+// 以免把 reasoning_content 塞给不认识它的上游(OpenAI 官方/Azure)。
+func TestBuildRequestNoBackfillWhenMiss(t *testing.T) {
+	encID := OpenAItoAnthropicToolID("call_x")
+	body := `{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "assistant", "content": [
+				{"type": "tool_use", "id": "` + encID + `", "name": "f", "input": {}}
+			]}
+		]
+	}`
+	for _, look := range []ReasoningLookup{nil, &fakeLookup{reasoning: ""}} {
+		_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, look)
+		if err != nil {
+			t.Fatalf("BuildRequest: %v", err)
+		}
+		if strings.Contains(string(out), "reasoning_content") {
+			t.Fatalf("reasoning_content injected on miss: %s", out)
 		}
 	}
 }

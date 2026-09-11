@@ -130,7 +130,8 @@ type outboundReq struct {
 }
 
 // buildOutbound 依据入站协议/操作与候选渠道拼出站请求。
-func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool) (*outboundReq, error) {
+// look 供 a2o 回填上一轮的 reasoning_content(同协议透传与 o2a 不使用,可传 nil)。
+func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool, look translate.ReasoningLookup) (*outboundReq, error) {
 	key, err := secret.Decrypt(ch.APIKeyCipher)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt channel key: %w", err)
@@ -140,7 +141,7 @@ func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []by
 	if inProto == outProto {
 		req.Body = body // 同协议 fast path:原样透传
 	} else {
-		outOp, outBody, _, err := translate.BuildRequest(inProto, outProto, op, body, stream)
+		outOp, outBody, _, err := translate.BuildRequest(inProto, outProto, op, body, stream, look)
 		if err != nil {
 			return nil, err
 		}

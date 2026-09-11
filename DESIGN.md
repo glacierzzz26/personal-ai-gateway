@@ -126,6 +126,17 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 `first` = 本次候选超时;`idle = max(first, minStreamIdle=120s)`——流一旦开始再掐断无法换渠道,判定必须宽松,
 否则上游一次正常的长思考停顿就被记成故障。
 
+**候选超时怎么来的**(`engine.BuildPlan`):默认取 settings 的 `request_timeout_ms`;命中路由规则则取 `rule.timeout_ms`;
+再逐候选用 `offer.timeout_ms`(非空且 >0)覆盖。**渠道的 `timeout_ms` 不参与这个取值**——它只在规则策略里当排序
+权重用(见 §5 第 2 条),不要指望在渠道上填超时能约束请求。
+
+> ⚠️ **这个值必须显著小于客户端自己的耐心**,否则故障会以「客户端先跑」的形态出现,而不是可归因的 504:
+> 线上把 `request_timeout_ms` 设成了 **360000(6 分钟)**,于是首字节窗口也是 6 分钟,而 Claude Code 自身约
+> **2 分钟**就放弃并报 "check your network"。实测 2 条 499(`total_ms` ≈ 110~118s、`first_token_ms=0`):
+> 客户端断开时网关还在首字节窗口内,于是**既没 504、也没触发 failover**(换上游的窗口 = 首字节之前),
+> 白白放过了一次换渠道的机会。把 `request_timeout_ms` 收到 **90000**(或 60000)即可:首字节窗口先于客户端到期,
+> 网关先回可重试的 504 并换到下一个候选;中途静默仍有 120s 下限兜底,不会误杀正常长流。
+
 归因与落账:
 
 - **客户端断连**(`r.Context()` 取消):记 `499 StatusClientClosed`,**不写 err 字段**、不 `RecordFailure`、不熔断渠道。
@@ -137,6 +148,28 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 **错误率口径**(SQL 常量 `store.errCond`):错误 = `(status >= 400 OR err IS NOT NULL) AND status <> 499`。
 「用户按 Esc」既非网关也非上游故障,计入会把交互行为变成渠道健康问题。日志列表按 ok / error / canceled(499)三桶互斥筛选。
 
+### 5.2 a2o 推理回填(thinking 模式多轮不再 400)
+
+**问题**:Anthropic 协议没有 `reasoning_content` 这个字段,而 DeepSeek 的 thinking 模式要求**多轮工具循环时把上一轮的
+`reasoning_content` 原样带回**,否则第 2 轮直接 400
+(`The reasoning_content in the thinking mode must be passed back to the API.`)。
+同协议(openai→openai)逐字节透传不受影响,故障只在 **a2o 跨协议**路径:客户端(Claude Code)根本无从回传这个字段。
+
+**方案:网关侧缓存回填**,对客户端完全透明——响应的形状一个字节都不变(reasoning **绝不**发成 anthropic 事件)。
+
+- 响应侧把上游的 `reasoning_content`(非流整段 / 流式逐块累加)**捕获**下来(`translate.Capture`),流式只进缓冲区不 emit;
+- 下一轮重建 assistant 历史时按需**回填**(`translate.ReasoningLookup`),于是上游看到的是完整的多轮上下文。
+
+键(同一 entry 两把,均带 **token id** 前缀,避免跨用户串味):
+`t|<tokenID>|<anthropic 侧 tool_use id>`(主键,精确;id 是本网关 mint 的 `toolu_gw_<b64>`,与 `AnthropicToOpenAIToolID` 互逆)
+与 `x|<tokenID>|<sha256(assistant 文本)[:16]>`(兜底,覆盖无 tool_use 的纯文本轮)。TTL 30min、上限 1024 条,超限丢最旧。
+
+**关键设计点——只在命中缓存时才回填**。命中本身就证明「这个上游确实在用 `reasoning_content`」,
+所以不需要 provider 白名单,也不会把该字段塞给不认识它的上游(OpenAI 官方 / Azure)。
+
+**局限**:缓存是进程内内存,丢了就不回填——进程重启、超过 TTL、或网关没见过的历史(如切到别的网关),
+对应那一轮仍会 400。这是有意的取舍:宁可那一轮失败,也不猜上游要不要这个字段。
+
 ### 关键坑位(实现时对照)
 - 管理端 PATCH 是**全量替换**(Update* 仓库方法会清零未传字段)。前端启停类操作用「先取全量快照再整包提交」
   (services/api.ts 的 toggle*/offerDraft 帮助器),勿发部分 body。
@@ -147,6 +180,10 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 流式看门狗**不得在每次 Read 时重置首字节定时器**:那样「首字节窗口」会退化成「任意两次数据间隔」窗口,
   把上游的正常停顿全记成 502(生产实测 18 条误报)。首字节只盯一次,中途停顿时长另用宽松的 idle 窗口。
 - 错误率统计一律走 `errCond`,勿再手写 `status >= 400`——否则 499 会污染渠道健康度。
+- 首字节窗口 / `ResponseHeaderTimeout` 取自候选超时,**渠道上填的 `timeout_ms` 不参与**(§5.1)。要让上游慢时能
+  及时 504 并 failover,得调 settings 的 `request_timeout_ms`;别在两处各填一个值然后奇怪哪个生效。
+- a2o 回填的 `reasoning_content` **只在缓存命中时注入**(§5.2)。改动谓词时务必保留这个前提,
+  否则会把该字段塞给不认识它的上游(OpenAI 官方/Azure)而新增 400。
 - SQLite WAL,个人读多写少足够;管理端写操作集中在事务内(额度扣减等)。
 
 ## 6. 管理 REST 契约(v2;会话鉴权)

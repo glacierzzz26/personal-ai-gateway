@@ -19,7 +19,7 @@ func runStream(t *testing.T, chunks ...string) ([]sseEvent, Usage) {
 	src.WriteString("data: [DONE]\n\n")
 
 	rec := httptest.NewRecorder()
-	u, err := convertA2OStream(strings.NewReader(src.String()), rec, "deepseek-chat", 7)
+	u, _, err := convertA2OStream(strings.NewReader(src.String()), rec, "deepseek-chat", 7)
 	if err != nil {
 		t.Fatalf("convertA2OStream: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestStreamNoDONEStillFinalizes(t *testing.T) {
 	var src strings.Builder
 	src.WriteString("data: " + `{"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}` + "\n\n")
 	rec := httptest.NewRecorder()
-	u, err := convertA2OStream(strings.NewReader(src.String()), rec, "m", 1)
+	u, _, err := convertA2OStream(strings.NewReader(src.String()), rec, "m", 1)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
