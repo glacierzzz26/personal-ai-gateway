@@ -1,14 +1,14 @@
-# 生产网关镜像:纯组装、不编译(构建产物由 deploy.sh 本地交叉编译后放入 build context)。
-# 服务器上 docker build 只 COPY + apk,契合 1.6G 内存的小鸡。
-#
-# 基镜像按 digest 固定:云主机 Docker Hub 直连不通,且 aliyun mirror 无 alpine:3.20 标签;
-# 此 digest = 服务器本地已缓存的 alpine:latest(docker pull 验证过)。升级基镜像:
-#   服务器上 docker pull alpine:latest → docker image inspect alpine:latest --format '{{index .RepoDigests 0}}' → 替换下方 digest。
-FROM alpine@sha256:21a3deaa0d32a8057914f36584b5288d2e5ecc984380bc0118285c70fa8c9300
+# 生产网关镜像:纯组装、不编译(构建产物由 build.sh 本地交叉编译后放入 build context)。
+# 基镜像按 digest 固定(可复现);此 digest = 构建机本地 alpine:3.20,镜像随 docker save 推到目标主机,
+# 目标主机无需访问 Docker Hub。升级基镜像:
+#   docker pull alpine:3.20 → docker image inspect alpine:3.20 --format '{{index .RepoDigests 0}}' → 替换下方 digest。
+FROM alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 RUN apk add --no-cache ca-certificates   # 出站 TLS(opencode 等上游)需系统根证书
+ARG VERSION=dev
+LABEL org.opencontainers.image.version=$VERSION
 COPY gateway-bin /usr/local/bin/gateway
 COPY config.yaml /app/config.yaml
 COPY web-v2/dist /app/web-v2/dist
 WORKDIR /app
-EXPOSE 8787
+EXPOSE 8787 17080 17090
 CMD ["gateway", "-config", "/app/config.yaml"]

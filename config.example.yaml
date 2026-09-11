@@ -1,11 +1,23 @@
 # personal-ai-gateway v2 配置示例。
-# config.yaml 只承载网关自身 listen/db_path;业务数据(账号/渠道/模型/规则/令牌)全部存 DB。
+# config.yaml 只承载网关自身参数(listen/db_path/tls);业务数据(账号/渠道/模型/规则/令牌)全部存 DB。
 
-listen: ":8787"
+listen: ":8787"          # 明文合并面(dev/测试/容器 healthcheck);生产不对外发布此端口
 
 # v2 换新库文件(默认 gateway-v2.db)。旧 gateway.db(v1 表)原样留档,不做迁移;
 # 想跑 v2 请把旧文件挪走或直接让默认值指向新库,勿让 v1/v2 混用同一文件。
 db_path: "gateway-v2.db"
+
+# 生产:Go 网关自身终止 TLS 的两个监听口(数据面 / 管理台,两面物理隔离)。
+# 两组 listen+cert+key 全部齐全才生效;缺任一项则只起上面的明文 listen(dev/测试)。
+# 两张证书必须独立(不得共用同一套私钥)。证书生成见 deploy/scripts/gen-certs.sh。
+# tls:
+#   api_listen: ":17080"                     # 数据面:仅 /healthz + /v1/*
+#   api_cert: "/certs/api/fullchain.pem"
+#   api_key: "/certs/api/key.pem"
+#   admin_listen: ":17090"                   # 管理台:仅 /healthz + /api/v1/* + SPA
+#   admin_cert: "/certs/admin/fullchain.pem"
+#   admin_key: "/certs/admin/key.pem"
+
 
 # 渠道/令牌密钥说明:
 # - 管理账号首次启动走「创建管理员」引导(DB 无账号时登录页出现),config 不含任何凭据。

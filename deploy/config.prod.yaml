@@ -1,5 +1,14 @@
-# 生产网关配置(deploy.sh 拷贝进镜像 /app/config.yaml;DB 落在 bind mount /data)。
+# 生产网关配置(构建时拷贝进镜像 /app/config.yaml;DB 落在 bind mount /data)。
 # 主密钥经 GW_MASTER_KEY 环境变量注入(.env),不需要 key 文件。
+# listen 保留明文合并面(容器 healthcheck 打 http://127.0.0.1:8787/healthz 用,不对外发布);
+# 对外的数据面/管理台两个 TLS 口由 tls 块定义,证书由 compose 挂载到 /certs。
 listen: ":8787"
 db_path: "/data/gateway-v2.db"
 web_dir: "web-v2"
+tls:
+  api_listen: ":17080"
+  api_cert: "/certs/api/fullchain.pem"
+  api_key: "/certs/api/key.pem"
+  admin_listen: ":17090"
+  admin_cert: "/certs/admin/fullchain.pem"
+  admin_key: "/certs/admin/key.pem"

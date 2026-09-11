@@ -7,13 +7,13 @@
 #   快照落在 data/backups/,只保留最近 KEEP 份。
 #
 # 用法:
-#   服务器本地:      REMOTE_DIR=/opt/ai-gateway bash backup.sh
-#   从本地经 ssh 触发:ssh aliyun 'REMOTE_DIR=/opt/ai-gateway bash -s' < deploy/scripts/backup.sh
-#   每日 cron(在服务器):0 4 * * * REMOTE_DIR=/opt/ai-gateway bash /opt/ai-gateway/backup.sh >> /var/log/gw-backup.log 2>&1
+#   目标主机本地:    REMOTE_DIR=~/ai-gateway bash backup.sh
+#   从本地经 ssh 触发:ssh rguo@192.168.0.202 'REMOTE_DIR=~/ai-gateway bash -s' < deploy/scripts/backup.sh
+#   每日 cron(在目标主机):0 4 * * * REMOTE_DIR=$HOME/ai-gateway bash $HOME/ai-gateway/backup.sh >> $HOME/gw-backup.log 2>&1
 # =====================================================================
 set -euo pipefail
 
-REMOTE_DIR="${REMOTE_DIR:-/opt/ai-gateway}"
+REMOTE_DIR="${REMOTE_DIR:-$HOME/ai-gateway}"
 DB="${DB:-$REMOTE_DIR/data/gateway-v2.db}"
 DEST="${DEST:-$REMOTE_DIR/data/backups}"
 KEEP="${KEEP:-7}"

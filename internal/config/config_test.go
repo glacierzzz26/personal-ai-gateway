@@ -42,3 +42,28 @@ func TestLoadOverrides(t *testing.T) {
 		t.Errorf("db_path = %q, want /tmp/x.db", cfg.DBPath)
 	}
 }
+
+func TestTLSEnabled(t *testing.T) {
+	full := TLSConfig{
+		APIListen: ":17080", APICert: "/certs/api/cert.pem", APIKey: "/certs/api/key.pem",
+		AdminListen: ":17090", AdminCert: "/certs/admin/cert.pem", AdminKey: "/certs/admin/key.pem",
+	}
+	if !full.Enabled() {
+		t.Fatalf("完整 TLS 配置 Enabled = false, want true")
+	}
+	for name, mut := range map[string]func(*TLSConfig){
+		"缺 api_listen":   func(c *TLSConfig) { c.APIListen = "" },
+		"缺 api_key":      func(c *TLSConfig) { c.APIKey = "" },
+		"缺 admin_cert":   func(c *TLSConfig) { c.AdminCert = "" },
+		"缺 admin_listen": func(c *TLSConfig) { c.AdminListen = "" },
+	} {
+		c := full
+		mut(&c)
+		if c.Enabled() {
+			t.Errorf("%s:TLS 配置不齐 Enabled = true, want false", name)
+		}
+	}
+	if (TLSConfig{}).Enabled() {
+		t.Errorf("空 TLSConfig Enabled = true, want false")
+	}
+}

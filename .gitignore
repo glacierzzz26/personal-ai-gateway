@@ -15,6 +15,9 @@ gateway.master.key
 .env
 .env.*
 
+# 生产证书与私钥(gen-certs.sh 生成;绝不入库)
+deploy/certs/
+
 # 前端依赖与构建产物(web-v2)
 web-v2/node_modules/
 web-v2/dist/

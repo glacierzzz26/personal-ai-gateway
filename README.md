@@ -77,25 +77,53 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 
 ## 目录
 
-- `cmd/gateway` 入口(组装 config → 主密钥 → store → server)
-- `internal/config` 只读 `listen/db_path/web_dir`(业务数据全部在 DB)
+- `cmd/gateway` 入口(组装 config → 主密钥 → store → server;版本经 `-ldflags -X main.version` 注入,按 `tls` 配置叠加双口)
+- `internal/config` 只读 `listen/db_path/web_dir/tls`(业务数据全部在 DB)
 - `internal/domain` v2 实体 DTO(兼 API body)
-- `internal/store` SQLite(schema 版本化 + channels/models/offers/rules/tokens/admins/sessions/request_logs/settings 仓库 + 时区聚合)
+- `internal/store` SQLite(schema 版本化 + channels/models/offers/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合)
 - `internal/secret` AES-GCM 渠道密钥(主密钥 `GW_MASTER_KEY` 或 DB 同目录 `gateway.master.key` 0600)
 - `internal/engine` 选路决策:候选(启用供给源 ∩ 未熔断渠道 ∩ 命中规则)→ 策略排序 → 重试/兜底
 - `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
-- `internal/auth` 管理会话(bcrypt + 随机 token sha256)+ 令牌查询
+- `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管
 - `web-v2/` 管理台前端源码(React 18 + antd v5 + react-query + echarts)
 
 ## 配置与密钥(全部见 config.example.yaml)
 
 ```yaml
-listen: ":8787"
+listen: ":8787"           # 明文合并面(dev/测试/容器 healthcheck);生产 compose 不发布此端口
 db_path: "gateway-v2.db"   # v2 新库(默认)。旧 gateway.db(v1 表)原样留档,不做迁移
 web_dir: "web-v2"          # 管理台源码目录(托管其 dist/);空串 = 关闭静态托管
+# 生产 TLS 双口(齐全才起;两组证书必须独立,不得共用同一套)
+tls:
+  api_listen: ":17080"                  # 数据面(仅 /healthz + /v1/*)
+  api_cert: "/certs/api/fullchain.pem"
+  api_key: "/certs/api/key.pem"
+  admin_listen: ":17090"                # 管理台(仅 /healthz + /api/v1/* + SPA)
+  admin_cert: "/certs/admin/fullchain.pem"
+  admin_key: "/certs/admin/key.pem"
 ```
 
 - 渠道 API key:环境变量 `GW_MASTER_KEY`(任意长度,sha256 展平)加密;缺失自动生成 DB 同目录 `gateway.master.key`(0600)。主密钥换过会让旧密文解不开——保留原密钥即可。
 - 管理账号与访问令牌:**不走配置**。账号靠首启「创建管理员」;令牌在管理台创建,明文只现一次。
 - 存量 v1(`upstreams`/`keys`/`pricing`/`quota` 概念、旧 `/api/v1/upstreams` 管理面、旧 `web/` 前端)已在 v2 演进中退役;旧 `gateway.db` 仅作历史留档。
+
+## 生产部署(Go 自终止 TLS 双口 + frp;无 Caddy)
+
+局域网主机跑 Go 网关自身终止 TLS 于 17080(数据面)/17090(管理台),再经云 frps 隧道把两口映射到公网:
+
+```
+[局域网] https://192.168.0.202:17080(数据面)/:17090(管理台)      ← Go 网关自身 TLS
+[公网]   https://47.116.65.140:17080/:17090 --frps--> frpc --> 127.0.0.1:17080/17090
+```
+
+```bash
+deploy/scripts/gen-certs.sh          # 生成 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
+deploy/scripts/deploy.sh [GW_HOST]   # 本地构建镜像 → docker save 经 ssh 推目标主机 → compose up(默认 rguo@192.168.0.202)
+deploy/scripts/setup-frp.sh          # 目标主机起 frpc 隧道容器(--network host,restart unless-stopped)
+deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gateway)
+```
+
+- 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
+- 证书 SAN 含局域网 IP 与公网 IP,两条路径共用同一私钥 CA;客户端导入一次 `deploy/certs/ca.crt` 即可验真。
+- 两面物理隔离:数据面口只认 `/healthz` 与 `/v1/*`,管理台口只认 `/healthz`、`/api/v1/*` 与 SPA;错面访问 404。

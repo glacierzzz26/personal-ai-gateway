@@ -24,10 +24,10 @@
  Claude Code / claude (anthropic)      OpenCode / curl (openai)       浏览器 → Web 管理台(静态 dist,同源)
         └──────────────┬──────────────────────┘                            │
                        ▼                                                   ▼
-┌─────────────────────────────── 网关(单进程,127.0.0.1:8787,前面 Caddy/TLS) ────────────────┐
-│ 管理面 /api/v1/*       会话 cookie 鉴权(gw_session)                                          │
+┌──── 网关(单进程;生产:Go 自终止 TLS 双口 17080 数据面 / 17090 管理台;明文 :8787 仅容器内 healthcheck) ────┐
+│ 管理面 /api/v1/*       会话 cookie 鉴权(gw_session,HS256 JWT)                                │
 │   认证:bootstrap/login/logout/me、auth/state(匿名判定首启)                                   │
-│   业务:channels·models·offers·rules·tokens·logs·usage·overview·settings 全 CRUD              │
+│   业务:channels·models·offers·rules·tokens·logs·usage·overview·settings·users 全 CRUD        │
 │ 模型面 /v1/*           访问令牌鉴权(Bearer / x-api-key → sha256)                              │
 │   POST /v1/chat/completions · POST /v1/messages · count_tokens · GET /v1/models             │
 │ 中间层:engine 选路(offer/rule/channel health)→ proxy 转发/翻译 → billing 记账 → request_logs │
@@ -37,14 +37,17 @@
    上游渠道(官方 API / OpenAI 兼容中转 / 聚合订阅),密钥 AES-GCM 加密落库
 ```
 
+两面**物理隔离**在两个监听口(见 §8 生产部署):数据面口只认 `/healthz` 与 `/v1/*`,管理台口只认
+`/healthz`、`/api/v1/*` 与静态 SPA;错面访问一律 404(如管理台口打 `/v1` 不会落到 SPA 回退成假 200)。
+
 分层(目录 = 当前实现):
 
 ```
 cmd/gateway     组装 config → 主密钥(secret)→ store(迁移)→ server
-internal/config listen/db_path/web_dir;业务数据不进配置
+internal/config listen/db_path/web_dir/tls;业务数据不进配置
 internal/domain v2 实体 DTO(JSON tag,兼 API body 与展示字段)
 internal/secret AES-GCM(渠道 api_key);主密钥 GW_MASTER_KEY 或 gateway.master.key(0600)
-internal/store  schema 版本化;channels/models/model_offers/rules/tokens/admins/sessions/
+internal/store  schema 版本化;channels/models/model_offers/rules/tokens/admins/users/
                 request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
 internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
 internal/engine 把目录+offers+规则+渠道健康编译为一次转发决策(候选/策略/重试/兜底)
@@ -158,6 +161,28 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 开发期:`cd web-v2 && npm run dev`(Vite :5178,`/api`、`/v1` 已代理到 :8787),改前端热更。
 - 冒烟路径:起网关(空库)→ 浏览器创建管理员 → 建渠道(指向假/真上游)+ 测试 → 同步或手工建模型 + offer 定价 →
   建令牌 → 用令牌打 `/v1/chat/completions`(或 `/v1/messages`)→ 刷新日志/用量/概览/渠道统计应实时变化。
+
+### 8.1 生产部署(Go 自终止 TLS 双口 + frp 隧道;无 Caddy)
+
+```
+[局域网客户端]  --https--> 192.168.0.202:17080(数据面)/17090(管理台)   ← Go 网关自身终止 TLS
+[公网客户端]    --https--> 47.116.65.140:17080/17090 --frps--> frpc(202) --> 127.0.0.1:17080/17090
+```
+
+- **TLS 双口**:`config.tls` 配 `api_listen/api_cert/api_key` 与 `admin_listen/admin_cert/admin_key` 两组,
+  齐全时 main 额外起两个 `http.Server`(分别挂 `HandlerAPI`/`HandlerAdmin`);缺任一项则只起明文 `listen`(dev/测试)。
+  明文 `:8787` 仍起(容器 healthcheck `http://127.0.0.1:8787/healthz` 用),但 compose 不发布该端口。
+- **证书**:`deploy/scripts/gen-certs.sh` 生成一个私有 CA + admin/api 两张独立叶子(各挂一个口,不共用)。
+  SAN 覆盖 `ai-gateway.lan / localhost / 127.0.0.1 / <局域网 IP> / <公网 IP>`,两条访问路径都能验真;
+  `RESIGN=1` 只重签叶子保留 CA(客户端信任不失效),`FORCE=1` 连 CA 轮换。
+- **隧道**:`deploy/scripts/setup-frp.sh` 把云 frps 的 17080/17090 反向映射到目标主机 127.0.0.1 同名端口。
+  因目标主机用户无 sudo,frpc 以 `--network host` 的 docker 容器常驻(`restart unless-stopped`),免系统服务。
+  token 取自本地 `~/frp/frpc.toml`(单一来源,不入仓库)。
+- **部署流**:`deploy/scripts/deploy.sh [GW_HOST]`(默认 `rguo@192.168.0.202`)→ 本地 `build.sh` 构建镜像
+  (前端 + 交叉编译 + docker build,版本由 `git describe` 注入 `-ldflags -X main.version`)→
+  `docker save | ssh docker load` 推到目标主机 → 同步 compose/证书 → 远端 `compose up -d`。
+  目标主机只需 docker,不需 Go/Node/Docker Hub。远端 `.env`(`GW_MASTER_KEY`/`GW_IMAGE_TAG`)与 `data/` 首次生成后保留。
+- **版本可见**:`/healthz` 回 `{ok,store,version}`;`build.sh` 打 `ai-gateway:$VER` 与 `:latest` 便于回滚。
 
 ## 9. 迁移与留档
 

@@ -1,31 +1,20 @@
-# 生产网关 + Caddy 自签 HTTPS 双口(数据面 17080 / 管理台 17090)。
-# 用法:deploy/scripts/deploy.sh(本地构建→rsync→compose up)。密钥/证书不入 git。
+# 生产网关:Go 自身终止 TLS 双口(数据面 17080 / 管理台 17090),无边缘反代。
+# 用法:deploy/scripts/deploy.sh(本地构建镜像 → docker save 推送目标主机 → compose up)。
+# 密钥/证书不入 git;镜像自带 config.yaml 与前端产物,compose 只提供端口/证书/DB 挂载。
 services:
   gateway:
-    build: ./gateway
-    image: ai-gateway:local
+    image: ai-gateway:${GW_IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env                      # GW_MASTER_KEY(渠道密钥主密钥;不换 key 则勿删)
+    ports:
+      - "17080:17080"                   # 数据面 https(仅 /healthz + /v1/*,Go 自终止 TLS)
+      - "17090:17090"                   # 管理台 https(仅 /healthz + /api/v1/* + SPA)
     volumes:
-      - ./data:/data                   # SQLite DB(生产数据落盘)
+      - ./data:/data                    # SQLite DB(生产数据落盘)
+      - ./certs:/certs:ro               # 自签叶子证书(api/admin 各一,同 CA)
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 15s
-    # 不发布任何宿主端口:仅 Caddy 经 compose 内网访问 gateway:8787。
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      gateway:
-        condition: service_healthy
-    user: "0:0"                         # 读 0600 私钥;端口高段无需特权绑定
-    ports:
-      - "17080:17080"                   # 数据面 https
-      - "17090:17090"                   # 管理台 https
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/certs:/certs:ro

@@ -37,7 +37,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 	return &Server{cfg: cfg, st: st, log: slog.Default(), eng: eng, gw: gw, rl: rl}
 }
 
-// Handler 组装根路由。
+// Handler 组装根路由(管理面 + 数据面 + 静态托管合并于一个 mux,dev/测试/明文口用)。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -49,6 +49,27 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/v1/", s.session(s.apiMux()))
 
 	// 静态托管 web-v2/dist(SPA 回退 index.html);dist 不存在时给 404 提示。
+	mux.Handle("/", s.static())
+	return mux
+}
+
+// HandlerAPI 数据面单独入口(TLS 数据面口用):只暴露 /healthz 与 /v1/*,其余一律 404。
+// 与管理面物理隔离——数据面口永不托管管理台,管理面口永不接 /v1。
+func (s *Server) HandlerAPI() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.Handle("/v1/", s.gw)
+	mux.Handle("/", http.HandlerFunc(s.handleNotFound))
+	return mux
+}
+
+// HandlerAdmin 管理台单独入口(TLS 管理台口用):/healthz + /api/v1/* + 静态 SPA。
+// 显式把 /v1/ 指到 404——否则 GET /v1/xxx 会落到静态回退、拿 index.html 冒充 200。
+func (s *Server) HandlerAdmin() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.Handle("/api/v1/", s.session(s.apiMux()))
+	mux.Handle("/v1/", http.HandlerFunc(s.handleNotFound))
 	mux.Handle("/", s.static())
 	return mux
 }
@@ -153,7 +174,7 @@ func (s *Server) apiMux() *http.ServeMux {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "store": "up"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "store": "up", "version": s.cfg.Version})
 }
 
 func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {
