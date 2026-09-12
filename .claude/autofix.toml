@@ -8,7 +8,7 @@
 
 version = 1
 language = "go"        # informational only
-base_branch = "main"
+base_branch = "dev"
 
 [commands]
 # Run once before the first round, to prepare the environment.
