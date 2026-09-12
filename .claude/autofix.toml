@@ -1,0 +1,61 @@
+# auto-fix project contract.
+#
+# This file tells the auto-fix plugin how to work in THIS repository. It is
+# language-agnostic: the plugin never parses your code, it runs the commands you
+# declare here. Every key is optional — delete what you do not need.
+#
+# It contains no secrets and is safe to commit.
+
+version = 1
+language = "go"        # informational only
+base_branch = "main"
+
+[commands]
+# Run once before the first round, to prepare the environment.
+setup = "go mod download"
+# How the plugin verifies a fix. REQUIRED for full verification: without a test
+# command a run is "review-only" and always flagged for a human.
+test = "go test ./..."
+# Optional; failures here are reported to the fixer but do not block.
+lint = "go vet ./..."
+timeout_s = 900
+retries = 1                    # retry a failing command once, to absorb flakes
+
+[limits]
+max_rounds = 3                 # 1..3; the ceiling is enforced in code
+max_files_changed = 40
+max_diff_bytes = 400000
+lock_tests = true              # refuse changes that delete or weaken tests
+
+[paths]
+# The fixer may not touch these. `.claude/autofix.toml` is always protected,
+# whether or not you list it.
+protected = [".github/workflows/**", "infra/**", "*.lock", "CODEOWNERS"]
+# Used by lock_tests to recognise test files.
+test_globs = ["**/*_test.go"]
+ignore = ["docs/**"]
+
+[models]
+# Profile NAMES, defined in ~/.config/auto-fix/profiles.toml (or in CI secrets).
+# Never put endpoints or keys here.
+fixer = "fixer"
+reviewer = "reviewer"
+# Only set this while bringing the plugin up, before a second model exists.
+# It forces a draft PR and a needs-human label on every run.
+allow_self_review = false
+
+[review]
+# Findings at or above this level block convergence.
+blocking_severity = "major"    # blocker | major | minor | nit
+require_tests_pass = true
+max_review_diff_bytes = 200000
+max_review_file_bytes = 40000
+
+[pr]
+draft = true                   # strongly recommended: a draft cannot be merged by accident
+branch_prefix = "autofix/issue-"
+assignees = []
+
+[pr.labels]
+converged = "auto-fix:converged"
+needs_human = "auto-fix:needs-human"
