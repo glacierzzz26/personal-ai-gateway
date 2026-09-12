@@ -294,6 +294,71 @@ func TestE2EOpenAIToAnthropic(t *testing.T) {
 	}
 }
 
+// TestE2ERenamedModelRoutesAndRewrites 统一名重命名:客户端用统一名请求,选路成功,
+// 且出站请求体的 model 改回渠道侧真实名;日志按统一名归因;/v1/models 返回统一名。
+func TestE2ERenamedModelRoutesAndRewrites(t *testing.T) {
+	e := newE2E(t)
+	var gotModel string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotModel = req.Model
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-rn", "object": "chat.completion", "model": req.Model,
+			"choices": []any{map[string]any{"index": 0,
+				"message":       map[string]any{"role": "assistant", "content": "pong-renamed"},
+				"finish_reason": "stop"}},
+			"usage": map[string]any{"prompt_tokens": 5, "completion_tokens": 3},
+		})
+	}))
+	t.Cleanup(up.Close)
+
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	en := true
+	origin := "deepseek-chat"
+	display := "deepseek-v3"
+	if _, err := e.st.CreateModel(domain.ModelInput{Name: origin, DisplayName: &display, Enabled: &en}); err != nil {
+		t.Fatalf("create renamed model: %v", err)
+	}
+	m, _ := e.st.GetModelByName(origin)
+	if _, err := e.st.CreateOffer(m.ID, domain.OfferInput{ChannelID: chID, Enabled: &en, RateLimitRpm: 1000}); err != nil {
+		t.Fatalf("create offer: %v", err)
+	}
+	key := e.addToken("cli", []string{"*"}, 100)
+
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, display))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	if gotModel != origin {
+		t.Fatalf("outbound model = %q, want channel origin %q", gotModel, origin)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 || logs[0].Model != display {
+		t.Fatalf("logs should be attributed to display name %q: %+v", display, logs)
+	}
+
+	// /v1/models 返回统一名而非真实名
+	req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list models: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(raw), display) || strings.Contains(string(raw), origin) {
+		t.Fatalf("/v1/models should expose display name only: %s", raw)
+	}
+}
+
 // TestE2EUpstreamFailover 首选渠道 500 → 自动切换次选渠道成功,日志记最终渠道。
 func TestE2EUpstreamFailover(t *testing.T) {
 	e := newE2E(t)

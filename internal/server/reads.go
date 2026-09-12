@@ -160,10 +160,11 @@ func (s *Server) modelsListRead() ([]domain.ModelRead, error) {
 			decorated = append(decorated, s.offerRead(v, o))
 		}
 		mr := domain.ModelRead{
-			ID: m.ID, Name: m.Name, ContextWindow: m.ContextWindow,
-			Capabilities: m.Capabilities, Enabled: m.Enabled, Offers: decorated,
+			ID: m.ID, Name: m.PublicName(), DisplayName: m.DisplayName, OriginalName: m.Name,
+			ContextWindow: m.ContextWindow,
+			Capabilities:  m.Capabilities, Enabled: m.Enabled, Offers: decorated,
 		}
-		if u, ok := today[m.Name]; ok {
+		if u, ok := today[m.PublicName()]; ok {
 			mr.TodayRequests = u.Requests
 			mr.SuccessRate = (1 - u.ErrorRate) * 100
 		} else {

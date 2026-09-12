@@ -62,7 +62,9 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   role 分 `admin`(全权)/`user`(仅能管理自己的令牌)。
 - `channels(id, name, provider, base_url, api_key_cipher, key_masked, priority, weight, timeout_ms,
    tags(json), enabled, max_failures, cooldown_sec, note, created_at, updated_at)`。
-- `models(id, name UNIQUE, context_window, capabilities(json), enabled, …)`。
+- `models(id, name UNIQUE, display_name, context_window, capabilities(json), enabled, …)` — `name` 为渠道侧真实模型名;
+  `display_name` 为网关统一名称(空=未重命名,对外回落 `name`),非空时唯一(部分索引 `WHERE display_name <> ''`)。
+  统一名只作用于网关侧(管理台展示/路由规则匹配/`/v1/models`/日志归因),出站转发仍改回 `name`。
 - `model_offers(id, model_id FK, channel_id FK, in/out/cache_read 单价, override_price,
    priority, enabled, rate_limit_rpm, note, UNIQUE(model_id, channel_id))` — 渠道/模型删除级联。
 - `rules(id, name, enabled, match_mode(prefix|wildcard|regex), pattern, strategy(priority|weight|latency),
@@ -95,6 +97,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 ## 5. 转发引擎语义(M3,M4 验证)
 
 1. 入站:模型名必在 `models` 目录且 enabled;令牌 `allowed_models!='*'` 需匹配(精确或前缀通配),否则 404/403。
+   模型名解析支持**统一名**(`display_name`)与真实名:`GetModelByPublicName` 先命中统一名,再回落真实名。
+   令牌 `allowed_models` 同样对请求名与统一名各比对一次,重命名后按统一名配置的规则继续生效。
 2. 选路候选 = `offers(m).enabled ∧ offer.channel.enabled ∧ 渠道未熔断`。
    - 无命中规则 → 按 offer.priority 升序(= 抽屉拖拽序)逐个尝试。
    - 命中规则 → 候选收缩到 `rule.channel_ids ∩ offers`;策略:priority=渠道 priority 再 offer.priority;
@@ -110,7 +114,10 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 4. **流式超时口径**(见 §5.1)。
 5. 记账:cost = 命中 offer 单价 × token;流式以结束块权威计数(流被中断时用已嗅探到的部分 + 输入估算兜底);
    写 request_logs;`token.used_usd` 事务累加;今天/曲线统计由日志实时 GROUP BY(个人规模不建 rollup 表)。
-6. `/v1/models` = enabled 且有启用 offer 的模型(anthropic/openai 双形状)。
+6. `/v1/models` = enabled 且有启用 offer 的模型(anthropic/openai 双形状),`id`/`display_name` 用统一名。
+7. **统一名称(重命名)**:模型级(不按渠道),同一模型多渠道共用一个对外名。客户端用统一名请求即可选路;
+   出站前把请求体 `model` 改回渠道侧真实名(同协议透传与跨协议翻译两条路径都改),不改动渠道侧真实模型名。
+   路由规则按统一名匹配;日志/用量以统一名归因;管理台列表回显 `originalName` 供对照。
 
 ### 5.1 流式看门狗、断连与错误率口径
 
@@ -207,7 +214,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `GET/POST /users` · `PATCH /users/{id}/password` · `DELETE /users/{id}` | 用户管理(仅 admin):建号/列号/重置密码/删号 |
 | `GET/POST /channels` · `GET/PATCH/DELETE /channels/{id}` | 渠道 CRUD(改时 apiKey 留空=保持) |
 | `POST /channels/{id}/test` · `/sync-models` | 连通探测 `{ok,latencyMs}`;拉 `/v1/models` 补目录+停用 offer |
-| `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(聚合 offers 与展示字段)/新增/改(全量)/删;GET 全站可读 |
+| `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(`name`=统一名、`originalName`=真实名)/新增/改(全量,`displayName` 非传=不变)/删;GET 全站可读 |
 | `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删 |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |
 | `GET /models/{id}/usage?days=7` | `{daily:[MetricPoint], byChannel:[{channelName,requests,costUsd}]}` |

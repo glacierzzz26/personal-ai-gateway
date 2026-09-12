@@ -27,6 +27,7 @@ interface Props {
 
 interface BasicFormValues {
   name: string;
+  displayName?: string;
   contextWindow: number;
   capabilities: Capability[];
 }
@@ -252,7 +253,8 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       prevModelId.current = id;
       if (model) {
         form.setFieldsValue({
-          name: model.name,
+          name: model.originalName,
+          displayName: model.displayName ?? '',
           contextWindow: model.contextWindow,
           capabilities: model.capabilities,
         });
@@ -313,7 +315,8 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     saveModel.mutate({
       id: model.id,
       draft: {
-        name: (v.name ?? model.name).trim(),
+        name: (v.name ?? model.originalName).trim(),
+        displayName: (v.displayName ?? '').trim(),
         contextWindow: v.contextWindow ?? model.contextWindow,
         capabilities: (v.capabilities ?? model.capabilities) as Capability[],
         enabled: model.enabled,
@@ -593,6 +596,11 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
               <span style={{ fontSize: 12, color: 'var(--gw-text-3)', marginLeft: 8 }}>
                 {fmt.ctx(model.contextWindow)} 上下文
               </span>
+              {model.displayName && (
+                <span className="gw-mono" style={{ fontSize: 12, color: 'var(--gw-text-3)', marginLeft: 8 }}>
+                  原始名 {model.originalName}
+                </span>
+              )}
             </div>
           ) : null
         }
@@ -644,10 +652,17 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                     <Card title="基本信息">
                       <Form form={form} layout="vertical" style={{ maxWidth: 540 }}>
                         <Form.Item
+                          name="displayName"
+                          label="统一名称"
+                          extra="网关侧对外展示与调用名，留空则用原始名；重命名不改动渠道侧真实模型名"
+                        >
+                          <Input className="gw-mono" placeholder="如 deepseek-v3（留空=用原始名）" />
+                        </Form.Item>
+                        <Form.Item
                           name="name"
-                          label="模型名称"
+                          label="原始模型名（渠道侧）"
                           rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}
-                          extra="修改名称会改变路由匹配标识，请谨慎操作"
+                          extra="渠道上游真实模型名；修改会改变同步去重与出站请求的模型名，请谨慎操作"
                         >
                           <Input className="gw-mono" />
                         </Form.Item>

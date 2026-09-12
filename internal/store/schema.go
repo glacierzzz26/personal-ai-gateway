@@ -12,7 +12,18 @@ var migrations = []string{
 	m0001Init,
 	// v2:多用户(账号角色 + 令牌归属 + 可回放密文)
 	m0002MultiUser,
+	// v3:模型统一名称(网关侧对外名,与渠道侧真实模型名解耦)
+	m0003ModelDisplayName,
 }
+
+const m0003ModelDisplayName = `
+-- 统一名称:空串表示未重命名(对外回落为真实模型名 name)。
+ALTER TABLE models ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+
+-- 已重命名的统一名唯一;未重命名的空串不参与约束(部分索引)。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_models_display_name
+	ON models (display_name) WHERE display_name <> '';
+`
 
 const m0002MultiUser = `
 -- 账号角色。常量默认值直接回填既有管理员行为 admin,无需额外 UPDATE。

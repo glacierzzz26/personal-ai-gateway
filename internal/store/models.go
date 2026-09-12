@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"personal-ai-gateway/internal/domain"
 )
@@ -14,9 +15,18 @@ import (
 func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
 	in.Defaults()
 	now := formatRFC3339(s.nowUTC())
-	res, err := s.db.Exec(`INSERT INTO models (name, context_window, capabilities, enabled, created_at, updated_at)
-		VALUES (?,?,?,?,?,?)`,
-		in.Name, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled), now, now)
+	display := ""
+	if in.DisplayName != nil {
+		display = strings.TrimSpace(*in.DisplayName)
+	}
+	if taken, err := s.publicNameTaken(in.Name, display, 0); err != nil {
+		return domain.ModelRow{}, err
+	} else if taken {
+		return domain.ModelRow{}, ErrConflict
+	}
+	res, err := s.db.Exec(`INSERT INTO models (name, display_name, context_window, capabilities, enabled, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?)`,
+		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled), now, now)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ModelRow{}, ErrConflict
@@ -28,7 +38,7 @@ func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
 }
 
 func (s *Store) GetModel(id int64) (domain.ModelRow, error) {
-	row := s.db.QueryRow(`SELECT id,name,context_window,capabilities,enabled,created_at,updated_at
+	row := s.db.QueryRow(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
 		FROM models WHERE id=?`, id)
 	m, err := scanModel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -37,9 +47,9 @@ func (s *Store) GetModel(id int64) (domain.ModelRow, error) {
 	return m, err
 }
 
-// GetModelByName 供同步与去重。
+// GetModelByName 供同步与去重(按渠道侧真实模型名)。
 func (s *Store) GetModelByName(name string) (domain.ModelRow, error) {
-	row := s.db.QueryRow(`SELECT id,name,context_window,capabilities,enabled,created_at,updated_at
+	row := s.db.QueryRow(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
 		FROM models WHERE name=?`, name)
 	m, err := scanModel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -48,9 +58,45 @@ func (s *Store) GetModelByName(name string) (domain.ModelRow, error) {
 	return m, err
 }
 
+// GetModelByPublicName 模型面/选路按对外统一名解析:先查重命名后的 display_name,
+// 未重命名时回落真实模型名,name 命中同样返回。供 engine 选路与令牌 allowed_models 校验。
+func (s *Store) GetModelByPublicName(name string) (domain.ModelRow, error) {
+	row := s.db.QueryRow(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
+		FROM models WHERE (display_name <> '' AND display_name = ?) OR name = ?
+		ORDER BY CASE WHEN display_name = ? THEN 0 ELSE 1 END LIMIT 1`, name, name, name)
+	m, err := scanModel(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ModelRow{}, ErrNotFound
+	}
+	return m, err
+}
+
+// publicNameTaken 校验 name/display 是否会与别的模型在「对外名解析」上歧义:
+// 统一名不得等于自身外的任何模型对外名(含其他模型真实名),否则按名解析会命中错模型。
+// excludeID 为更新时的自身 id(新建传 0)。name 自身的重名由 models.name UNIQUE 兜底。
+func (s *Store) publicNameTaken(name, display string, excludeID int64) (bool, error) {
+	var n int
+	if display != "" {
+		err := s.db.QueryRow(`SELECT COUNT(*) FROM models
+			WHERE id <> ? AND (display_name = ? OR name = ?)`, excludeID, display, display).Scan(&n)
+		if err != nil {
+			return false, err
+		}
+		if n > 0 {
+			return true, nil
+		}
+	}
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM models
+		WHERE id <> ? AND display_name <> '' AND display_name = ?`, excludeID, name).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ListModels 全部目录模型,最新创建在前。
 func (s *Store) ListModels() ([]domain.ModelRow, error) {
-	rows, err := s.db.Query(`SELECT id,name,context_window,capabilities,enabled,created_at,updated_at
+	rows, err := s.db.Query(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
 		FROM models ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
@@ -67,7 +113,7 @@ func (s *Store) ListModels() ([]domain.ModelRow, error) {
 	return out, rows.Err()
 }
 
-// UpdateModel 更新名称/上下文/能力/启停。
+// UpdateModel 更新名称/统一名/上下文/能力/启停。DisplayName 非 nil 才改动(空串=取消重命名)。
 func (s *Store) UpdateModel(id int64, in domain.ModelInput) (domain.ModelRow, error) {
 	in.Defaults()
 	cur, err := s.GetModel(id)
@@ -77,9 +123,18 @@ func (s *Store) UpdateModel(id int64, in domain.ModelInput) (domain.ModelRow, er
 	if in.Name == "" {
 		in.Name = cur.Name
 	}
-	res, err := s.db.Exec(`UPDATE models SET name=?, context_window=?, capabilities=?, enabled=?, updated_at=?
+	display := cur.DisplayName
+	if in.DisplayName != nil {
+		display = strings.TrimSpace(*in.DisplayName)
+	}
+	if taken, err := s.publicNameTaken(in.Name, display, id); err != nil {
+		return domain.ModelRow{}, err
+	} else if taken {
+		return domain.ModelRow{}, ErrConflict
+	}
+	res, err := s.db.Exec(`UPDATE models SET name=?, display_name=?, context_window=?, capabilities=?, enabled=?, updated_at=?
 		WHERE id=?`,
-		in.Name, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled),
+		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled),
 		formatRFC3339(s.nowUTC()), id)
 	if err != nil {
 		if isUniqueErr(err) {
@@ -129,7 +184,7 @@ func scanModel(row scanner) (domain.ModelRow, error) {
 	var caps string
 	var enabled int
 	var created, updated string
-	if err := row.Scan(&m.ID, &m.Name, &m.ContextWindow, &caps, &enabled, &created, &updated); err != nil {
+	if err := row.Scan(&m.ID, &m.Name, &m.DisplayName, &m.ContextWindow, &caps, &enabled, &created, &updated); err != nil {
 		return domain.ModelRow{}, err
 	}
 	m.Capabilities = decodeCaps(caps)
@@ -372,7 +427,7 @@ func (s *Store) ChannelEnabled(id int64) (bool, error) {
 
 // EnabledModelsWithOffers 目录中「enabled 且有启用 offer」的模型(驱动 GET /v1/models)。
 func (s *Store) EnabledModelsWithOffers() ([]domain.ModelRead, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT m.id, m.name, m.context_window, m.capabilities, m.enabled
+	rows, err := s.db.Query(`SELECT DISTINCT m.id, m.name, m.display_name, m.context_window, m.capabilities, m.enabled
 		FROM models m
 		JOIN model_offers o ON o.model_id = m.id
 		JOIN channels c ON c.id = o.channel_id
@@ -385,10 +440,16 @@ func (s *Store) EnabledModelsWithOffers() ([]domain.ModelRead, error) {
 	var out []domain.ModelRead
 	for rows.Next() {
 		var mr domain.ModelRead
-		var caps string
+		var name, display, caps string
 		var enabled int
-		if err := rows.Scan(&mr.ID, &mr.Name, &mr.ContextWindow, &caps, &enabled); err != nil {
+		if err := rows.Scan(&mr.ID, &name, &display, &mr.ContextWindow, &caps, &enabled); err != nil {
 			return nil, err
+		}
+		mr.OriginalName = name
+		mr.Name = name
+		if display != "" {
+			mr.DisplayName = display
+			mr.Name = display
 		}
 		mr.Capabilities = decodeCaps(caps)
 		mr.Enabled = enabled == 1

@@ -84,7 +84,8 @@ export const api = {
     const m = (await api.getModels()).find(x => x.id === modelId);
     if (!m) throw new Error('模型不存在');
     await api.updateModel(modelId, {
-      name: m.name, contextWindow: m.contextWindow,
+      name: m.originalName, displayName: m.displayName ?? '',
+      contextWindow: m.contextWindow,
       capabilities: m.capabilities, enabled,
     });
   },

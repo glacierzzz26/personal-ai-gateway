@@ -251,7 +251,10 @@ export default function Models() {
 
   const list = useMemo(() => {
     const filtered = models.filter(m => {
-      if (kw && !m.name.toLowerCase().includes(kw.toLowerCase())) return false;
+      if (kw) {
+        const q = kw.toLowerCase();
+        if (!m.name.toLowerCase().includes(q) && !m.originalName.toLowerCase().includes(q)) return false;
+      }
       if (provider && !m.offers.some(o => o.provider === provider)) return false;
       if (cap && !m.capabilities.includes(cap as Capability)) return false;
       if (ctxRange === 's' && m.contextWindow >= 32000) return false;

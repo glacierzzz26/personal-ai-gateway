@@ -189,7 +189,10 @@ type ChannelRow struct {
 
 // ModelInput 创建/更新模型的请求体。
 type ModelInput struct {
-	Name          string       `json:"name"`
+	Name string `json:"name"`
+	// DisplayName 网关侧统一名称(对外展示/模型面调用名);空 = 用 name。
+	// 更新时非 nil 才改动(指针区分「未传」与「清空」)。
+	DisplayName   *string      `json:"displayName"`
 	ContextWindow int          `json:"contextWindow"`
 	Capabilities  []Capability `json:"capabilities"`
 	Enabled       *bool        `json:"enabled"`
@@ -209,11 +212,20 @@ func (m *ModelInput) Defaults() {
 type ModelRow struct {
 	ID            int64        `json:"id"`
 	Name          string       `json:"name"`
+	DisplayName   string       `json:"displayName"`
 	ContextWindow int          `json:"contextWindow"`
 	Capabilities  []Capability `json:"capabilities"`
 	Enabled       bool         `json:"enabled"`
 	CreatedAt     time.Time    `json:"createdAt"`
 	UpdatedAt     time.Time    `json:"updatedAt"`
+}
+
+// PublicName 网关对外统一名:重命名后为 display_name,否则回落真实模型名。
+func (m ModelRow) PublicName() string {
+	if m.DisplayName != "" {
+		return m.DisplayName
+	}
+	return m.Name
 }
 
 // OfferInput 添加/更新供给源。
@@ -263,9 +275,12 @@ type OfferRead struct {
 }
 
 // ModelRead 模型目录条目 = models 行 + 关联 offers + 展示字段。
+// Name 为对外统一名(PublicName);OriginalName 始终是渠道侧真实模型名,便于对照。
 type ModelRead struct {
 	ID            int64        `json:"id"`
 	Name          string       `json:"name"`
+	DisplayName   string       `json:"displayName,omitempty"`
+	OriginalName  string       `json:"originalName"`
 	ContextWindow int          `json:"contextWindow"`
 	Capabilities  []Capability `json:"capabilities"`
 	Enabled       bool         `json:"enabled"`

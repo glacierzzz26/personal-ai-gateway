@@ -55,7 +55,11 @@ type Attempt struct {
 
 // Plan 一次模型请求的转发方案。
 type Plan struct {
-	ModelID    int64
+	ModelID int64
+	// PublicName 客户端请求命中的对外统一名(重命名后即新名);OriginName 渠道侧真实模型名。
+	// 出站转发与日志归因分别用这两个名字。
+	PublicName string
+	OriginName string
 	Attempts   []Attempt
 	Retry      int   // 追加的重试轮数(候选失败后在剩余候选里重来)
 	TimeoutMs  int   // 单候选超时
@@ -63,9 +67,9 @@ type Plan struct {
 	FallbackID int64
 }
 
-// Evaluate 按给定模型名产出有序候选。
+// Evaluate 按给定模型名产出有序候选。model 可为渠道侧真实名或网关统一名(display_name)。
 func (e *Engine) Evaluate(model string) (*Plan, error) {
-	m, err := e.st.GetModelByName(model)
+	m, err := e.st.GetModelByPublicName(model)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, ErrModelUnavailable
@@ -117,12 +121,14 @@ func (e *Engine) Evaluate(model string) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 规则按对外统一名匹配:重命名后即便客户端仍用原真实名,路由规则也照统一名生效。
+	publicName := m.PublicName()
 	var matched *domain.RuleRead
 	for i := range rules {
 		if !rules[i].Enabled {
 			continue
 		}
-		if ruleMatch(rules[i].MatchMode, rules[i].Pattern, model) {
+		if ruleMatch(rules[i].MatchMode, rules[i].Pattern, publicName) {
 			matched = &rules[i]
 			break
 		}
@@ -146,7 +152,8 @@ func (e *Engine) Evaluate(model string) (*Plan, error) {
 		attempts = append(attempts, Attempt{Offer: o, TimeoutMs: tm})
 	}
 
-	p := &Plan{ModelID: m.ID, Attempts: attempts, Retry: retry, TimeoutMs: timeout}
+	p := &Plan{ModelID: m.ID, PublicName: publicName, OriginName: m.Name,
+		Attempts: attempts, Retry: retry, TimeoutMs: timeout}
 	if matched != nil {
 		p.MatchedID = matched.ID
 		if matched.FallbackChannelID != nil {

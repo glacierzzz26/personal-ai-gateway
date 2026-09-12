@@ -66,7 +66,7 @@ type inboundReq struct {
 	op      string // messages | chat | count_tokens
 	inProto string // anthropic | openai
 	body    []byte
-	model   string
+	model   string // 客户端请求名(统一名或真实名)
 	stream  bool
 	ip      string
 	tool    string
@@ -121,7 +121,7 @@ func (g *Gateway) parseInbound(w http.ResponseWriter, r *http.Request, op string
 			gateError(w, in.inProto, http.StatusBadRequest, "invalid_request_error", "request body must include a model")
 			return nil, false
 		}
-		if !engine.SupportsModel(token.AllowedModels, model) {
+		if !g.modelAllowed(token.AllowedModels, model) {
 			gateError(w, in.inProto, http.StatusForbidden, "permission_error", "model "+model+" is not allowed for this token")
 			return nil, false
 		}
@@ -129,6 +129,27 @@ func (g *Gateway) parseInbound(w http.ResponseWriter, r *http.Request, op string
 		in.stream = stream
 	}
 	return in, true
+}
+
+// outboundModel 出站请求体应写的模型名:仅当模型被重命名(对外名≠真实名)时返回真实名,
+// 否则返回空串——调用方据此避免在常规透传路径上重新序列化请求体。
+func outboundModel(plan *engine.Plan) string {
+	if plan.OriginName != plan.PublicName {
+		return plan.OriginName
+	}
+	return ""
+}
+
+// modelAllowed 令牌 allowed_models 校验:除按请求名匹配外,再按解析出模型的统一名与真实名各比对一次。
+// 统一名只是同一模型的网关侧别名,故按真实名配置的令牌规则在重命名后依然有效(反之亦然)。
+func (g *Gateway) modelAllowed(allowed []string, model string) bool {
+	if engine.SupportsModel(allowed, model) {
+		return true
+	}
+	if m, err := g.st.GetModelByPublicName(model); err == nil {
+		return engine.SupportsModel(allowed, m.PublicName()) || engine.SupportsModel(allowed, m.Name)
+	}
+	return false
 }
 
 // tokenGateErr 令牌硬校验:0=通过;否则返回客户端错误(401 disabled/过期,402 额度)。
@@ -286,6 +307,8 @@ func (g *Gateway) forward(w http.ResponseWriter, r *http.Request, op, inProto st
 	if plan.MatchedID > 0 {
 		_ = g.st.HitRule(plan.MatchedID)
 	}
+	// 日志/流式展示/错误文案统一用对外名;出站转发在 buildOutbound 用 OriginName 改回真实名。
+	in.model = plan.PublicName
 	if !settings.DegradeOnError && len(plan.Attempts) > 1 {
 		plan.Attempts = plan.Attempts[:1] // 关闭自动降级:只用首个候选
 	}
@@ -331,7 +354,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			continue
 		}
 		outProto := OutProto(ch.Provider)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID))
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), outboundModel(plan))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -434,7 +457,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 			continue
 		}
 		outProto := OutProto(ch.Provider)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID))
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), outboundModel(plan))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -744,7 +767,7 @@ func (g *Gateway) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	var names []string
 	for _, m := range models {
-		if engine.SupportsModel(token.AllowedModels, m.Name) {
+		if engine.SupportsModel(token.AllowedModels, m.Name) || engine.SupportsModel(token.AllowedModels, m.OriginalName) {
 			names = append(names, m.Name)
 		}
 	}

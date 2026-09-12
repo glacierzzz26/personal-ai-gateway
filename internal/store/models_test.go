@@ -164,3 +164,55 @@ func TestSetModelOffersEnabled(t *testing.T) {
 func boolPtrStore(b bool) *bool { return &b }
 
 func errorsIsNotFound(err error) bool { return err == ErrNotFound }
+
+// TestModelDisplayName 统一名称:创建/更新持久化、唯一约束、按对外名解析(含原真实名回落)。
+func TestModelDisplayName(t *testing.T) {
+	st := newTestStore(t)
+	m, err := st.CreateModel(domain.ModelInput{Name: "deepseek-chat", DisplayName: strPtrStore("deepseek-v3")})
+	mustNoErr(t, err, "create renamed model")
+	if m.DisplayName != "deepseek-v3" || m.PublicName() != "deepseek-v3" {
+		t.Fatalf("display name not persisted: %+v", m)
+	}
+	// 真实名与对外名都能解析到同一条
+	byOrigin, err := st.GetModelByPublicName("deepseek-chat")
+	mustNoErr(t, err, "resolve by origin name")
+	byAlias, err := st.GetModelByPublicName("deepseek-v3")
+	mustNoErr(t, err, "resolve by display name")
+	if byOrigin.ID != m.ID || byAlias.ID != m.ID {
+		t.Fatalf("resolution mismatch: origin=%d alias=%d want %d", byOrigin.ID, byAlias.ID, m.ID)
+	}
+
+	// 统一名唯一(部分索引)
+	_, err = st.CreateModel(domain.ModelInput{Name: "other", DisplayName: strPtrStore("deepseek-v3")})
+	mustErrIs(t, err, ErrConflict, "dup display name")
+
+	// 统一名不得与他模型真实名歧义(否则按名解析会串模型)
+	_, err = st.CreateModel(domain.ModelInput{Name: "glm-4", DisplayName: strPtrStore("deepseek-chat")})
+	mustErrIs(t, err, ErrConflict, "display name shadows other model's origin name")
+	// 真实名不得与他模型统一名歧义
+	_, err = st.CreateModel(domain.ModelInput{Name: "deepseek-v3"})
+	mustErrIs(t, err, ErrConflict, "origin name shadows other model's display name")
+
+	// 更新为另一个统一名
+	up, err := st.UpdateModel(m.ID, domain.ModelInput{Name: "deepseek-chat", DisplayName: strPtrStore("deepseek-v3-0324")})
+	mustNoErr(t, err, "rename model")
+	if up.PublicName() != "deepseek-v3-0324" {
+		t.Fatalf("rename not applied: %+v", up)
+	}
+	// 清空统一名 → 回落真实名
+	up, err = st.UpdateModel(m.ID, domain.ModelInput{Name: "deepseek-chat", DisplayName: strPtrStore("")})
+	mustNoErr(t, err, "clear display name")
+	if up.DisplayName != "" || up.PublicName() != "deepseek-chat" {
+		t.Fatalf("clear display name failed: %+v", up)
+	}
+	// DisplayName 为 nil → 保持原统一名
+	up, err = st.UpdateModel(m.ID, domain.ModelInput{Name: "deepseek-chat", DisplayName: strPtrStore("ds")})
+	mustNoErr(t, err, "set display name")
+	up, err = st.UpdateModel(m.ID, domain.ModelInput{Name: "deepseek-chat-2", ContextWindow: 100})
+	mustNoErr(t, err, "update without displayName keeps it")
+	if up.DisplayName != "ds" || up.Name != "deepseek-chat-2" {
+		t.Fatalf("nil displayName should keep value: %+v", up)
+	}
+}
+
+func strPtrStore(s string) *string { return &s }

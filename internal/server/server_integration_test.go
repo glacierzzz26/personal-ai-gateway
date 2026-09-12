@@ -370,6 +370,63 @@ func TestSyncModelsDefaultDisabledAndEnableCascade(t *testing.T) {
 	}
 }
 
+// TestModelRenamePersists 模型重命名:创建时带统一名、PATCH 改名后刷新持久化生效,
+// 列表回显 displayName 且 originalName 始终为渠道侧真实名;清空统一名回落真实名。
+func TestModelRenamePersists(t *testing.T) {
+	srv, c, _ := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/models",
+		map[string]any{"name": "deepseek-chat", "displayName": "deepseek-v3", "contextWindow": 64000})
+	mustStatus(t, code, http.StatusOK, "create renamed model")
+	created := decode[map[string]any](t, body)
+	id := int64(created["id"].(float64))
+	if created["name"] != "deepseek-v3" || created["displayName"] != "deepseek-v3" || created["originalName"] != "deepseek-chat" {
+		t.Fatalf("create read = %v", created)
+	}
+
+	// 统一名冲突 → 409
+	code, _ = doJSON(t, c, http.MethodPost, base+"/api/v1/models",
+		map[string]any{"name": "glm-4", "displayName": "deepseek-v3"})
+	mustStatus(t, code, http.StatusConflict, "dup display name")
+
+	// PATCH 改名 → 刷新后持久化
+	code, body = doJSON(t, c, http.MethodPatch, fmt.Sprintf("%s/api/v1/models/%d", base, id),
+		map[string]any{"name": "deepseek-chat", "displayName": "deepseek-v3-0324", "contextWindow": 64000})
+	mustStatus(t, code, http.StatusOK, "rename model")
+	if decode[map[string]any](t, body)["name"] != "deepseek-v3-0324" {
+		t.Fatalf("rename not applied: %s", body)
+	}
+	code, body = doJSON(t, c, http.MethodGet, base+"/api/v1/models", nil)
+	mustStatus(t, code, http.StatusOK, "list models")
+	found := false
+	for _, m := range decode[[]map[string]any](t, body) {
+		if int64(m["id"].(float64)) != id {
+			continue
+		}
+		found = true
+		if m["name"] != "deepseek-v3-0324" || m["displayName"] != "deepseek-v3-0324" || m["originalName"] != "deepseek-chat" {
+			t.Fatalf("persisted rename mismatch: %v", m)
+		}
+	}
+	if !found {
+		t.Fatal("renamed model missing from list")
+	}
+
+	// 清空统一名 → name 回落真实名
+	code, body = doJSON(t, c, http.MethodPatch, fmt.Sprintf("%s/api/v1/models/%d", base, id),
+		map[string]any{"name": "deepseek-chat", "displayName": "", "contextWindow": 64000})
+	mustStatus(t, code, http.StatusOK, "clear display name")
+	cleared := decode[map[string]any](t, body)
+	if dn, _ := cleared["displayName"].(string); dn != "" {
+		t.Fatalf("displayName should clear: %v", cleared)
+	}
+	if cleared["name"] != "deepseek-chat" || cleared["originalName"] != "deepseek-chat" {
+		t.Fatalf("clear display name mismatch: %v", cleared)
+	}
+}
+
 // TestTokenExpiryCanonicalized 管理台输入宽松日期(YYYY-MM-DD)→ 库内规范为 UTC RFC3339Nano,
 // 且列表状态与数据面判定一致(过期即 expired,不再出现"管理台 active / 网关 401"的矛盾)。
 func TestTokenExpiryCanonicalized(t *testing.T) {

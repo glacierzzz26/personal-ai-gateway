@@ -84,7 +84,12 @@ export interface OfferDraft {
 
 export interface ModelCatalogItem {
   id: number;
+  /** 对外统一名(重命名后为新名,否则等于 originalName) */
   name: string;
+  /** 已设置的统一名;未重命名时为空/缺省 */
+  displayName?: string;
+  /** 渠道侧真实模型名,始终可查看 */
+  originalName: string;
   contextWindow: number;
   capabilities: Capability[];
   offers: ModelOffer[];
@@ -96,6 +101,8 @@ export interface ModelCatalogItem {
 /** 模型创建/编辑入参 */
 export interface ModelDraft {
   name: string;
+  /** 统一名称;空串=取消重命名(取真实名)。不传=保持原值 */
+  displayName?: string;
   contextWindow: number;
   capabilities: Capability[];
   enabled: boolean;

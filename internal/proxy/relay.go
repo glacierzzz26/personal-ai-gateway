@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -131,10 +132,17 @@ type outboundReq struct {
 
 // buildOutbound 依据入站协议/操作与候选渠道拼出站请求。
 // look 供 a2o 回填上一轮的 reasoning_content(同协议透传与 o2a 不使用,可传 nil)。
-func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool, look translate.ReasoningLookup) (*outboundReq, error) {
+// originModel 非空时把请求体的 model 改写成渠道侧真实模型名(统一名重命名场景),
+// 同协议与跨协议路径都生效。
+func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool, look translate.ReasoningLookup, originModel string) (*outboundReq, error) {
 	key, err := secret.Decrypt(ch.APIKeyCipher)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt channel key: %w", err)
+	}
+	if originModel != "" {
+		if body, err = replaceBodyModel(body, originModel); err != nil {
+			return nil, err
+		}
 	}
 	base := apiRoot(ch.BaseURL)
 	req := &outboundReq{APIKey: key, Proto: outProto, Stream: stream, Method: http.MethodPost}
@@ -165,6 +173,17 @@ func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []by
 		req.URL += sep + "api-version=2024-06-01"
 	}
 	return req, nil
+}
+
+// replaceBodyModel 把请求体顶层 model 换成渠道侧真实模型名,其余字段原样保留。
+// 统一名(display_name)只作用于网关侧;上游渠道只认自己 catalog 里的真实名,故出站前必须改回。
+func replaceBodyModel(body []byte, model string) ([]byte, error) {
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, fmt.Errorf("rewrite outbound model: %w", err)
+	}
+	m["model"] = model
+	return json.Marshal(m)
 }
 
 func setOutboundHeaders(h http.Header, req *outboundReq) {

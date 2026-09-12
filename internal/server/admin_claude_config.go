@@ -90,7 +90,8 @@ func (s *Server) buildClaudeEnv(tr domain.TokenRead, key, base string) (claudeEn
 	var cands []string
 	if models, err := s.st.EnabledModelsWithOffers(); err == nil {
 		for _, m := range models {
-			if engine.SupportsModel(tr.AllowedModels, m.Name) {
+			// 配置里写对外统一名,客户端用统一名请求;令牌规则按统一名或真实名匹配都放行。
+			if engine.SupportsModel(tr.AllowedModels, m.Name) || engine.SupportsModel(tr.AllowedModels, m.OriginalName) {
 				cands = append(cands, m.Name)
 			}
 		}

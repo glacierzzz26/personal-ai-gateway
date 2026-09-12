@@ -74,6 +74,46 @@ func TestEvaluatePriority(t *testing.T) {
 	}
 }
 
+// TestEvaluateByDisplayName 重命名后选路用统一名解析供应商,Plan 带对外名与真实名;
+// 路由规则按对外名匹配(即便客户端仍用真实名)。
+func TestEvaluateByDisplayName(t *testing.T) {
+	st := testStore(t)
+	e := New(st)
+	a := addChannel(t, st, "A", 1, 1)
+	// 目录真实名 deepseek-chat,统一名 deepseek-v3
+	m, err := st.CreateModel(domain.ModelInput{Name: "deepseek-chat", DisplayName: strPtr("deepseek-v3")})
+	if err != nil {
+		t.Fatalf("create model: %v", err)
+	}
+	addOffer(t, st, m.ID, a)
+
+	plan, err := e.Evaluate("deepseek-v3")
+	if err != nil {
+		t.Fatalf("evaluate by display name: %v", err)
+	}
+	if plan.PublicName != "deepseek-v3" || plan.OriginName != "deepseek-chat" {
+		t.Fatalf("plan names = %q/%q, want deepseek-v3/deepseek-chat", plan.PublicName, plan.OriginName)
+	}
+
+	// 规则以统一名匹配:客户端用真实名请求也应命中
+	_, err = st.CreateRule(domain.RuleInput{
+		Name: "v3", MatchMode: domain.ModePrefix, Pattern: "deepseek-v3",
+		Strategy: domain.StrategyPriority, ChannelIDs: []int64{a},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = e.Evaluate("deepseek-chat")
+	if err != nil {
+		t.Fatalf("evaluate by origin name: %v", err)
+	}
+	if plan.MatchedID == 0 || plan.PublicName != "deepseek-v3" {
+		t.Fatalf("rule should match on display name: matched=%d public=%q", plan.MatchedID, plan.PublicName)
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
 func TestEvaluateDisabledModel(t *testing.T) {
 	st := testStore(t)
 	e := New(st)

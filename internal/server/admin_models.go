@@ -119,23 +119,78 @@ func (s *Server) handleModelUsage(w http.ResponseWriter, r *http.Request) {
 	from := now.AddDate(0, 0, -days)
 
 	var resp domain.ModelUsageResp
-	series, err := s.st.QueryModelSeries(m.Name, "day", from, now, settings.TZOffsetMin)
+	// 日志统一以对外名归因(见 proxy 落账);重命名时按真实名与统一名都查,兼容重命名前历史。
+	names := []string{m.PublicName()}
+	if m.DisplayName != "" && m.DisplayName != m.Name {
+		names = append(names, m.Name)
+	}
+	daily, byCh, err := s.modelUsageFromLogs(names, days, from, now, settings.TZOffsetMin)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
-	resp.Daily = fillSeries(series, seriesBuckets("day", settings.TZOffsetMin, now, days))
-
-	byCh, err := s.st.QueryModelChannels(m.Name, from, now)
-	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
+	resp.Daily = daily
 	resp.ByChannel = byCh
-	if resp.ByChannel == nil {
-		resp.ByChannel = []domain.ModelChannelUsage{}
-	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// modelUsageFromLogs 汇总一个模型的日曲线与按渠道用量;合并多个名称(重命名前后的历史)。
+func (s *Server) modelUsageFromLogs(names []string, days int, from, now time.Time, tz int) ([]domain.MetricPoint, []domain.ModelChannelUsage, error) {
+	var series []domain.MetricPoint
+	var byCh []domain.ModelChannelUsage
+	for _, name := range names {
+		st, err := s.st.QueryModelSeries(name, "day", from, now, tz)
+		if err != nil {
+			return nil, nil, err
+		}
+		series = mergeSeries(series, st)
+		ch, err := s.st.QueryModelChannels(name, from, now)
+		if err != nil {
+			return nil, nil, err
+		}
+		byCh = mergeChannelUsage(byCh, ch)
+	}
+	if byCh == nil {
+		byCh = []domain.ModelChannelUsage{}
+	}
+	return fillSeries(series, seriesBuckets("day", tz, now, days)), byCh, nil
+}
+
+// mergeSeries 把同名桶的曲线相加(按 TS 归并)。
+func mergeSeries(dst, add []domain.MetricPoint) []domain.MetricPoint {
+	idx := make(map[string]int, len(dst))
+	for i, p := range dst {
+		idx[p.TS] = i
+	}
+	for _, p := range add {
+		if i, ok := idx[p.TS]; ok {
+			dst[i].Requests += p.Requests
+			dst[i].Errors += p.Errors
+			dst[i].CostUsd += p.CostUsd
+			continue
+		}
+		idx[p.TS] = len(dst)
+		dst = append(dst, p)
+	}
+	return dst
+}
+
+// mergeChannelUsage 把同名渠道的用量相加。
+func mergeChannelUsage(dst, add []domain.ModelChannelUsage) []domain.ModelChannelUsage {
+	idx := make(map[string]int, len(dst))
+	for i, c := range dst {
+		idx[c.ChannelName] = i
+	}
+	for _, c := range add {
+		if i, ok := idx[c.ChannelName]; ok {
+			dst[i].Requests += c.Requests
+			dst[i].CostUsd += c.CostUsd
+			continue
+		}
+		idx[c.ChannelName] = len(dst)
+		dst = append(dst, c)
+	}
+	return dst
 }
 
 // ---------------- 供给源 ----------------
@@ -253,14 +308,15 @@ func (s *Server) singleModelRead(id int64) (domain.ModelRead, error) {
 		return domain.ModelRead{}, err
 	}
 	mr := domain.ModelRead{
-		ID: m.ID, Name: m.Name, ContextWindow: m.ContextWindow,
-		Capabilities: m.Capabilities, Enabled: m.Enabled,
+		ID: m.ID, Name: m.PublicName(), DisplayName: m.DisplayName, OriginalName: m.Name,
+		ContextWindow: m.ContextWindow,
+		Capabilities:  m.Capabilities, Enabled: m.Enabled,
 		Offers: make([]domain.OfferRead, 0, len(offers)),
 	}
 	for _, o := range offers {
 		mr.Offers = append(mr.Offers, s.offerRead(v, o))
 	}
-	if u, ok := today[m.Name]; ok {
+	if u, ok := today[m.PublicName()]; ok {
 		mr.TodayRequests = u.Requests
 		mr.SuccessRate = (1 - u.ErrorRate) * 100
 	} else {

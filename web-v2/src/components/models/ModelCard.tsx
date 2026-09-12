@@ -38,8 +38,18 @@ export default function ModelCard({
       styles={{ body: { padding: 16, display: 'flex', flexDirection: 'column', gap: 10, height: '100%' } }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <span className="gw-mono" style={{ fontSize: 14, fontWeight: 500, wordBreak: 'break-all' }}>
-          {model.name}
+        <span style={{ minWidth: 0 }}>
+          <span className="gw-mono" style={{ fontSize: 14, fontWeight: 500, wordBreak: 'break-all' }}>
+            {model.name}
+          </span>
+          {model.displayName && (
+            <span
+              className="gw-mono"
+              style={{ display: 'block', fontSize: 11, color: 'var(--gw-text-3)', wordBreak: 'break-all' }}
+            >
+              原始名 {model.originalName}
+            </span>
+          )}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--gw-text-3)', flex: '0 0 auto' }}>
           {model.offers.length} 家
