@@ -171,7 +171,7 @@ export default function Models() {
   const [cap, setCap] = useState<string>('');
   const [ctxRange, setCtxRange] = useState<string>('');
   const [sort, setSort] = useState<SortKey>('price');
-  const [enableState, setEnableState] = useState<EnableState>('all');
+  const [enableState, setEnableState] = useState<EnableState>('on');
   const [view, setView] = useState<string>('plaza');
   const [compare, setCompare] = useState<number[]>([]);
   const [drawerId, setDrawerId] = useState<number | null>(null);

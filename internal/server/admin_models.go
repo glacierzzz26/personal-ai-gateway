@@ -51,9 +51,23 @@ func (s *Server) handleModelsUpdate(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &in) {
 		return
 	}
+	cur, err := s.st.GetModel(id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	// 缺省 enabled 视为 true(与 ModelInput.Defaults 一致)
+	enabledAfter := in.Enabled == nil || *in.Enabled
 	if _, err := s.st.UpdateModel(id, in); err != nil {
 		writeStoreErr(w, err)
 		return
+	}
+	// 模型由停用切到启用时,联动打开其下全部供给源;单独关/开供给源不受父级锁死。
+	if !cur.Enabled && enabledAfter {
+		if err := s.st.SetModelOffersEnabled(id, true); err != nil {
+			writeStoreErr(w, err)
+			return
+		}
 	}
 	mr, err := s.singleModelRead(id)
 	if err != nil {

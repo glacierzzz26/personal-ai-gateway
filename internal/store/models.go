@@ -247,6 +247,12 @@ func (s *Store) UpdateOffer(id int64, in domain.OfferInput) (domain.OfferRead, e
 	return s.GetOffer(id)
 }
 
+// SetModelOffersEnabled 批量启停某模型下全部供给源(启用模型时联动开启)。
+func (s *Store) SetModelOffersEnabled(modelID int64, enabled bool) error {
+	_, err := s.db.Exec(`UPDATE model_offers SET enabled=? WHERE model_id=?`, b2i(enabled), modelID)
+	return err
+}
+
 // SetOfferEnabled 供给源启停(不改报价)。
 func (s *Store) SetOfferEnabled(id int64, enabled bool) error {
 	res, err := s.db.Exec(`UPDATE model_offers SET enabled=? WHERE id=?`, b2i(enabled), id)

@@ -32,6 +32,8 @@ const components: NonNullable<ThemeConfig['components']> = {
   Tabs: { horizontalItemPadding: '10px 0', horizontalItemGutter: 24, cardBg: 'transparent', itemSelectedColor: '#2563EB' },
   Segmented: { itemSelectedBg: '#FFFFFF', trackBg: '#F1F5F9', borderRadius: 8 },
   Slider: { handleSize: 8, handleSizeHover: 8 },
+  // 开关统一绿色(开启态),区别于全局主题蓝
+  Switch: { colorPrimary: '#16A34A' },
 };
 
 export const lightTheme: ThemeConfig = {

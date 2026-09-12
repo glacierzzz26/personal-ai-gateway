@@ -298,6 +298,78 @@ func TestAdminCRUD(t *testing.T) {
 	mustStatus(t, code, http.StatusOK, "clear logs")
 }
 
+// TestSyncModelsDefaultDisabledAndEnableCascade 同步导入的模型默认停用;
+// 打开模型开关时联动打开其下全部供给源,此后单个供给源仍可单独关闭。
+func TestSyncModelsDefaultDisabledAndEnableCascade(t *testing.T) {
+	srv, c, _ := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+
+	up := fakeUpstream(t, []string{"sync-a", "sync-b"})
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels", map[string]any{
+		"name": "sync-ch", "provider": "OpenAI", "baseUrl": up.URL, "apiKey": "sk-sync",
+	})
+	mustStatus(t, code, http.StatusOK, "create channel")
+	chID := int64(decode[map[string]any](t, body)["id"].(float64))
+
+	code, _ = doJSON(t, c, http.MethodPost, fmt.Sprintf("%s/api/v1/channels/%d/sync-models", base, chID), nil)
+	mustStatus(t, code, http.StatusOK, "sync models")
+
+	code, body = doJSON(t, c, http.MethodGet, base+"/api/v1/models", nil)
+	mustStatus(t, code, http.StatusOK, "list models")
+	models := decode[[]map[string]any](t, body)
+	if len(models) != 2 {
+		t.Fatalf("models = %d, want 2", len(models))
+	}
+	for _, m := range models {
+		if m["enabled"] != false {
+			t.Errorf("synced model %v should default disabled", m["name"])
+		}
+		offers := m["offers"].([]any)
+		if len(offers) != 1 || offers[0].(map[string]any)["enabled"] != false {
+			t.Errorf("synced offer for %v should default disabled: %v", m["name"], offers)
+		}
+	}
+
+	// 打开模型开关(前端发送完整草稿)→ 供给源联动打开
+	m0 := models[0]
+	mid := int64(m0["id"].(float64))
+	code, _ = doJSON(t, c, http.MethodPatch, fmt.Sprintf("%s/api/v1/models/%d", base, mid), map[string]any{
+		"name": m0["name"], "contextWindow": m0["contextWindow"],
+		"capabilities": m0["capabilities"], "enabled": true,
+	})
+	mustStatus(t, code, http.StatusOK, "enable model")
+
+	code, body = doJSON(t, c, http.MethodGet, base+"/api/v1/models", nil)
+	mustStatus(t, code, http.StatusOK, "list models after enable")
+	for _, m := range decode[[]map[string]any](t, body) {
+		if int64(m["id"].(float64)) != mid {
+			continue
+		}
+		for _, o := range m["offers"].([]any) {
+			if o.(map[string]any)["enabled"] != true {
+				t.Errorf("offer should be enabled with parent model: %v", o)
+			}
+		}
+	}
+
+	// 单个供给源仍可单独关闭,父级开关不锁死
+	offerID := int64(m0["offers"].([]any)[0].(map[string]any)["id"].(float64))
+	code, _ = doJSON(t, c, http.MethodPatch, fmt.Sprintf("%s/api/v1/offers/%d", base, offerID),
+		map[string]any{"enabled": false})
+	mustStatus(t, code, http.StatusOK, "disable single offer")
+	code, body = doJSON(t, c, http.MethodGet, base+"/api/v1/models", nil)
+	mustStatus(t, code, http.StatusOK, "list models after offer disable")
+	for _, m := range decode[[]map[string]any](t, body) {
+		if int64(m["id"].(float64)) != mid {
+			continue
+		}
+		if m["offers"].([]any)[0].(map[string]any)["enabled"] != false {
+			t.Error("single offer should stay disabled independently")
+		}
+	}
+}
+
 // TestTokenExpiryCanonicalized 管理台输入宽松日期(YYYY-MM-DD)→ 库内规范为 UTC RFC3339Nano,
 // 且列表状态与数据面判定一致(过期即 expired,不再出现"管理台 active / 网关 401"的矛盾)。
 func TestTokenExpiryCanonicalized(t *testing.T) {
