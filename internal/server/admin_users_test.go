@@ -154,10 +154,15 @@ func TestClaudeConfigGeneration(t *testing.T) {
 	code, _ := doJSON(t, admin, http.MethodPost, fmt.Sprintf("%s/api/v1/channels/%d/sync-models", base, chID), nil)
 	mustStatus(t, code, http.StatusOK, "sync models")
 
-	// 启用全部供给源(同步默认停用)
+	// 启用全部模型与供给源(同步默认停用;打开模型开关会联动开供给源)
 	code, body := doJSON(t, admin, http.MethodGet, base+"/api/v1/models", nil)
 	mustStatus(t, code, http.StatusOK, "list models")
 	for _, m := range decode[[]map[string]any](t, body) {
+		mid := int64(m["id"].(float64))
+		code, _ = doJSON(t, admin, http.MethodPatch, fmt.Sprintf("%s/api/v1/models/%d", base, mid),
+			map[string]any{"name": m["name"], "contextWindow": m["contextWindow"],
+				"capabilities": m["capabilities"], "enabled": true})
+		mustStatus(t, code, http.StatusOK, "enable model")
 		for _, o := range m["offers"].([]any) {
 			oid := int64(o.(map[string]any)["id"].(float64))
 			code, _ = doJSON(t, admin, http.MethodPatch, fmt.Sprintf("%s/api/v1/offers/%d", base, oid),

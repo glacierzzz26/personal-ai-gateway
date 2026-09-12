@@ -181,8 +181,9 @@ func (s *Server) handleChannelSyncModels(w http.ResponseWriter, r *http.Request)
 	for _, name := range ids {
 		model, err := s.st.GetModelByName(name)
 		if err != nil {
-			// 目录无此模型 → 新建(能力未知,可后编辑)
-			model, err = s.st.CreateModel(domain.ModelInput{Name: name})
+			// 目录无此模型 → 新建(默认停用,人工确认定价后再启用)
+			disabled := false
+			model, err = s.st.CreateModel(domain.ModelInput{Name: name, Enabled: &disabled})
 			if err != nil {
 				writeStoreErr(w, err)
 				return
