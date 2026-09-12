@@ -30,7 +30,7 @@ lock_tests = true              # refuse changes that delete or weaken tests
 [paths]
 # The fixer may not touch these. `.claude/autofix.toml` is always protected,
 # whether or not you list it.
-protected = [".github/workflows/**", "infra/**", "*.lock", "CODEOWNERS"]
+protected = [".github/workflows/**", "deploy/**", "*.lock", "CODEOWNERS"]
 # Used by lock_tests to recognise test files.
 test_globs = ["**/*_test.go"]
 ignore = ["docs/**"]
