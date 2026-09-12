@@ -13,6 +13,8 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://localhost:8787', changeOrigin: true },
       '/v1': { target: 'http://localhost:8787', changeOrigin: true },
+      // 顶栏全局状态 chip 探 /healthz；不代理的话开发态会恒显示「网关不可达」
+      '/healthz': { target: 'http://localhost:8787', changeOrigin: true },
     },
   },
 });

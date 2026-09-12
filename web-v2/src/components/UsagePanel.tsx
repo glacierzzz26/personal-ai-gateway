@@ -6,6 +6,7 @@ import Chart from '@/components/Chart';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { fmt } from '@/utils/format';
+import { TOKENS } from '@/styles/tokens';
 import type { EChartsOption } from 'echarts';
 import type { UsageDim, UsageRow } from '@/types';
 
@@ -105,8 +106,8 @@ export default function UsagePanel() {
       title: '花费占比', key: 'share', width: 180,
       render: (_, r) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--gw-fill)', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)', borderRadius: 2 }} />
+          <div className="gw-bar" style={{ flex: 1 }} role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
+            <i style={{ width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)' }} />
           </div>
           <span className="gw-num" style={{ fontSize: 12, color: 'var(--gw-text-3)', width: 46 }}>
             {totals.cost ? ((r.costUsd / totals.cost) * 100).toFixed(1) : '0.0'}%
@@ -116,8 +117,9 @@ export default function UsagePanel() {
     },
     {
       title: '错误率', dataIndex: 'errorRate', align: 'right',
+      /* 阈值与渠道/令牌侧统一：≥1% 视为需关注，≥0.5% 为观察区 */
       render: v => (
-        <span className="gw-num" style={{ color: v > 0.01 ? '#EF4444' : v > 0.005 ? '#F59E0B' : undefined }}>
+        <span className="gw-num" style={{ color: v > 0.01 ? TOKENS.err : v > 0.005 ? TOKENS.warn : undefined }}>
           {fmt.pct(v)}
         </span>
       ),
@@ -160,8 +162,8 @@ export default function UsagePanel() {
               costRows.slice(0, 5).map(r => (
                 <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, fontSize: 13 }}>
                   <span className="gw-mono" style={{ width: 150, color: 'var(--gw-text-2)' }}>{r.name}</span>
-                  <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--gw-fill)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)', borderRadius: 2 }} />
+                  <div className="gw-bar" style={{ flex: 1 }} role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
+                    <i style={{ width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)' }} />
                   </div>
                   <span className="gw-num" style={{ width: 70, textAlign: 'right' }}>{fmt.usd(r.costUsd)}</span>
                 </div>

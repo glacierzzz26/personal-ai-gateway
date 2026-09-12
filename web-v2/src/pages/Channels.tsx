@@ -1,20 +1,20 @@
 import { useMemo, useState } from 'react';
 import {
-  Alert, App, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select,
-  Space, Spin, Switch, Table, Tooltip, Typography,
+  App, Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
+import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import ProviderMark from '@/components/ProviderMark';
-import StatusTag from '@/components/StatusTag';
+import StatusDot from '@/components/StatusDot';
+import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import { api } from '@/services/api';
 import { providers } from '@/constants';
 import { fmt } from '@/utils/format';
+import { TOKENS } from '@/styles/tokens';
 import type { Channel, ChannelDraft, ChannelQuota, HealthStatus, Provider, QuotaWindowKey } from '@/types';
-
-const { Text } = Typography;
 
 /** 新建渠道表单默认值 */
 const DEFAULTS = {
@@ -64,11 +64,14 @@ const QUOTA_WINS: Array<{ key: QuotaWindowKey; label: string }> = [
   { key: 'monthly', label: '月' },
 ];
 
+/**
+ * 额度告警阈值：与令牌侧统一为 85%。
+ * （此处原是 50/80%，与概览页的 60/85% 不一致，会让同一个额度在两个页面显示成不同的严重程度。）
+ */
+const QUOTA_ALERT = 85;
+
 /** 百分比展示:整数不带小数,否则保留 1 位。 */
 const pctText = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(1));
-
-/** 已用阈值着色:≥80% 红 / ≥50% 橙。 */
-const pctColor = (pct: number): string => (pct >= 80 ? '#EF4444' : pct >= 50 ? '#F59E0B' : 'inherit');
 
 const dash = <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
 
@@ -77,7 +80,7 @@ function QuotaCell({ q, provider }: { q: UseQueryResult<ChannelQuota, Error>; pr
   if (provider === 'Anthropic') {
     return <Tooltip title="Anthropic 协议无 /v1/usage 额度接口">{dash}</Tooltip>;
   }
-  if (q.isPending && !q.data) return <Spin size="small" />;
+  if (q.isPending && !q.data) return <span style={{ color: 'var(--gw-text-3)' }}>读取中…</span>;
   const quota = q.data;
   if (q.isError || !quota || !quota.available) {
     return <Tooltip title={quota?.error || '额度接口未响应'}>{dash}</Tooltip>;
@@ -87,7 +90,7 @@ function QuotaCell({ q, provider }: { q: UseQueryResult<ChannelQuota, Error>; pr
     return <Tooltip title="该渠道未返回可用额度窗口(不支持或已耗尽未上报)">{dash}</Tooltip>;
   }
   const detail = (
-    <div style={{ fontSize: 12, lineHeight: 1.9, minWidth: 170 }}>
+    <div style={{ fontSize: 12.5, lineHeight: 1.9, minWidth: 180 }}>
       {quota.planName && <div style={{ opacity: 0.85 }}>套餐：{quota.planName}</div>}
       {wins.map(w => {
         const pct = quota.windows![w.key]!.percent;
@@ -102,13 +105,19 @@ function QuotaCell({ q, provider }: { q: UseQueryResult<ChannelQuota, Error>; pr
   );
   return (
     <Tooltip title={detail}>
-      <span style={{ whiteSpace: 'nowrap' }} className="gw-num">
-        {wins.map((w, i) => {
+      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+        {wins.map(w => {
           const pct = quota.windows![w.key]!.percent;
+          const warn = pct >= QUOTA_ALERT;
           return (
-            <span key={w.key}>
-              {i > 0 && <span style={{ margin: '0 4px', color: 'var(--gw-text-3)' }}>·</span>}
-              <span style={{ color: pctColor(pct) }}>{w.label} {pctText(pct)}%</span>
+            <span key={w.key} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={{ width: 22, color: 'var(--gw-text-3)', fontSize: 12.5 }}>{w.label}</span>
+              <span className="gw-bar" style={{ width: 62 }} role="img" aria-label={`${w.label} 额度已用 ${pctText(pct)}%`}>
+                <i style={{ width: `${Math.min(pct, 100)}%`, background: warn ? TOKENS.warn : TOKENS.c1 }} />
+              </span>
+              <span className="gw-num" style={{ fontSize: 12.5, color: warn ? 'var(--gw-warn)' : 'var(--gw-text-2)' }}>
+                {pctText(pct)}%
+              </span>
             </span>
           );
         })}
@@ -136,7 +145,7 @@ export default function Channels() {
   // 同步模型结果展示
   const [syncRes, setSyncRes] = useState<{ name: string; added: number; updated: number; models: string[]; modelCount: number } | null>(null);
 
-  const { data: channels = [], isLoading } = useQuery({
+  const { data: channels = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['channels'],
     queryFn: api.getChannels,
     retry: 0,
@@ -294,18 +303,18 @@ export default function Channels() {
 
   const columns: ColumnsType<Channel> = [
     {
-      title: '名称', dataIndex: 'name',
+      title: '渠道', dataIndex: 'name',
       render: (v, r) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{v}</div>
-          <div style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>{r.modelCount} 个模型</div>
+          <div style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>{r.modelCount} 个模型</div>
         </div>
       ),
     },
     {
-      title: '供应商', dataIndex: 'provider',
+      title: '供应商', dataIndex: 'provider', width: 130,
       render: v => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           <ProviderMark name={v} />{v}
         </span>
       ),
@@ -313,55 +322,52 @@ export default function Channels() {
     {
       title: 'Base URL', dataIndex: 'baseUrl',
       render: v => (
-        <Text className="gw-mono" style={{ color: 'var(--gw-text-2)', maxWidth: 240 }} ellipsis>
-          {v}
-        </Text>
+        <Tooltip title={v}>
+          <span
+            className="gw-mono"
+            style={{
+              display: 'inline-block', maxWidth: 220, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom',
+              color: 'var(--gw-text-3)',
+            }}
+          >
+            {v}
+          </span>
+        </Tooltip>
       ),
     },
+    { title: '优先级', dataIndex: 'priority', align: 'right', width: 90, render: v => <span className="gw-num">{v}</span> },
+    { title: '权重', dataIndex: 'weight', align: 'right', width: 80, render: v => <span className="gw-num">{v}</span> },
     {
-      title: '优先级', dataIndex: 'priority', align: 'right',
-      render: v => <span className="gw-num">{v}</span>,
-    },
-    {
-      title: '权重', dataIndex: 'weight', align: 'right',
-      render: v => <span className="gw-num">{v}</span>,
-    },
-    {
-      title: '成功率', dataIndex: 'successRate', align: 'right',
+      title: '成功率', dataIndex: 'successRate', align: 'right', width: 100,
       render: v => <span className="gw-num">{fmt.pct(v, 2)}</span>,
     },
     {
-      title: '延迟', dataIndex: 'latencyMs', align: 'right',
+      title: '延迟', dataIndex: 'latencyMs', align: 'right', width: 100,
       render: (v, r) => (
         <span className="gw-num">{r.status === 'down' || r.status === 'disabled' ? '—' : fmt.ms(v)}</span>
       ),
     },
+    { title: '今日 Token', dataIndex: 'todayTokens', align: 'right', width: 120, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '今日花费', dataIndex: 'todayCostUsd', align: 'right', width: 110, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
     {
-      title: '今日 Tokens', dataIndex: 'todayTokens', align: 'right',
-      render: v => <span className="gw-num">{fmt.k(v)}</span>,
-    },
-    {
-      title: '今日花费', dataIndex: 'todayCostUsd', align: 'right',
-      render: v => <span className="gw-num">{fmt.usd(v)}</span>,
-    },
-    {
-      title: '额度', key: 'quota', width: 200,
+      title: '额度', key: 'quota', width: 180,
       render: (_, r) => {
         const q = quotaById.get(r.id);
         return q ? <QuotaCell q={q} provider={r.provider} /> : dash;
       },
     },
     {
-      title: '状态', dataIndex: 'status',
+      title: '状态', dataIndex: 'status', width: 150,
       render: (_, r) => (
         <Space size={6}>
-          <StatusTag status={r.status} />
-          {r.circuitOpen && <Text type="danger" style={{ fontSize: 12 }}>熔断中</Text>}
+          <StatusDot status={r.status} />
+          {r.circuitOpen && <span className="gw-badge" style={{ color: TOKENS.err, borderColor: TOKENS.err }}>熔断中</span>}
         </Space>
       ),
     },
     {
-      title: '', align: 'right', width: 260,
+      title: '操作', align: 'right', width: 270,
       render: (_, r) => (
         <Space size={4} wrap>
           <Button
@@ -381,43 +387,75 @@ export default function Channels() {
     },
   ];
 
+  const filtering = !!(kw || provider || status);
+
+  const emptyNode = isError ? (
+    <ErrorState
+      title="渠道列表加载失败"
+      desc="无法读取渠道。若网关管理面仍在运行，已配置的转发不受影响。"
+      onRetry={() => void refetch()}
+    />
+  ) : channels.length === 0 ? (
+    <EmptyState
+      title="还没有渠道"
+      desc="一条渠道 = 一个上游 API 端点与凭据。至少建一个，网关才能把请求转发出去。"
+      action={<Button size="small" type="primary" onClick={openCreate}>新建渠道</Button>}
+    />
+  ) : (
+    <NoResultState
+      title="没有符合条件的渠道"
+      desc="当前筛选（关键字 / 供应商 / 状态）没有命中。"
+      action={<Button size="small" onClick={() => { setKw(''); setProvider(''); setStatus(''); }}>清除筛选</Button>}
+    />
+  );
+
   return (
     <div className="gw-page">
       <PageHeader
         title="渠道管理"
-        desc="一条渠道 = 一个上游 API 端点与凭据,管的是「怎么连上去」"
+        desc="一条渠道 = 一个上游 API 端点与凭据，管的是「怎么连上去」"
         extra={<Button type="primary" onClick={openCreate}>新建渠道</Button>}
       />
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-        <Input.Search allowClear placeholder="搜索名称或地址" style={{ width: 220 }} value={kw} onChange={e => setKw(e.target.value)} />
-        <Select
-          style={{ width: 140 }} value={provider} onChange={setProvider}
-          options={[{ value: '', label: '全部供应商' }, ...providers.map(p => ({ value: p, label: p }))]}
-        />
-        <Select
-          style={{ width: 130 }} value={status} onChange={setStatus}
-          options={[
-            { value: '', label: '全部状态' },
-            { value: 'healthy' satisfies HealthStatus, label: '健康' },
-            { value: 'degraded' satisfies HealthStatus, label: '降级' },
-            { value: 'down' satisfies HealthStatus, label: '不可用' },
-            { value: 'disabled' satisfies HealthStatus, label: '已停用' },
-          ]}
-        />
-      </div>
+      <Blocks>
+        <BlockCard>
+          <div className="gw-toolbar">
+            <Input.Search allowClear placeholder="搜索名称或地址" style={{ width: 240 }} value={kw} onChange={e => setKw(e.target.value)} />
+            <Select
+              style={{ width: 150 }} value={provider} onChange={setProvider}
+              options={[{ value: '', label: '全部供应商' }, ...providers.map(p => ({ value: p, label: p }))]}
+            />
+            <Select
+              style={{ width: 140 }} value={status} onChange={setStatus}
+              options={[
+                { value: '', label: '全部状态' },
+                { value: 'healthy' satisfies HealthStatus, label: '健康' },
+                { value: 'degraded' satisfies HealthStatus, label: '降级' },
+                { value: 'down' satisfies HealthStatus, label: '不可用' },
+                { value: 'disabled' satisfies HealthStatus, label: '已停用' },
+              ]}
+            />
+            <span className="count">
+              {filtering ? (
+                <>筛选出 <b>{list.length}</b> / {channels.length} 条渠道</>
+              ) : (
+                <>共 <b>{channels.length}</b> 条渠道</>
+              )}
+            </span>
+          </div>
 
-      <Card>
-        <Table<Channel>
-          rowKey="id"
-          size="middle"
-          loading={isLoading}
-          dataSource={list}
-          columns={columns}
-          scroll={{ x: 1480 }}
-          pagination={{ pageSize: 10, showSizeChanger: false }}
-        />
-      </Card>
+          <Table<Channel>
+            rowKey="id"
+            size="middle"
+            loading={isLoading && channels.length === 0}
+            dataSource={list}
+            columns={columns}
+            scroll={{ x: 1720 }}
+            pagination={channels.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'default' } : false}
+            locale={{ emptyText: emptyNode }}
+          />
+        </BlockCard>
+      </Blocks>
 
       {/* 新建 / 编辑共享弹窗 */}
       <Modal
@@ -434,6 +472,7 @@ export default function Channels() {
           form={form}
           layout="vertical"
           onFinish={handleSubmit}
+          requiredMark={false}
           initialValues={{ provider: DEFAULTS.provider, enabled: DEFAULTS.enabled }}
         >
           <Row gutter={12}>
@@ -477,7 +516,10 @@ export default function Channels() {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="timeoutMs" label="超时" rules={[{ required: true, message: '必填' }]}>
+              <Form.Item
+                name="timeoutMs" label="超时" rules={[{ required: true, message: '必填' }]}
+                tooltip="渠道级超时只作为选路权重参考，不约束单个请求；请求超时以「系统设置」为准"
+              >
                 <Select options={TIMEOUT_OPTIONS} />
               </Form.Item>
             </Col>
@@ -485,7 +527,7 @@ export default function Channels() {
 
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="maxFailures" label="熔断阈值(次)" tooltip="连续失败多少次后熔断" rules={[{ required: true, message: '必填' }]}>
+              <Form.Item name="maxFailures" label="熔断阈值(次)" tooltip="连续失败多少次后熔断；499 客户端中断不计入" rules={[{ required: true, message: '必填' }]}>
                 <InputNumber min={1} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
@@ -515,32 +557,24 @@ export default function Channels() {
       <Modal
         title={syncRes ? `同步模型 · ${syncRes.name}` : ''}
         open={!!syncRes}
-        footer={null}
+        footer={<Button type="primary" onClick={() => setSyncRes(null)}>关闭</Button>}
         onCancel={() => setSyncRes(null)}
         width={560}
       >
         {syncRes && (
           <>
-            <Alert
-              type={syncRes.added > 0 ? 'success' : 'info'}
-              showIcon
-              style={{ marginBottom: 12 }}
-              message={`本渠道现关联 ${syncRes.modelCount} 个模型(本次新增 ${syncRes.added}、已存在 ${syncRes.updated})`}
-              description="目录 / 供给源已刷新;新同步的模型默认停用,需到「模型广场」定价后启用。"
-            />
+            <div className="gw-note" role="status" style={{ marginBottom: 14 }}>
+              <b>本渠道现关联 {syncRes.modelCount} 个模型</b>
+              <span>本次新增 {syncRes.added}、已存在 {syncRes.updated}。新同步的模型默认停用，需到「模型广场」定价后启用。</span>
+            </div>
             {syncRes.models.length > 0 ? (
-              <div
-                className="gw-mono"
-                style={{
-                  maxHeight: 320, overflow: 'auto', fontSize: 12, lineHeight: 1.8,
-                  background: 'var(--gw-fill)', border: '1px solid var(--gw-border)',
-                  borderRadius: 6, padding: '8px 12px',
-                }}
-              >
+              <pre className="gw-pre" style={{ maxHeight: 320, overflow: 'auto' }}>
                 {syncRes.models.join('\n')}
-              </div>
+              </pre>
             ) : (
-              <Text type="secondary">该渠道没有返回新模型(目录中均已存在)。</Text>
+              <div style={{ fontSize: 13.5, color: 'var(--gw-text-3)' }}>
+                该渠道没有返回新模型（目录中均已存在）。
+              </div>
             )}
           </>
         )}

@@ -1,20 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, App, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal,
-  Radio, Select, Space, Switch, Table, Tag, Tooltip,
+  App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Modal,
+  Radio, Select, Space, Switch, Table, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
+import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
-import StatusTag from '@/components/StatusTag';
+import StatusDot from '@/components/StatusDot';
+import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { copyText } from '@/utils/clipboard';
 import { fmt } from '@/utils/format';
+import { TOKENS } from '@/styles/tokens';
 import type { GatewayToken, ModelCatalogItem, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
+
+/**
+ * 额度阈值集中一处，避免各页各写一套。
+ * 逼近=≥60%（概览「额度逼近」块用它），告警=≥85%（顶栏与状态条用它）。
+ */
+const QUOTA_ALERT = 0.85;
 
 interface TokenFormValues {
   name: string;
@@ -233,16 +242,22 @@ function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => v
       width={640}
     >
       {err && (
-        <Alert type="error" showIcon style={{ marginBottom: 12 }} message={err} />
+        <div className="gw-note" role="status" style={{ borderLeftColor: TOKENS.err, background: 'var(--gw-card)', marginBottom: 12 }}>
+          <b style={{ color: TOKENS.err }}>⚠ 生成失败</b>
+          <span className="gw-mono" style={{ flex: 1 }}>{err}</span>
+        </div>
       )}
       {data?.warnings?.map(w => (
-        <Alert key={w} type="warning" showIcon style={{ marginBottom: 12 }} message={w} />
+        <div key={w} className="gw-note" role="status" style={{ borderLeftColor: TOKENS.warn, background: 'var(--gw-card)', marginBottom: 12 }}>
+          <b style={{ color: TOKENS.warn }}>⚠ 注意</b>
+          <span style={{ flex: 1 }}>{w}</span>
+        </div>
       ))}
       <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 8 }}>
         把下面整段合并进 <span className="gw-mono">~/.claude/settings.json</span> 的顶层(已有 <span className="gw-mono">env</span> 则合并其键值),然后重启 Claude Code。
       </div>
       <div style={{ position: 'relative' }}>
-        <pre className="gw-json" style={{ maxHeight: 360, overflow: 'auto', margin: 0 }}>
+        <pre className="gw-pre" style={{ maxHeight: 360, overflow: 'auto' }}>
           {isLoading ? '生成中…' : (data?.settingsJson ?? '')}
         </pre>
         <Button
@@ -267,7 +282,7 @@ export default function Tokens() {
   const [configToken, setConfigToken] = useState<GatewayToken | null>(null);
   const [ownerFilter, setOwnerFilter] = useState<number | 'all'>('all');
 
-  const { data: tokens = [], isLoading } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
+  const { data: tokens = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
   const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, enabled: isAdmin });
 
@@ -321,97 +336,85 @@ export default function Tokens() {
     );
   };
 
+  /** 额度条：颜色随占比升级，但文字始终给出具体金额与百分比。 */
+  const quotaCell = (r: GatewayToken) => {
+    if (r.quotaUsd <= 0) {
+      return (
+        <span className="gw-num" style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>
+          {fmt.usd(r.usedUsd)} / 不限
+        </span>
+      );
+    }
+    const rate = Math.min(r.usedUsd / r.quotaUsd, 1);
+    const tone = rate >= QUOTA_ALERT ? 'warn' : 'primary';
+    return (
+      <div>
+        <div className="gw-bar" role="img" aria-label={`额度已用 ${(rate * 100).toFixed(0)}%`}>
+          <i style={{ width: `${rate * 100}%`, background: tone === 'warn' ? TOKENS.warn : TOKENS.c1 }} />
+        </div>
+        <div className="gw-num" style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginTop: 5 }}>
+          {fmt.usd(r.usedUsd)} / {fmt.usd(r.quotaUsd)} · {(rate * 100).toFixed(0)}%
+        </div>
+      </div>
+    );
+  };
+
   const columns: ColumnsType<GatewayToken> = useMemo(() => [
-    { title: '名称', dataIndex: 'name', render: v => <b style={{ fontWeight: 500 }}>{v}</b> },
+    { title: '名称', dataIndex: 'name', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
     ...(isAdmin
       ? [{
-          title: '归属', dataIndex: 'ownerName', width: 120,
+          title: '归属', dataIndex: 'ownerName', width: 130,
           render: (_: unknown, r: GatewayToken) =>
             r.ownerId == null
               ? <span style={{ color: 'var(--gw-text-3)' }}>全局</span>
-              : <Tag>{r.ownerName}</Tag>,
+              : <span className="gw-badge">{r.ownerName}</span>,
         }] as ColumnsType<GatewayToken>
       : []),
     {
       title: 'Key', dataIndex: 'keyMasked', width: 200,
-      render: v => (
-        <span
-          className="gw-mono"
-          style={{
-            fontSize: 12, padding: '1px 8px', borderRadius: 4,
-            border: '1px solid var(--gw-border)', background: 'var(--gw-fill)',
-            color: 'var(--gw-text-2)',
-          }}
-        >
-          {v}
-        </span>
-      ),
+      render: v => <span className="gw-mono" style={{ color: 'var(--gw-text-3)' }}>{v}</span>,
     },
     {
-      title: '可用模型', dataIndex: 'allowedModels', width: 220,
+      title: '可用模型', dataIndex: 'allowedModels', width: 200,
       render: v => {
         const list = v as string[];
-        if (list.length === 1 && list[0] === '*') return <Tag>不限</Tag>;
+        if (list.length === 1 && list[0] === '*') return <span className="gw-badge tint">不限</span>;
         if (!list.length) return <span style={{ color: 'var(--gw-text-3)' }}>无</span>;
-        return list.map(m => <Tag key={m} style={{ marginInlineEnd: 4 }}>{m}</Tag>);
-      },
-    },
-    {
-      title: '额度使用', key: 'quota', width: 220,
-      render: (_, r) => {
-        if (r.quotaUsd <= 0) {
-          return (
-            <span style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
-              已用 <span className="gw-num">{fmt.usd(r.usedUsd)}</span> / 不限
-            </span>
-          );
-        }
-        const rate = Math.min(r.usedUsd / r.quotaUsd, 1);
-        const color = rate > 0.9 ? '#EF4444' : rate > 0.8 ? '#F59E0B' : 'var(--gw-primary)';
+        const shown = list.slice(0, 2);
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--gw-fill)', overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${rate * 100}%`, background: color, borderRadius: 2 }} />
-            </div>
-            <span className="gw-num" style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
-              {fmt.usd(r.usedUsd)} / {fmt.usd(r.quotaUsd)}
-            </span>
-          </div>
+          <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap' }}>
+            {shown.map(m => <span className="gw-badge gw-mono" key={m}>{m}</span>)}
+            {list.length > shown.length && (
+              <Tooltip title={list.slice(2).join('、')}>
+                <span className="gw-badge">+{list.length - shown.length}</span>
+              </Tooltip>
+            )}
+          </span>
         );
       },
     },
-    {
-      title: 'RPM', dataIndex: 'rpmLimit', align: 'right',
-      render: v => <span className="gw-num">{v}</span>,
-    },
+    { title: '额度使用', key: 'quota', width: 210, render: (_, r) => quotaCell(r) },
+    { title: 'RPM', dataIndex: 'rpmLimit', align: 'right', width: 90, render: v => <span className="gw-num">{v || '不限'}</span> },
     {
       title: '过期时间', dataIndex: 'expiresAt', width: 140,
       render: v => {
         if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>永不过期</span>;
         const d = dayjs(v);
         if (!d.isValid()) return <span className="gw-mono">{v}</span>;
-        const soon = d.isBefore(dayjs().add(7, 'day'));
-        return (
-          <span className="gw-mono" style={{ color: soon ? (d.isBefore(dayjs()) ? '#EF4444' : '#F59E0B') : undefined }}>
-            {d.format('YYYY-MM-DD')}
-          </span>
-        );
+        return <span className="gw-num">{d.format('YYYY-MM-DD')}</span>;
       },
     },
     {
-      title: '最后使用', dataIndex: 'lastUsedAt', width: 150,
+      title: '最后使用', dataIndex: 'lastUsedAt', width: 160,
       render: v => {
         if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>从未使用</span>;
         const d = dayjs(v);
-        return <span style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
+        return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
+    { title: '状态', dataIndex: 'status', width: 100, render: v => <StatusDot status={v} /> },
     {
-      title: '状态', dataIndex: 'status', width: 90,
-      render: v => <StatusTag status={v} />,
-    },
-    {
-      title: '', align: 'right', width: 200,
+      title: '操作', align: 'right', width: 210,
       render: (_, r) => (
         <Space size={4}>
           <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
@@ -424,7 +427,19 @@ export default function Tokens() {
         </Space>
       ),
     },
-  ], [isAdmin]);
+  ], [isAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const emptyNode = isError ? (
+    <ErrorState title="令牌列表加载失败" desc="无法读取令牌，对外分发的 Key 不受影响。" onRetry={() => void refetch()} />
+  ) : tokens.length === 0 ? (
+    <EmptyState
+      title="还没有访问令牌"
+      desc="令牌是对外分发的网关 Key。创建后可用它调用网关，并单独限制额度与速率。"
+      action={<Button size="small" type="primary" onClick={() => setEditor({ open: true, initial: null })}>新建令牌</Button>}
+    />
+  ) : (
+    <NoResultState title="没有符合归属筛选的令牌" desc="换一个归属用户，或切回「全部归属」。" />
+  );
 
   return (
     <div className="gw-page">
@@ -445,24 +460,25 @@ export default function Tokens() {
                 ]}
               />
             )}
-            <Button type="primary" onClick={() => setEditor({ open: true, initial: null })}>
-              新建令牌
-            </Button>
+            <Button type="primary" onClick={() => setEditor({ open: true, initial: null })}>新建令牌</Button>
           </Space>
         }
       />
 
-      <Card>
-        <Table<GatewayToken>
-          rowKey="id"
-          size="middle"
-          loading={isLoading}
-          dataSource={view}
-          columns={columns}
-          scroll={{ x: 1320 }}
-          pagination={false}
-        />
-      </Card>
+      <Blocks>
+        <BlockCard>
+          <Table<GatewayToken>
+            rowKey="id"
+            size="middle"
+            loading={isLoading && tokens.length === 0}
+            dataSource={view}
+            columns={columns}
+            scroll={{ x: 1420 }}
+            pagination={false}
+            locale={{ emptyText: emptyNode }}
+          />
+        </BlockCard>
+      </Blocks>
 
       <TokenModal
         open={editor.open}
@@ -484,16 +500,11 @@ export default function Tokens() {
       >
         {created && (
           <>
-            <div
-              style={{
-                border: '1px solid var(--gw-border)', borderLeft: '2px solid #F59E0B',
-                borderRadius: 6, padding: '10px 12px', fontSize: 13,
-                color: 'var(--gw-text-2)', background: 'var(--gw-fill)', marginBottom: 16,
-              }}
-            >
-              密钥已加密存储;之后可在列表用「生成配置」再次获取完整 Key。
+            <div className="gw-note" role="status" style={{ marginBottom: 16 }}>
+              <b>密钥已加密存储</b>
+              <span>之后可在列表用「生成配置」再次获取完整 Key。</span>
             </div>
-            <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 6 }}>
+            <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 14 }}>
               掩码形式
               <span className="gw-mono" style={{ marginLeft: 8, color: 'var(--gw-text-3)' }}>{created.token.keyMasked}</span>
             </div>
@@ -501,12 +512,12 @@ export default function Tokens() {
             <div
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, wordBreak: 'break-all',
-                fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: 13,
-                border: '1px solid var(--gw-border)', borderRadius: 8, padding: 12,
-                background: 'var(--gw-fill)',
+                fontSize: 13,
+                border: '1px solid var(--gw-border)', borderRadius: 'var(--gw-r-card)', padding: 12,
+                background: 'var(--gw-bg)',
               }}
             >
-              {created.key}
+              <span className="gw-mono">{created.key}</span>
               <Button size="small" style={{ marginLeft: 'auto', flex: '0 0 auto' }} onClick={() => copyKey(created.key)}>
                 复制
               </Button>

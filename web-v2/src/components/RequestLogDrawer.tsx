@@ -1,6 +1,7 @@
 import { Descriptions, Drawer } from 'antd';
 import type { RequestLogItem } from '@/types';
 import { fmt } from '@/utils/format';
+import { TOKENS } from '@/styles/tokens';
 
 /** 2xx/3xx 视为成功(与管理面日志语义一致)。 */
 const okCode = (code: number) => code >= 100 && code < 400;
@@ -23,9 +24,9 @@ export default function RequestLogDrawer({ detail, onClose }: {
           {detail.error && (
             <div
               style={{
-                border: '1px solid var(--gw-border)', borderLeft: '2px solid #EF4444',
-                borderRadius: 6, padding: '10px 12px', fontSize: 13,
-                color: 'var(--gw-text-2)', background: 'var(--gw-fill)', marginBottom: 16,
+                border: '1px solid var(--gw-border)', borderLeft: `2px solid ${TOKENS.err}`,
+                borderRadius: 'var(--gw-r-card)', padding: '10px 12px', fontSize: 13,
+                color: 'var(--gw-text-2)', background: 'var(--gw-bg)', marginBottom: 16,
                 wordBreak: 'break-all',
               }}
             >

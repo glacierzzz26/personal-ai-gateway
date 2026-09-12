@@ -1,206 +1,441 @@
 import { useMemo, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import {
-  ApartmentOutlined, AppstoreOutlined, BulbOutlined,
-  DashboardOutlined, FileSearchOutlined, KeyOutlined, LockOutlined, LogoutOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, NodeIndexOutlined,
-  SettingOutlined, SunOutlined, TeamOutlined,
-} from '@ant-design/icons';
-import { App, Avatar, Dropdown, Layout, Menu, Typography } from 'antd';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { App, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
+import { useQuery } from '@tanstack/react-query';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
+import CmdK from '@/layout/CmdK';
+import { IconFold } from '@/components/icons';
+import { NAV_GROUPS, crumbOf, visibleNav } from '@/layout/nav';
 import { useUi } from '@/stores/ui';
 import { useSession } from '@/stores/session';
 import { api } from '@/services/api';
 
-const { Header, Sider, Content } = Layout;
+const SIDER_W = 248;
+const SIDER_COLLAPSED_W = 64;
+const TOPBAR_H = 62;
 
-const NAV: Record<string, [group: string, label: string]> = {
-  '/dashboard': ['概览', '运行总览'],
-  '/channels': ['资源', '渠道管理'],
-  '/models': ['资源', '模型广场'],
-  '/routing': ['资源', '路由规则'],
-  '/tokens': ['访问', '访问令牌'],
-  '/logs': ['观测', '请求日志'],
-  '/users': ['系统', '用户管理'],
-  '/settings': ['系统', '系统设置'],
+/** 全局状态 chip 三态 —— 由后端健康检查驱动，不是装饰。 */
+type GateStatus = 'ok' | 'warn' | 'err' | 'loading';
+
+const GATE_TEXT: Record<GateStatus, string> = {
+  ok: '运行正常',
+  warn: '降级运行',
+  err: '网关不可达',
+  loading: '状态读取中',
 };
+
+function Brand({ collapsed }: { collapsed: boolean }) {
+  return (
+    <div
+      style={{
+        height: TOPBAR_H,
+        flex: `0 0 ${TOPBAR_H}px`,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '0 16px',
+        borderBottom: '1px solid var(--gw-border)',
+        overflow: 'hidden',
+      }}
+    >
+      <span className="gw-brand-mark" aria-hidden="true">
+        G
+      </span>
+      {!collapsed && (
+        <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--gw-text)', whiteSpace: 'nowrap' }}>
+          AI Gateway
+        </span>
+      )}
+    </div>
+  );
+}
 
 export default function AppLayout() {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const theme = useUi(s => s.theme);
   const collapsed = useUi(s => s.collapsed);
   const toggleCollapsed = useUi(s => s.toggleCollapsed);
-  const toggleTheme = useUi(s => s.toggleTheme);
+  const setCmdkOpen = useUi(s => s.setCmdkOpen);
   const admin = useSession(s => s.admin);
   const setAdmin = useSession(s => s.setAdmin);
   const isAdmin = admin?.role === 'admin';
   const [pwOpen, setPwOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [userMenuPos, setUserMenuPos] = useState({ top: 0, left: 0 });
 
-  // 普通用户只保留「访问令牌」;管理员见全部。注意依赖 [isAdmin],否则菜单被首次渲染冻住。
-  const items: MenuProps['items'] = useMemo(() => {
-    const list: MenuProps['items'] = [
-      { key: 'g3', type: 'group', label: '访问', children: [
-        { key: '/tokens', icon: <KeyOutlined />, label: '访问令牌' },
-      ] },
-    ];
-    if (isAdmin) {
-      list.unshift(
-        { key: 'g1', type: 'group', label: '概览', children: [
-          { key: '/dashboard', icon: <DashboardOutlined />, label: '运行总览' },
-        ] },
-        { key: 'g2', type: 'group', label: '资源', children: [
-          { key: '/channels', icon: <ApartmentOutlined />, label: '渠道管理' },
-          { key: '/models', icon: <AppstoreOutlined />, label: '模型广场' },
-          { key: '/routing', icon: <NodeIndexOutlined />, label: '路由规则' },
-        ] },
-      );
-      list.push(
-        { key: 'g4', type: 'group', label: '观测', children: [
-          { key: '/logs', icon: <FileSearchOutlined />, label: '请求日志' },
-        ] },
-        { key: 'g5', type: 'group', label: '系统', children: [
-          { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
-          { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
-        ] },
-      );
-    }
-    return list;
-  }, [isAdmin]);
+  /**
+   * 全局状态：探 /healthz。管理面自身可达 = 网关在跑；
+   * 数据面不可达会由 /healthz 的 store 字段反映为 warn。
+   */
+  const { data: health, isError } = useQuery({
+    queryKey: ['healthz'],
+    queryFn: async () => {
+      const r = await fetch('/healthz', { credentials: 'include' });
+      if (!r.ok) throw new Error(String(r.status));
+      return (await r.json()) as { ok?: boolean; store?: string; version?: string };
+    },
+    refetchInterval: 30_000,
+    retry: 0,
+  });
 
-  const current = NAV[pathname];
+  const gate: GateStatus = isError
+    ? 'err'
+    : !health
+      ? 'loading'
+      : health.ok === false || health.store === 'down'
+        ? 'warn'
+        : 'ok';
+  const gateTone = gate === 'ok' ? 'ok' : gate === 'warn' ? 'warn' : gate === 'err' ? 'err' : 'aux';
+
+  const items = useMemo(() => visibleNav(isAdmin), [isAdmin]);
+  const crumb = crumbOf(pathname, isAdmin);
   const username = admin?.username ?? '';
   const avatarLetter = username ? username[0].toUpperCase() : 'A';
 
   const logout = async () => {
-    try { await api.logout(); message.success('已退出登录'); } catch { /* 会话可能已失效,照样回登录页 */ }
+    setUserMenuOpen(false);
+    try {
+      await api.logout();
+    } catch {
+      /* 会话可能已失效，照样回登录页 */
+    }
     setAdmin(null);
+    message.success('已退出登录');
   };
 
-  const userMenu: MenuProps = {
-    items: [
-      {
-        key: 'theme', icon: theme === 'dark' ? <SunOutlined /> : <MoonOutlined />,
-        label: theme === 'dark' ? '切换亮色' : '切换暗色', onClick: toggleTheme,
-      },
-      { key: 'password', icon: <LockOutlined />, label: '修改密码', onClick: () => setPwOpen(true) },
-      ...(isAdmin
-        ? [{ key: 'settings', icon: <SettingOutlined />, label: '系统设置', onClick: () => navigate('/settings') }]
-        : []),
-      { type: 'divider' as const },
-      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true, onClick: logout },
-    ],
-  };
+  const userItems: MenuProps['items'] = [
+    { key: 'password', label: '修改密码', onClick: () => setPwOpen(true) },
+    ...(isAdmin
+      ? [{ key: 'settings', label: '系统设置', onClick: () => navigate('/settings') }]
+      : []),
+    { type: 'divider' as const },
+    { key: 'logout', label: '退出登录', danger: true, onClick: logout },
+  ];
 
   return (
-    <Layout style={{ height: '100vh' }}>
-      <Sider
-        width={220}
-        collapsedWidth={64}
-        collapsed={collapsed}
+    <div style={{ display: 'flex', minHeight: '100vh' }}>
+      {/* ============ 侧栏 ============ */}
+      <aside
+        className="gw-sider"
         style={{
+          width: collapsed ? SIDER_COLLAPSED_W : SIDER_W,
+          flex: `0 0 ${collapsed ? SIDER_COLLAPSED_W : SIDER_W}px`,
           background: 'var(--gw-card)',
           borderRight: '1px solid var(--gw-border)',
+          display: 'flex',
+          flexDirection: 'column',
+          position: 'sticky',
+          top: 0,
+          height: '100vh',
+          transition: 'width .15s ease, flex-basis .15s ease',
         }}
       >
-        <div
-          style={{
-            height: 56, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px',
-            borderBottom: '1px solid var(--gw-border-2)', overflow: 'hidden',
-          }}
-        >
+        <Brand collapsed={collapsed} />
+
+        <nav style={{ flex: 1, overflowY: 'auto', padding: '12px 0 18px' }} aria-label="主导航">
+          {NAV_GROUPS.map(g => {
+            const inGroup = items.filter(it => it.group === g);
+            if (inGroup.length === 0) return null;
+            return (
+              <div key={g}>
+                {!collapsed && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--gw-text-3)',
+                      padding: '16px 22px 7px',
+                      letterSpacing: '.04em',
+                    }}
+                  >
+                    {g}
+                  </div>
+                )}
+                {inGroup.map(it => (
+                  <NavLink
+                    key={it.key}
+                    to={it.key}
+                    aria-current={pathname === it.key ? 'page' : undefined}
+                    title={collapsed ? it.label : undefined}
+                    style={({ isActive }) => ({
+                      position: 'relative',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: collapsed ? 'center' : 'flex-start',
+                      gap: 11,
+                      width: `calc(100% - 18px)`,
+                      margin: '2px 9px',
+                      height: 42,
+                      padding: collapsed ? 0 : '0 14px',
+                      border: 0,
+                      background: isActive ? 'var(--gw-primary-50)' : 'transparent',
+                      borderRadius: 'var(--gw-r-btn)',
+                      fontSize: 14.5,
+                      fontWeight: isActive ? 500 : 400,
+                      color: isActive ? 'var(--gw-primary)' : 'var(--gw-text-2)',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      textDecoration: 'none',
+                    })}
+                  >
+                    {({ isActive }) => (
+                      <>
+                        {/* 激活项 = 3px 主色竖条 */}
+                        {isActive && (
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              position: 'absolute',
+                              left: 0,
+                              top: 6,
+                              bottom: 6,
+                              width: 3,
+                              background: 'var(--gw-primary)',
+                            }}
+                          />
+                        )}
+                        <span style={{ flex: '0 0 16px', display: 'inline-flex' }}>{it.icon}</span>
+                        {!collapsed && <span>{it.label}</span>}
+                      </>
+                    )}
+                  </NavLink>
+                ))}
+              </div>
+            );
+          })}
+        </nav>
+
+        {!collapsed && (
           <div
             style={{
-              width: 26, height: 26, flex: '0 0 26px', borderRadius: 7,
-              background: 'var(--gw-primary)', color: '#fff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 13, fontWeight: 600,
+              borderTop: '1px solid var(--gw-border)',
+              padding: '12px 18px',
+              fontSize: 12.5,
+              color: 'var(--gw-text-3)',
             }}
           >
-            G
+            个人网关 · v2
           </div>
-          {!collapsed && (
-            <Typography.Text style={{ fontWeight: 600, fontSize: 15, whiteSpace: 'nowrap' }}>
-              AI Gateway
-            </Typography.Text>
-          )}
-        </div>
+        )}
+      </aside>
 
-        <Menu
-          mode="inline"
-          selectedKeys={[pathname]}
-          items={items}
-          onClick={({ key }) => navigate(key)}
-          style={{ background: 'transparent', borderInlineEnd: 'none', paddingBottom: 24 }}
-        />
-      </Sider>
-
-      <Layout>
-        <Header
+      {/* ============ 主区 ============ */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <header
           style={{
-            height: 56, lineHeight: '56px', padding: '0 20px',
-            background: 'var(--gw-card)', borderBottom: '1px solid var(--gw-border)',
-            position: 'sticky', top: 0, zIndex: 20,
-            display: 'flex', alignItems: 'center', gap: 12,
+            height: TOPBAR_H,
+            flex: `0 0 ${TOPBAR_H}px`,
+            background: 'var(--gw-card)',
+            borderBottom: '1px solid var(--gw-border)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '0 20px',
+            position: 'sticky',
+            top: 0,
+            zIndex: 20,
           }}
         >
           <button
             type="button"
             onClick={toggleCollapsed}
             aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
+            title={collapsed ? '展开侧栏' : '折叠侧栏'}
             style={{
-              width: 32, height: 32, borderRadius: 8, border: 'none', cursor: 'pointer',
-              background: 'transparent', color: 'var(--gw-text-2)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 34,
+              height: 34,
+              flex: '0 0 34px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 0,
+              background: 'transparent',
+              borderRadius: 'var(--gw-r-btn)',
+              color: 'var(--gw-text-2)',
+              cursor: 'pointer',
             }}
           >
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            <IconFold />
           </button>
 
-          <span style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>
-            {current ? `${current[0]} / ` : ''}
-            <b style={{ color: 'var(--gw-text)', fontWeight: 500 }}>{current?.[1]}</b>
-          </span>
+          <nav
+            aria-label="面包屑"
+            style={{ fontSize: 14, color: 'var(--gw-text-3)', display: 'flex', alignItems: 'center', gap: 7 }}
+          >
+            {crumb.group && (
+              <>
+                <span>{crumb.group}</span>
+                <span style={{ color: 'var(--gw-border)' }}>/</span>
+              </>
+            )}
+            <b style={{ color: 'var(--gw-text)', fontWeight: 500 }}>{crumb.label}</b>
+          </nav>
 
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button
               type="button"
-              onClick={toggleTheme}
-              aria-label="切换主题"
+              className="gw-kbtn"
+              onClick={() => setCmdkOpen(true)}
               style={{
-                width: 32, height: 32, borderRadius: 8, border: 'none', cursor: 'pointer',
-                background: 'transparent', color: 'var(--gw-text-2)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 9,
+                height: 34,
+                padding: '0 9px 0 12px',
+                border: '1px solid var(--gw-border)',
+                borderRadius: 'var(--gw-r-btn)',
+                background: 'var(--gw-card)',
+                color: 'var(--gw-text-3)',
+                fontSize: 14,
+                cursor: 'pointer',
               }}
             >
-              {theme === 'dark' ? <SunOutlined /> : <BulbOutlined />}
+              搜索 <kbd style={kbdStyle}>Ctrl K</kbd>
             </button>
 
-            <Dropdown menu={userMenu} trigger={['click']}>
+            <Tooltip title={gate === 'err' ? '管理面 /healthz 不可达' : undefined}>
               <span
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '0 4px' }}
+                role="status"
+                aria-live="polite"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  height: 34,
+                  padding: '0 12px',
+                  border: '1px solid var(--gw-border)',
+                  borderRadius: 'var(--gw-r-badge)',
+                  fontSize: 14,
+                  color: 'var(--gw-text-2)',
+                  background: 'var(--gw-card)',
+                }}
               >
-                <Avatar size={30} style={{ background: 'var(--gw-primary)', color: '#fff' }}>
-                  {avatarLetter}
-                </Avatar>
-                {!collapsed && (
-                  <Typography.Text style={{ fontSize: 13, color: 'var(--gw-text-2)' }}>
-                    {username}
-                  </Typography.Text>
-                )}
+                <i className={`gw-dot ${gateTone}`} />
+                {GATE_TEXT[gate]}
               </span>
-            </Dropdown>
+            </Tooltip>
+
+            <span aria-hidden="true" style={{ width: 1, height: 22, background: 'var(--gw-border)' }} />
+
+            <button
+              type="button"
+              onClick={e => {
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setUserMenuPos({ top: r.bottom + 8, left: Math.max(8, r.right - 210) });
+                setUserMenuOpen(true);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={userMenuOpen}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 9,
+                height: 38,
+                padding: '0 9px',
+                border: 0,
+                background: 'transparent',
+                borderRadius: 'var(--gw-r-btn)',
+                cursor: 'pointer',
+                color: 'var(--gw-text-2)',
+                fontSize: 14.5,
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: '50%',
+                  background: 'var(--gw-primary)',
+                  color: 'var(--gw-card)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 14,
+                  fontWeight: 600,
+                }}
+              >
+                {avatarLetter}
+              </span>
+              <span>{username}</span>
+            </button>
           </div>
-        </Header>
+        </header>
 
-        <Content style={{ overflowY: 'auto', padding: 24 }}>
+        <main style={{ flex: 1, padding: '26px 30px 36px', minWidth: 0 }}>
           <Outlet />
-        </Content>
-      </Layout>
+        </main>
+      </div>
 
+      {/* 用户菜单：自己定位，避免 antd Dropdown 的默认阴影与圆角 */}
+      {userMenuOpen && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 49 }}
+            onMouseDown={() => setUserMenuOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            role="menu"
+            style={{
+              position: 'fixed',
+              top: userMenuPos.top,
+              left: userMenuPos.left,
+              width: 210,
+              background: 'var(--gw-card)',
+              border: '1px solid var(--gw-border)',
+              borderRadius: 'var(--gw-r-popup)',
+              padding: 6,
+              zIndex: 50,
+            }}
+          >
+            {userItems.map((it, i) =>
+              it && 'type' in it && it.type === 'divider' ? (
+                <div key={`d${i}`} style={{ height: 1, background: 'var(--gw-border)', margin: '6px 0' }} />
+              ) : (
+                <button
+                  key={(it as { key: string }).key}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    (it as { onClick?: () => void }).onClick?.();
+                  }}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    height: 38,
+                    padding: '0 11px',
+                    border: 0,
+                    background: 'transparent',
+                    borderRadius: 'var(--gw-r-btn)',
+                    fontSize: 14.5,
+                    color: (it as { danger?: boolean }).danger ? 'var(--gw-err)' : 'var(--gw-text-2)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  {(it as { label: React.ReactNode }).label}
+                </button>
+              ),
+            )}
+          </div>
+        </>
+      )}
+
+      <CmdK />
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
-    </Layout>
+    </div>
   );
 }
+
+const kbdStyle: React.CSSProperties = {
+  fontFamily: 'var(--gw-mono)',
+  fontSize: 12,
+  color: 'var(--gw-text-3)',
+  border: '1px solid var(--gw-border)',
+  borderRadius: 'var(--gw-r-badge)',
+  padding: '2px 6px',
+};

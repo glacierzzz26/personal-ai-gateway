@@ -1,4 +1,4 @@
-import { Button, Card, Dropdown, Switch, Tag, Typography } from 'antd';
+import { Button, Card, Dropdown, Switch, Typography } from 'antd';
 import { MoreOutlined } from '@ant-design/icons';
 import ProviderMark from '@/components/ProviderMark';
 import { CAP_LABEL, fmt } from '@/utils/format';
@@ -70,7 +70,7 @@ export default function ModelCard({
 
       <div>
         {model.capabilities.length
-          ? model.capabilities.map(c => <Tag key={c}>{CAP_LABEL[c]}</Tag>)
+          ? model.capabilities.map(c => <span className="gw-badge" key={c}>{CAP_LABEL[c]}</span>)
           : <span style={{ color: 'var(--gw-text-3)', fontSize: 13 }}>—</span>}
       </div>
 
@@ -91,7 +91,7 @@ export default function ModelCard({
       <div
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          paddingTop: 10, borderTop: '1px solid var(--gw-border-2)', marginTop: 'auto',
+          paddingTop: 10, borderTop: '1px solid var(--gw-border)', marginTop: 'auto',
         }}
       >
         <span style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>

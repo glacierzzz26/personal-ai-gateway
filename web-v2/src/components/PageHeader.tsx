@@ -2,22 +2,19 @@ import type { ReactNode } from 'react';
 
 interface Props {
   title: string;
-  desc?: string;
+  desc?: ReactNode;
+  /** 本页的操作 —— 只有页面头放本页操作，区块内部不再放导航级按钮 */
   extra?: ReactNode;
 }
 
 export default function PageHeader({ title, desc, extra }: Props) {
   return (
-    <div
-      style={{
-        display: 'flex', alignItems: 'flex-start', gap: 16, marginBottom: 20,
-      }}
-    >
+    <div className="gw-page-h">
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-.2px' }}>{title}</div>
-        {desc && <div style={{ fontSize: 13, color: 'var(--gw-text-3)', marginTop: 4 }}>{desc}</div>}
+        <h1>{title}</h1>
+        {desc && <p>{desc}</p>}
       </div>
-      {extra && <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexShrink: 0 }}>{extra}</div>}
+      {extra && <div className="gw-acts">{extra}</div>}
     </div>
   );
 }

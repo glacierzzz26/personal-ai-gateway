@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import {
-  App, Button, Card, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag,
+  App, Button, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import ProviderMark from '@/components/ProviderMark';
+import { EmptyState, ErrorState } from '@/components/States';
 import { useSortableRows } from '@/hooks/useSortableRows';
 import { api } from '@/services/api';
 import { fmt } from '@/utils/format';
+import { TOKENS } from '@/styles/tokens';
 import type { Channel, MatchMode, RouteRule, RouteStrategy, RuleDraft } from '@/types';
 
 const MODE_TEXT: Record<string, string> = { prefix: '前缀', wildcard: '通配', regex: '正则' };
@@ -287,6 +290,7 @@ function RuleModal(props: {
           <Form.Item
             name="timeoutMs"
             label="超时时间"
+            tooltip="该规则命中的请求在单个候选上的等待上限"
             rules={[{ required: true }]}
             style={{ flex: 1 }}
           >
@@ -304,7 +308,7 @@ export default function Routing() {
   const [editor, setEditor] = useState<{ open: boolean; initial: RouteRule | null }>({ open: false, initial: null });
   const [toggling, setToggling] = useState<ReadonlySet<number>>(new Set());
 
-  const { data: rules = [], isLoading } = useQuery({
+  const { data: rules = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['rules'],
     queryFn: api.getRules,
     retry: 0,
@@ -428,21 +432,33 @@ export default function Routing() {
 
   const columns: ColumnsType<RouteRule> = [
     {
-      title: '', width: 32,
+      title: '', width: 40,
       render: (_, __, i) => <span {...handleProps(i ?? 0)} aria-label="拖动调整顺序">⋮⋮</span>,
     },
     {
-      title: '名称', dataIndex: 'name', width: 180,
-      render: v => <span style={{ fontWeight: 500 }}>{v}</span>,
+      title: '顺序', key: 'order', width: 64, align: 'right',
+      render: (_, __, i) => <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{i! + 1}</span>,
     },
     {
-      title: '启用', dataIndex: 'enabled', align: 'center', width: 70,
+      title: '名称', dataIndex: 'name', width: 180,
+      render: (v, r) => (
+        <div>
+          <div style={{ fontWeight: 500, color: r.enabled ? 'var(--gw-text)' : 'var(--gw-text-3)' }}>{v}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>
+            命中 <span className="gw-num">{fmt.n(r.hit)}</span> 次
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: '启用', dataIndex: 'enabled', align: 'center', width: 80,
       render: (_, r) => (
         <Switch
           size="small"
           checked={r.enabled}
           loading={toggling.has(r.id)}
           disabled={toggling.has(r.id)}
+          aria-label={`${r.enabled ? '停用' : '启用'}规则 ${r.name}`}
           onChange={c => toggle.mutate({ row: r, enabled: c })}
         />
       ),
@@ -450,71 +466,68 @@ export default function Routing() {
     {
       title: '匹配条件', key: 'match', width: 220,
       render: (_, r) => (
-        <span>
-          <Tag>{MODE_TEXT[r.matchMode]}</Tag>
-          <span className="gw-mono" style={{ marginLeft: 4 }}>{r.pattern}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <span className="gw-badge">{MODE_TEXT[r.matchMode]}</span>
+          <span className="gw-mono">{r.pattern}</span>
         </span>
       ),
     },
     {
-      title: '分发策略', key: 'strategy', width: 230,
+      title: '分发策略', key: 'strategy', width: 220,
       render: (_, r) => (
-        <span>
-          <Tag color={r.strategy === 'weight' ? 'blue' : undefined}>{STRATEGY_TEXT[r.strategy]}</Tag>
+        <div>
+          <span className={`gw-badge${r.strategy === 'weight' ? ' tint' : ''}`}>{STRATEGY_TEXT[r.strategy]}</span>
           {r.strategy === 'weight' && r.weights && Object.keys(r.weights).length > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginTop: 5 }}>
               {Object.entries(r.weights)
                 .map(([k, w]) => `${channelName(Number(k))} ${w}`)
                 .join(' / ')}
             </div>
           )}
-        </span>
+        </div>
       ),
     },
     {
-      title: '目标渠道', key: 'channelIds', width: 210,
+      title: '目标渠道', key: 'channelIds', width: 220,
       render: (_, r) =>
         r.channelIds.length === 0 ? (
           <span style={{ color: 'var(--gw-text-3)' }}>—</span>
         ) : (
-          r.channelIds.map(id => {
-            const ch = channels.find(c => c.id === id);
-            return (
-              <Tag
-                key={id}
-                style={{ marginInlineEnd: 4, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-              >
-                {ch && <ProviderMark name={ch.provider} size={14} />}
-                {ch?.name ?? `#${id}`}
-              </Tag>
-            );
-          })
+          <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap' }}>
+            {r.channelIds.map(id => {
+              const ch = channels.find(c => c.id === id);
+              return (
+                <span className="gw-badge" key={id} style={{ gap: 5 }}>
+                  {ch && <ProviderMark name={ch.provider} size={14} />}
+                  {ch?.name ?? `#${id}`}
+                </span>
+              );
+            })}
+          </span>
         ),
     },
     {
-      title: '兜底', key: 'fallback', width: 110,
+      title: '兜底', key: 'fallback', width: 120,
       render: (_, r) =>
         r.fallbackChannelId == null ? (
           <span style={{ color: 'var(--gw-text-3)' }}>无兜底</span>
         ) : (
-          <Tag color="orange">{channelName(r.fallbackChannelId)}</Tag>
+          <span className="gw-badge" style={{ color: TOKENS.warn, borderColor: TOKENS.warn }}>
+            {channelName(r.fallbackChannelId)}
+          </span>
         ),
     },
     {
-      title: '重试 / 超时', key: 'retryTimeout', width: 130,
+      title: '重试 / 超时', key: 'retryTimeout', width: 140,
       render: (_, r) => (
-        <span style={{ fontSize: 13 }}>
+        <span style={{ fontSize: 13.5 }}>
           <span className="gw-num">{r.retry}</span> 次
           <span style={{ color: 'var(--gw-text-3)' }}> · {timeoutLabel(r.timeoutMs)}</span>
         </span>
       ),
     },
     {
-      title: '命中', dataIndex: 'hit', align: 'right', width: 80,
-      render: v => <span className="gw-num">{fmt.n(v)}</span>,
-    },
-    {
-      title: '操作', key: 'actions', align: 'right', width: 110,
+      title: '操作', key: 'actions', align: 'right', width: 130,
       render: (_, r) => (
         <Space size={4}>
           <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
@@ -536,41 +549,41 @@ export default function Routing() {
         }
       />
 
-      <div
-        style={{
-          border: '1px solid var(--gw-border)', borderLeft: '2px solid var(--gw-primary)',
-          borderRadius: 6, padding: '10px 12px', fontSize: 13,
-          color: 'var(--gw-text-2)', background: 'var(--gw-fill)', marginBottom: 16,
-        }}
-      >
-        拖动左侧手柄调整顺序，规则自上而下匹配，越靠前优先级越高。未命中任何规则的请求将走默认渠道。
-      </div>
+      <Blocks>
+        {/* 排序语义说明：拖拽是这一页的核心交互，必须显式写出来 */}
+        <div className="gw-note" role="status">
+          <b>自上而下匹配</b>
+          <span>拖动左侧手柄调整顺序，越靠前优先级越高。未命中任何规则的请求将走默认渠道（供给源顺序）。</span>
+        </div>
 
-      {!isLoading && rules.length === 0 ? (
-        <Card>
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="还没有路由规则，未命中的请求将走默认渠道（供给源顺序）"
-          >
-            <Button type="primary" onClick={() => setEditor({ open: true, initial: null })}>
-              新建规则
-            </Button>
-          </Empty>
-        </Card>
-      ) : (
-        <Card>
-          <Table<RouteRule>
-            rowKey="id"
-            size="middle"
-            loading={isLoading}
-            dataSource={rules}
-            columns={columns}
-            pagination={false}
-            scroll={{ x: 1420 }}
-            onRow={onRow}
-          />
-        </Card>
-      )}
+        <BlockCard>
+          {isError ? (
+            <ErrorState
+              title="路由规则加载失败"
+              desc="无法读取规则列表。未命中规则的请求仍按默认渠道转发。"
+              onRetry={() => void refetch()}
+            />
+          ) : !isLoading && rules.length === 0 ? (
+            <EmptyState
+              title="还没有路由规则"
+              desc="没有规则时，所有请求都走默认渠道（模型广场里的供给源顺序）。需要按模型名分流时再建规则。"
+              action={<Button size="small" type="primary" onClick={() => setEditor({ open: true, initial: null })}>新建规则</Button>}
+            />
+          ) : (
+            <Table<RouteRule>
+              rowKey="id"
+              size="middle"
+              loading={isLoading && rules.length === 0}
+              dataSource={rules}
+              columns={columns}
+              pagination={false}
+              scroll={{ x: 1500 }}
+              onRow={onRow}
+              locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无规则" /> }}
+            />
+          )}
+        </BlockCard>
+      </Blocks>
 
       <RuleModal
         open={editor.open}

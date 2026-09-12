@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   App, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Form, Input, InputNumber,
-  Modal, Row, Select, Space, Switch, Table, Tabs, Tag,
+  Modal, Row, Select, Space, Switch, Table, Tabs,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
@@ -9,7 +9,7 @@ import { MoreOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
 import ProviderMark from '@/components/ProviderMark';
-import StatusTag from '@/components/StatusTag';
+import StatusDot from '@/components/StatusDot';
 import { useSortableRows } from '@/hooks/useSortableRows';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
@@ -138,8 +138,8 @@ function OfferFormModal({ open, modelId, editing, channels, usedChannelIds, onCl
           <div
             style={{
               border: '1px solid var(--gw-border)', borderLeft: '2px solid var(--gw-primary)',
-              borderRadius: 6, padding: '8px 10px', fontSize: 13, marginBottom: 16,
-              color: 'var(--gw-text-2)', background: 'var(--gw-fill)',
+              borderRadius: 'var(--gw-r-card)', padding: '8px 10px', fontSize: 13, marginBottom: 16,
+              color: 'var(--gw-text-2)', background: 'var(--gw-bg)',
             }}
           >
             渠道：<b>{editing.channelName}</b>（挂载后不可更换，如需换渠道请删除后重建）
@@ -427,7 +427,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     },
     {
       title: '状态', dataIndex: 'status',
-      render: (_, r) => <StatusTag status={r.enabled ? r.status : 'disabled'} />,
+      render: (_, r) => <StatusDot status={r.enabled ? r.status : 'disabled'} />,
     },
     {
       title: '启用', dataIndex: 'enabled', align: 'center',
@@ -555,7 +555,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       title: '占比', key: 'share', align: 'right',
       render: (_, r) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: 160 }}>
-          <span style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--gw-fill)', overflow: 'hidden' }}>
+          <span className="gw-bar" style={{ flex: 1 }} role="img" aria-label="用量占比">
             <span
               style={{
                 display: 'block', height: '100%', borderRadius: 2,
@@ -591,7 +591,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
             <div>
               <span className="gw-mono" style={{ fontSize: 16, fontWeight: 600 }}>{model.name}</span>
               <span style={{ marginLeft: 12 }}>
-                {model.capabilities.map(x => <Tag key={x}>{CAP_LABEL[x]}</Tag>)}
+                {model.capabilities.map(x => <span className="gw-badge" key={x}>{CAP_LABEL[x]}</span>)}
               </span>
               <span style={{ fontSize: 12, color: 'var(--gw-text-3)', marginLeft: 8 }}>
                 {fmt.ctx(model.contextWindow)} 上下文
@@ -692,8 +692,8 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                     <div
                       style={{
                         border: '1px solid var(--gw-border)', borderLeft: '2px solid var(--gw-primary)',
-                        borderRadius: 6, padding: '10px 12px', fontSize: 13,
-                        color: 'var(--gw-text-2)', background: 'var(--gw-fill)', marginBottom: 16,
+                        borderRadius: 'var(--gw-r-card)', padding: '10px 12px', fontSize: 13,
+                        color: 'var(--gw-text-2)', background: 'var(--gw-bg)', marginBottom: 16,
                       }}
                     >
                       拖动左侧手柄可调整优先级，请求按此顺序尝试，上游失败自动降级到下一个可用供给源。路由规则的优先级高于此处。

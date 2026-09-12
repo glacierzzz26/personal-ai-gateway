@@ -1,14 +1,26 @@
 import { useState } from 'react';
-import { App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag } from 'antd';
+import { App, Button, Form, Input, Modal, Select, Space, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
+import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
+import { EmptyState, ErrorState } from '@/components/States';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import type { Role, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
+
+/** 角色徽章：文字 + 语义色，不靠颜色单独表意。 */
+function RoleBadge({ role }: { role: Role }) {
+  const admin = role === 'admin';
+  return (
+    <span className={`gw-badge${admin ? ' tint' : ''}`} style={{ fontSize: 13 }}>
+      {admin ? '管理员' : '普通用户'}
+    </span>
+  );
+}
 
 /** 新建用户弹窗(角色默认普通用户)。 */
 function CreateUserModal(props: {
@@ -119,7 +131,7 @@ export default function Users() {
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserAccount | null>(null);
 
-  const { data: users = [], isLoading } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
+  const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] });
 
   const adminCount = users.filter(u => u.role === 'admin').length;
@@ -155,27 +167,27 @@ export default function Users() {
   };
 
   const columns: ColumnsType<UserAccount> = [
-    { title: '用户名', dataIndex: 'username', render: v => <b style={{ fontWeight: 500 }}>{v}</b> },
+    { title: '用户名', dataIndex: 'username', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
+    { title: '角色', dataIndex: 'role', width: 140, render: v => <RoleBadge role={v} /> },
+    { title: 'Key 数量', dataIndex: 'keyCount', width: 110, align: 'right', render: v => <span className="gw-num">{v}</span> },
     {
-      title: '角色', dataIndex: 'role', width: 120,
-      render: v => (v === 'admin' ? <Tag color="blue">管理员</Tag> : <Tag>普通用户</Tag>),
-    },
-    { title: 'Key 数量', dataIndex: 'keyCount', width: 100, align: 'right', render: v => <span className="gw-num">{v}</span> },
-    {
-      title: '创建时间', dataIndex: 'createdAt', width: 180,
+      title: '创建时间', dataIndex: 'createdAt', width: 200,
       render: v => {
         const d = dayjs(v);
-        return <span style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
+        return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
     {
-      title: '', align: 'right', width: 180,
+      title: '操作', align: 'right', width: 200,
       render: (_, r) => {
         const isSelf = r.id === me?.id;
         const isLastAdmin = r.role === 'admin' && adminCount <= 1;
         return (
           <Space size={4}>
-            <Button size="small" disabled={isSelf} onClick={() => setResetting(r)}>重置密码</Button>
+            <Button size="small" disabled={isSelf} title={isSelf ? '不能重置自己的密码，请用右上角菜单' : undefined}
+              onClick={() => setResetting(r)}>
+              重置密码
+            </Button>
             <Button
               size="small" danger
               disabled={isSelf || isLastAdmin}
@@ -194,20 +206,42 @@ export default function Users() {
     <div className="gw-page">
       <PageHeader
         title="用户管理"
-        desc="账号与角色;普通用户只能管理自己的访问令牌"
+        desc="账号与角色；普通用户只能管理自己的访问令牌"
         extra={<Button type="primary" onClick={() => setCreating(true)}>新建用户</Button>}
       />
 
-      <Card>
-        <Table<UserAccount>
-          rowKey="id"
-          size="middle"
-          loading={isLoading}
-          dataSource={users}
-          columns={columns}
-          pagination={false}
-        />
-      </Card>
+      <Blocks>
+        <BlockCard>
+          {isError ? (
+            <div style={{ padding: '18px 20px' }}>
+              <ErrorState
+                title="用户列表加载失败"
+                desc="无法读取账号列表，登录会话仍然有效。"
+                onRetry={() => void refetch()}
+              />
+            </div>
+          ) : (
+            <Table<UserAccount>
+              rowKey="id"
+              size="middle"
+              loading={isLoading && users.length === 0}
+              dataSource={users}
+              columns={columns}
+              pagination={false}
+              scroll={{ x: 820 }}
+              locale={{
+                emptyText: (
+                  <EmptyState
+                    title="还没有其他账号"
+                    desc="这里只有你自己。新建普通用户后，他们各自管理自己的访问令牌。"
+                    action={<Button size="small" type="primary" onClick={() => setCreating(true)}>新建用户</Button>}
+                  />
+                ),
+              }}
+            />
+          )}
+        </BlockCard>
+      </Blocks>
 
       <CreateUserModal open={creating} onCancel={() => setCreating(false)} onSubmit={create} />
       <ResetPasswordModal user={resetting} onCancel={() => setResetting(null)} onSubmit={resetPw} />

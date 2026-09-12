@@ -4,7 +4,6 @@ import { BarChart, LineChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
-import { useUi } from '@/stores/ui';
 
 echarts.use([LineChart, BarChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
@@ -13,12 +12,10 @@ interface Props {
   height?: number;
 }
 
-/** 主题切换时用 key 强制重建实例，避免 canvas 残留旧配色 */
+/** 单一配色（无深色模式），无需按主题重建实例。 */
 export default function Chart({ option, height = 280 }: Props) {
-  const theme = useUi(s => s.theme);
   return (
     <ReactEChartsCore
-      key={theme}
       echarts={echarts}
       option={option}
       notMerge

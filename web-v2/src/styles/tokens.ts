@@ -1,84 +1,169 @@
 import { theme, type ThemeConfig } from 'antd';
 
-/** 圆角只用 6 / 8 / 10 / 12 四档，主色只出现在按钮、选中态、图表主系列 */
+/**
+ * 设计令牌 —— 唯一色值来源。
+ *
+ * 规范外 hex 一律禁止；需要更浅/更透的层次时只用 rgba() 从主色派生。
+ * 圆角四档：卡片 8 / 按钮 6 / 徽章 4 / 弹层 12。禁止深色模式。
+ */
+export const TOKENS = {
+  bg: '#F8FAFC',
+  card: '#FFFFFF',
+  border: '#E2E8F0',
+
+  primary: '#0E7490',
+  primaryHover: '#155E75',
+  primary50: '#ECFEFF',
+  primary100: '#CFFAFE',
+
+  /* 图表四段同色相 */
+  c1: '#0891B2',
+  c2: '#22D3EE',
+  c3: '#A5F3FC',
+
+  title: '#0F172A',
+  text: '#475569',
+  aux: '#94A3B8',
+
+  ok: '#10B981',
+  warn: '#F59E0B',
+  err: '#EF4444',
+
+  rCard: 8,
+  rBtn: 6,
+  rBadge: 4,
+  rPopup: 12,
+} as const;
+
+/** 控件统一高度（对齐按钮 36px） */
+export const CONTROL_HEIGHT = 36;
+
 const components: NonNullable<ThemeConfig['components']> = {
   Card: {
-    borderRadiusLG: 10, paddingLG: 20, boxShadowTertiary: 'none',
-    headerHeight: 48,
+    borderRadiusLG: TOKENS.rCard,
+    paddingLG: 20,
+    boxShadowTertiary: 'none',
+    headerHeight: 52,
   },
   Table: {
-    headerBg: 'transparent', headerSplitColor: 'transparent',
-    headerColor: '#64748B',
-    rowHoverBg: '#F1F5F9', borderColor: '#EFF1F4',
-    cellPaddingBlock: 10, cellPaddingInline: 14,
-    cellPaddingBlockSM: 6, cellPaddingInlineSM: 10,
+    headerBg: TOKENS.bg,
+    headerSplitColor: 'transparent',
+    headerColor: TOKENS.aux,
+    rowHoverBg: TOKENS.bg,
+    borderColor: TOKENS.border,
+    cellPaddingBlock: 13,
+    cellPaddingInline: 16,
+    cellPaddingBlockSM: 8,
+    cellPaddingInlineSM: 12,
+    fontSize: 14,
   },
   Button: {
-    borderRadius: 8, fontWeight: 500,
-    primaryShadow: 'none', defaultShadow: 'none', paddingInline: 14,
+    borderRadius: TOKENS.rBtn,
+    fontWeight: 500,
+    primaryShadow: 'none',
+    defaultShadow: 'none',
+    paddingInline: 14,
   },
-  Input: { borderRadius: 8, activeShadow: '0 0 0 3px rgba(37,99,235,0.10)', hoverBorderColor: '#94A3B8' },
-  Select: { borderRadius: 8, optionSelectedBg: '#EFF6FF' },
-  Tag: { borderRadiusSM: 6, defaultBg: '#F1F5F9', defaultColor: '#475569' },
-  Modal: { borderRadiusLG: 12, titleFontSize: 16 },
-  Drawer: { borderRadiusLG: 12, footerPaddingBlock: 12 },
+  Input: {
+    borderRadius: TOKENS.rBtn,
+    activeShadow: '0 0 0 3px rgba(14,116,144,0.10)',
+    hoverBorderColor: TOKENS.aux,
+    activeBorderColor: TOKENS.primary,
+  },
+  Select: {
+    borderRadius: TOKENS.rBtn,
+    optionSelectedBg: TOKENS.primary50,
+    optionSelectedColor: TOKENS.primary,
+    optionActiveBg: TOKENS.bg,
+  },
+  Tag: {
+    borderRadiusSM: TOKENS.rBadge,
+    defaultBg: TOKENS.card,
+    defaultColor: TOKENS.text,
+  },
+  Modal: { borderRadiusLG: TOKENS.rPopup, titleFontSize: 17 },
+  Drawer: { borderRadiusLG: TOKENS.rPopup, footerPaddingBlock: 15 },
   Menu: {
-    itemBorderRadius: 8, itemHeight: 38, itemMarginInline: 8, itemPaddingInline: 12,
-    itemColor: '#475569', itemSelectedColor: '#2563EB', itemSelectedBg: '#EFF6FF',
-    itemHoverBg: '#F1F5F9', itemActiveBg: '#EFF6FF', subMenuItemBg: 'transparent',
+    itemBorderRadius: TOKENS.rBtn,
+    itemHeight: 42,
+    itemMarginInline: 9,
+    itemPaddingInline: 14,
+    itemColor: TOKENS.text,
+    itemSelectedColor: TOKENS.primary,
+    itemSelectedBg: TOKENS.primary50,
+    itemHoverBg: TOKENS.bg,
+    itemActiveBg: TOKENS.primary50,
+    subMenuItemBg: 'transparent',
     groupTitleFontSize: 12,
+    groupTitleColor: TOKENS.aux,
   },
-  Statistic: { contentFontSize: 24, titleFontSize: 13 },
-  Tabs: { horizontalItemPadding: '10px 0', horizontalItemGutter: 24, cardBg: 'transparent', itemSelectedColor: '#2563EB' },
-  Segmented: { itemSelectedBg: '#FFFFFF', trackBg: '#F1F5F9', borderRadius: 8 },
-  Slider: { handleSize: 8, handleSizeHover: 8 },
-  // 开关统一绿色(开启态),区别于全局主题蓝
-  Switch: { colorPrimary: '#16A34A' },
+  Statistic: { contentFontSize: 30, titleFontSize: 13 },
+  Tabs: {
+    horizontalItemPadding: '13px 0',
+    horizontalItemGutter: 22,
+    cardBg: 'transparent',
+    itemSelectedColor: TOKENS.primary,
+    inkBarColor: TOKENS.primary,
+  },
+  Segmented: {
+    itemSelectedBg: TOKENS.card,
+    itemSelectedColor: TOKENS.title,
+    trackBg: TOKENS.bg,
+    borderRadius: TOKENS.rBtn,
+    itemColor: TOKENS.text,
+  },
+  Slider: { handleSize: 8, handleSizeHover: 8, trackBg: TOKENS.primary100, trackHoverBg: TOKENS.primary },
+  /* 开关开启态用主色（与原型一致），不用绿色 */
+  Switch: { colorPrimary: TOKENS.primary },
+  Progress: { defaultColor: TOKENS.primary, remainingColor: TOKENS.bg },
+  Descriptions: { labelBg: TOKENS.bg },
+  Alert: { borderRadiusLG: TOKENS.rCard },
+  Tooltip: { borderRadius: TOKENS.rPopup, colorBgSpotlight: TOKENS.title },
+  Dropdown: { borderRadiusLG: TOKENS.rPopup },
+  Empty: { colorTextDescription: TOKENS.aux },
 };
 
 export const lightTheme: ThemeConfig = {
   algorithm: theme.defaultAlgorithm,
   token: {
-    colorPrimary: '#2563EB',
-    colorSuccess: '#16A34A', colorWarning: '#F59E0B',
-    colorError: '#EF4444', colorInfo: '#3B82F6',
-    colorTextBase: '#0F172A',
-    colorTextSecondary: '#475569',
-    colorTextTertiary: '#94A3B8',
-    colorBgLayout: '#F7F8FA',
-    colorBgContainer: '#FFFFFF',
-    colorBorder: '#E5E7EB',
-    colorBorderSecondary: '#EFF1F4',
-    borderRadius: 8, borderRadiusLG: 10, borderRadiusSM: 6,
-    controlHeight: 34, fontSize: 14,
-    fontFamily: 'Inter, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
-    wireframe: false, motionDurationMid: '160ms',
+    colorPrimary: TOKENS.primary,
+    colorPrimaryHover: TOKENS.primaryHover,
+    colorPrimaryBg: TOKENS.primary50,
+    colorPrimaryBorder: TOKENS.primary100,
+    colorLink: TOKENS.primary,
+    colorLinkHover: TOKENS.primaryHover,
+
+    colorSuccess: TOKENS.ok,
+    colorWarning: TOKENS.warn,
+    colorError: TOKENS.err,
+    colorInfo: TOKENS.c1,
+
+    colorTextBase: TOKENS.title,
+    colorText: TOKENS.text,
+    colorTextHeading: TOKENS.title,
+    colorTextSecondary: TOKENS.text,
+    colorTextTertiary: TOKENS.aux,
+    colorTextQuaternary: TOKENS.aux,
+
+    colorBgLayout: TOKENS.bg,
+    colorBgContainer: TOKENS.card,
+    colorBorder: TOKENS.border,
+    colorBorderSecondary: TOKENS.border,
+
+    borderRadius: TOKENS.rBtn,
+    borderRadiusLG: TOKENS.rCard,
+    borderRadiusSM: TOKENS.rBadge,
+    borderRadiusXS: TOKENS.rBadge,
+
+    controlHeight: CONTROL_HEIGHT,
+    fontSize: 14,
+    fontFamily:
+      "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif",
+    wireframe: false,
+    motionDurationMid: '160ms',
+    boxShadow: 'none',
+    boxShadowSecondary: 'none',
+    boxShadowTertiary: 'none',
   },
   components,
-};
-
-export const darkTheme: ThemeConfig = {
-  ...lightTheme,
-  algorithm: theme.darkAlgorithm,
-  token: {
-    ...lightTheme.token,
-    colorPrimary: '#3B82F6',
-    colorTextBase: '#E2E8F0',
-    colorTextSecondary: '#94A3B8',
-    colorTextTertiary: '#64748B',
-    colorBgLayout: '#0B0E14',
-    colorBgContainer: '#131722',
-    colorBorder: '#232936',
-    colorBorderSecondary: '#1B2130',
-  },
-  components: {
-    ...components,
-    Table: { ...components.Table, rowHoverBg: '#1A2030', borderColor: '#1B2130', headerColor: '#64748B' },
-    Tag: { ...components.Tag, defaultBg: '#1A2030', defaultColor: '#94A3B8' },
-    Menu: {
-      ...components.Menu, itemColor: '#94A3B8', itemSelectedColor: '#3B82F6',
-      itemSelectedBg: '#14243D', itemHoverBg: '#1A2030', itemActiveBg: '#14243D',
-    },
-    Segmented: { ...components.Segmented, itemSelectedBg: '#1F2839', trackBg: '#1A2030' },
-  },
 };

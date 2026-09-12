@@ -1,37 +1,26 @@
 import { create } from 'zustand';
 
-export type ThemeMode = 'light' | 'dark';
-
-const KEY_THEME = 'gw-theme';
 const KEY_COLLAPSE = 'gw-collapsed';
 
-function initialTheme(): ThemeMode {
-  const saved = localStorage.getItem(KEY_THEME);
-  if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
 interface UiState {
-  theme: ThemeMode;
   collapsed: boolean;
-  setTheme: (t: ThemeMode) => void;
-  toggleTheme: () => void;
   toggleCollapsed: () => void;
+  /** Ctrl+K 命令面板开关（顶栏按钮与快捷键共用） */
+  cmdkOpen: boolean;
+  setCmdkOpen: (v: boolean) => void;
 }
 
-export const useUi = create<UiState>((set, get) => ({
-  theme: initialTheme(),
+export const useUi = create<UiState>(set => ({
   collapsed: localStorage.getItem(KEY_COLLAPSE) === '1',
 
-  setTheme: (t) => {
-    localStorage.setItem(KEY_THEME, t);
-    document.documentElement.dataset.theme = t;
-    set({ theme: t });
-  },
-  toggleTheme: () => get().setTheme(get().theme === 'dark' ? 'light' : 'dark'),
   toggleCollapsed: () => {
-    const next = !get().collapsed;
-    localStorage.setItem(KEY_COLLAPSE, next ? '1' : '0');
-    set({ collapsed: next });
+    set(s => {
+      const next = !s.collapsed;
+      localStorage.setItem(KEY_COLLAPSE, next ? '1' : '0');
+      return { collapsed: next };
+    });
   },
+
+  cmdkOpen: false,
+  setCmdkOpen: v => set({ cmdkOpen: v }),
 }));
