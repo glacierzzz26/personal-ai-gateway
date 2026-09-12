@@ -1,0 +1,109 @@
+# auto-fix: label an issue `auto-fix` and two models will work it — one fixes,
+# a different one reviews, up to 3 rounds — then a DRAFT pull request is opened
+# for a human to review and merge.  This workflow never merges anything.
+#
+# Written by `/auto-fix:fix-init`.  Review it before committing.
+#
+# Required repository settings and secrets (see the plugin README):
+#   vars.AUTOFIX_PLUGIN_REF        a tag or SHA of the marketplace repo (pinned)
+#   vars.AUTOFIX_CLAUDE_VERSION    e.g. 2.1.263
+#   vars.AUTOFIX_FIXER_MODEL       model id for the fixer
+#   vars.AUTOFIX_FIXER_BASE_URL    endpoint for the fixer (non-secret)
+#   vars.AUTOFIX_REVIEWER_MODEL    model id for the reviewer
+#   vars.AUTOFIX_REVIEWER_BASE_URL endpoint for the reviewer (non-secret)
+#   secrets.AUTOFIX_FIXER_TOKEN    key for the fixer endpoint
+#   secrets.AUTOFIX_REVIEWER_TOKEN key for the reviewer endpoint
+#   secrets.AUTOFIX_PAT            PAT with contents:write on the metrics repo
+#
+# The two model keys are separate on purpose: the plugin's isolation relies on
+# each phase process getting only its own credential.  A single shared token
+# would make that guarantee meaningless.
+
+name: auto-fix
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# One run per issue.  cancel-in-progress is false so an in-flight run is never
+# killed halfway and left holding the worktree.
+concurrency:
+  group: auto-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    # `label.name` is what stops this workflow re-triggering on the labels the
+    # plugin applies itself.  The plugin therefore never removes and re-adds
+    # `auto-fix` (asserted in github.py).
+    if: >-
+      github.event.label.name == 'auto-fix' &&
+      github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the target repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history: the diff is anchored to a base sha
+
+      # The orchestrator runs from the plugin directory; the plugin is NOT
+      # installed as a Claude plugin here.  Pinning to a ref is a supply-chain
+      # control: every target repo runs this code, so a moving `main` would be
+      # remote code execution into all of them.
+      - name: Check out the auto-fix plugin (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: glacierzzz26/claude-plugins
+          ref: ${{ vars.AUTOFIX_PLUGIN_REF }}
+          path: ${{ runner.temp }}/plugin
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code@${{ vars.AUTOFIX_CLAUDE_VERSION }}
+
+      # --resume makes a re-run continue from the last completed phase instead
+      # of starting over.  --ci keeps state under $RUNNER_TEMP.
+      - name: Run the fix/review loop
+        run: >-
+          python3 "$RUNNER_TEMP/plugin/plugins/auto-fix/scripts/autofix.py" run
+          --issue '${{ github.event.issue.number }}' --ci --resume
+        env:
+          # Scoped to this repo.  It is deliberately absent from every child
+          # process the plugin spawns for a model phase.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          AUTOFIX_PROFILE_FIXER_MODEL: ${{ vars.AUTOFIX_FIXER_MODEL }}
+          AUTOFIX_PROFILE_FIXER_BASE_URL: ${{ vars.AUTOFIX_FIXER_BASE_URL }}
+          AUTOFIX_PROFILE_FIXER_TOKEN: ${{ secrets.AUTOFIX_FIXER_TOKEN }}
+
+          AUTOFIX_PROFILE_REVIEWER_MODEL: ${{ vars.AUTOFIX_REVIEWER_MODEL }}
+          AUTOFIX_PROFILE_REVIEWER_BASE_URL: ${{ vars.AUTOFIX_REVIEWER_BASE_URL }}
+          AUTOFIX_PROFILE_REVIEWER_TOKEN: ${{ secrets.AUTOFIX_REVIEWER_TOKEN }}
+
+          # Publish this run's metrics to the marketplace repo's `metrics`
+          # branch.  The runner is ephemeral, so a per-run file cannot conflict;
+          # this is the one push that needs write access elsewhere, hence the
+          # separate PAT.
+          METRICS_PUSH: '1'
+          METRICS_REPO: glacierzzz26/claude-plugins
+          METRICS_TOKEN: ${{ secrets.AUTOFIX_PAT }}
+
+      # Always upload, even when the loop stopped without converging — the
+      # metrics are most useful for exactly those runs.
+      - name: Upload run metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-fix-metrics-${{ github.event.issue.number }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/autofix/metrics.jsonl
+          if-no-files-found: ignore
