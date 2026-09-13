@@ -8,6 +8,7 @@ import (
 
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/proxy"
+	"personal-ai-gateway/internal/store"
 )
 
 // handleChannelsList 渠道列表(含状态/延迟/今日用量/供给源数展示)。
@@ -179,8 +180,13 @@ func (s *Server) handleChannelSyncModels(w http.ResponseWriter, r *http.Request)
 	}
 	resp := domain.SyncResp{Models: ids}
 	for _, name := range ids {
-		model, err := s.st.GetModelByName(name)
+		// 按规范名归并:同一模型被不同渠道以带前缀/裸名上报时归到一行(真实名记在该 offer 上)。
+		model, err := s.st.GetModelByCanonical(name)
 		if err != nil {
+			if !errors.Is(err, store.ErrNotFound) {
+				writeStoreErr(w, err)
+				return
+			}
 			// 目录无此模型 → 新建(默认停用,人工确认定价后再启用)
 			disabled := false
 			model, err = s.st.CreateModel(domain.ModelInput{Name: name, Enabled: &disabled})
@@ -192,7 +198,7 @@ func (s *Server) handleChannelSyncModels(w http.ResponseWriter, r *http.Request)
 		} else {
 			resp.Updated++
 		}
-		if _, _, err := s.offerForChannel(model.ID, ch.ID); err != nil {
+		if _, _, err := s.offerForChannel(model.ID, ch.ID, name); err != nil {
 			writeStoreErr(w, err)
 			return
 		}
@@ -207,22 +213,30 @@ func (s *Server) handleChannelSyncModels(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// offerForChannel 若模型尚未挂到该渠道则补一个停用 offer(定价后启用)。
-func (s *Server) offerForChannel(modelID, channelID int64) (domain.OfferRead, bool, error) {
+// offerForChannel 若模型尚未挂到该渠道则补一个停用 offer(定价后启用);
+// 已存在则把上游真实名更新为渠道当前上报值(以渠道为准)。
+func (s *Server) offerForChannel(modelID, channelID int64, upstreamModel string) (domain.OfferRead, bool, error) {
 	offers, err := s.st.ListModelOffers(modelID)
 	if err != nil {
 		return domain.OfferRead{}, false, err
 	}
 	for _, o := range offers {
 		if o.ChannelID == channelID {
+			if o.UpstreamModel != upstreamModel {
+				if err := s.st.SetOfferUpstreamModel(o.ID, upstreamModel); err != nil {
+					return domain.OfferRead{}, false, err
+				}
+				o.UpstreamModel = upstreamModel
+			}
 			return o, false, nil
 		}
 	}
 	enabled := false
 	of, err := s.st.CreateOffer(modelID, domain.OfferInput{
-		ChannelID: channelID,
-		Enabled:   &enabled,
-		Note:      "auto-synced · set price then enable",
+		ChannelID:     channelID,
+		Enabled:       &enabled,
+		Note:          "auto-synced · set price then enable",
+		UpstreamModel: upstreamModel,
 	})
 	if err != nil {
 		return domain.OfferRead{}, false, err

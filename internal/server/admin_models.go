@@ -1,10 +1,12 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/store"
 )
 
 // handleModelsList 模型目录(模型 + 供给源 + 今日用量)。
@@ -89,6 +91,44 @@ func (s *Server) handleModelsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleModelsMerge 手工合并重复模型:把 {id} 的供给源并入 {intoId} 后删除 {id}。
+func (s *Server) handleModelsMerge(w http.ResponseWriter, r *http.Request) {
+	id, ok := paramID(r, "id")
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "bad model id")
+		return
+	}
+	var in struct {
+		IntoID int64 `json:"intoId"`
+	}
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	if in.IntoID <= 0 {
+		apiErr(w, http.StatusBadRequest, "validation", "intoId is required")
+		return
+	}
+	if in.IntoID == id {
+		apiErr(w, http.StatusBadRequest, "validation", "不能合并到自身")
+		return
+	}
+	if _, err := s.st.MergeModels(id, in.IntoID); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			apiErr(w, http.StatusConflict, "merge_conflict",
+				"两个模型在同一渠道上都有供给源,请先删除其中一个再合并")
+			return
+		}
+		writeStoreErr(w, err)
+		return
+	}
+	mr, err := s.singleModelRead(in.IntoID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mr)
 }
 
 // handleModelUsage 模型抽屉「用量」:日曲线 + 按渠道聚合。

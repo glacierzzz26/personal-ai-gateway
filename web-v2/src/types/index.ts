@@ -72,6 +72,8 @@ export interface ModelOffer {
   priceFetchedAt?: string;
   priceCurrency?: string;
   priceNativeText?: string;
+  /** 本渠道侧真实模型名(非空=出站发往本渠道时用该名;空=用模型名) */
+  upstreamModel?: string;
 }
 
 /** 供给源创建/编辑入参 */
@@ -90,6 +92,8 @@ export interface OfferDraft {
   priceFetchedAt?: string;
   priceCurrency?: string;
   priceNativeText?: string;
+  /** 上游真实模型名;同样受全量替换约束,编辑时必须回传(空串=清空,用模型名) */
+  upstreamModel?: string;
 }
 
 export interface ModelCatalogItem {

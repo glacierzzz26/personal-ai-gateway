@@ -44,11 +44,14 @@ interface OfferFormValues {
   rateLimitRpm?: number;
   enabled?: boolean;
   note?: string;
+  upstreamModel?: string;
 }
 
-function OfferFormModal({ open, modelId, editing, channels, usedChannelIds, onClose }: {
+function OfferFormModal({ open, modelId, modelName, editing, channels, usedChannelIds, onClose }: {
   open: boolean;
   modelId: number;
+  /** 模型级默认真实名(留空上游名时的出站名),仅用于提示文案 */
+  modelName: string;
   editing: ModelOffer | null;
   channels: Channel[];
   usedChannelIds: number[];
@@ -70,6 +73,7 @@ function OfferFormModal({ open, modelId, editing, channels, usedChannelIds, onCl
         rateLimitRpm: editing.rateLimitRpm,
         enabled: editing.enabled,
         note: editing.note,
+        upstreamModel: editing.upstreamModel ?? '',
       });
     } else {
       form.resetFields();
@@ -98,6 +102,7 @@ function OfferFormModal({ open, modelId, editing, channels, usedChannelIds, onCl
         priceFetchedAt: editing?.priceFetchedAt,
         priceCurrency: editing?.priceCurrency,
         priceNativeText: editing?.priceNativeText,
+        upstreamModel: (values.upstreamModel ?? '').trim(),
       };
       return editing ? api.updateOffer(editing.id, draft) : api.createOffer(modelId, draft);
     },
@@ -220,6 +225,14 @@ function OfferFormModal({ open, modelId, editing, channels, usedChannelIds, onCl
             </Form.Item>
           </Col>
         </Row>
+
+        <Form.Item
+          name="upstreamModel"
+          label="上游模型名"
+          extra={`留空 = 用模型名「${modelName}」。多渠道供同一对外名、但上游真实名不同时,在此填该渠道的真实名。`}
+        >
+          <Input className="gw-mono" placeholder={modelName || '如 deepseek/deepseek-v4.1-flash'} />
+        </Form.Item>
 
         <Form.Item name="note" label="备注">
           <Input.TextArea rows={2} placeholder="可选，如定价依据、上游备注等" />
@@ -406,6 +419,17 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
           <ProviderMark name={v} /> {v}
         </span>
       ),
+    },
+    {
+      title: '上游名', key: 'upstream',
+      render: (_, r) =>
+        r.upstreamModel ? (
+          <span className="gw-mono" style={{ fontSize: 12.5 }}>{r.upstreamModel}</span>
+        ) : (
+          <Tooltip title="未单独指定,出站用模型名">
+            <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>同模型名</span>
+          </Tooltip>
+        ),
     },
     {
       title: '输入价', dataIndex: 'inputPriceUsd', align: 'right',
@@ -844,6 +868,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       <OfferFormModal
         open={offerModal.open}
         modelId={model?.id ?? 0}
+        modelName={model?.originalName ?? ''}
         editing={offerModal.editing}
         channels={channels}
         usedChannelIds={usedChannelIds}

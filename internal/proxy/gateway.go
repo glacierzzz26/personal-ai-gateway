@@ -131,9 +131,13 @@ func (g *Gateway) parseInbound(w http.ResponseWriter, r *http.Request, op string
 	return in, true
 }
 
-// outboundModel 出站请求体应写的模型名:仅当模型被重命名(对外名≠真实名)时返回真实名,
-// 否则返回空串——调用方据此避免在常规透传路径上重新序列化请求体。
-func outboundModel(plan *engine.Plan) string {
+// outboundModel 出站请求体应写的模型名(按实际命中的候选渠道选):
+// 候选 offer 配了上游真实名优先,否则在模型被重命名(对外名≠真实名)时用模型级真实名;
+// 都无 → 空串,调用方据此避免在常规透传路径上重新序列化请求体。
+func outboundModel(plan *engine.Plan, at engine.Attempt) string {
+	if m := at.Offer.UpstreamModel; m != "" {
+		return m
+	}
 	if plan.OriginName != plan.PublicName {
 		return plan.OriginName
 	}
@@ -354,7 +358,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			continue
 		}
 		outProto := OutProto(ch.Provider)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), outboundModel(plan))
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), outboundModel(plan, at))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -457,7 +461,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 			continue
 		}
 		outProto := OutProto(ch.Provider)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), outboundModel(plan))
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), outboundModel(plan, at))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return

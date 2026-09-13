@@ -25,10 +25,12 @@ interface Props {
   onToggleCompare: () => void;
   onToggleEnabled: (v: boolean) => void;
   onDelete: () => void;
+  /** 合并到另一个模型(消除重复行) */
+  onMerge: () => void;
 }
 
 export default function ModelCard({
-  model, picked, busy, officialPrice, onOpen, onToggleCompare, onToggleEnabled, onDelete,
+  model, picked, busy, officialPrice, onOpen, onToggleCompare, onToggleEnabled, onDelete, onMerge,
 }: Props) {
   const p = bestPrice(model);
   const usable = model.offers.filter(o => o.enabled).length;
@@ -134,6 +136,7 @@ export default function ModelCard({
             trigger={['click']}
             menu={{
               items: [
+                { key: 'merge', label: '合并到…', onClick: onMerge },
                 { key: 'delete', label: '删除模型', danger: true, onClick: onDelete },
               ],
             }}

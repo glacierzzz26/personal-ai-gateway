@@ -247,6 +247,9 @@ type OfferInput struct {
 	PriceFetchedAt    string  `json:"priceFetchedAt,omitempty"`
 	PriceCurrency     string  `json:"priceCurrency,omitempty"`
 	PriceNativeText   string  `json:"priceNativeText,omitempty"`
+	// UpstreamModel 本渠道侧真实模型名:非空 = 出站发往本渠道时改写请求体 model 为该值;
+	// 空 = 回落模型级 name。管理端编辑报价时须原样回传(全量替换语义)。
+	UpstreamModel string `json:"upstreamModel,omitempty"`
 }
 
 func (o *OfferInput) Defaults() {
@@ -284,6 +287,8 @@ type OfferRead struct {
 	PriceFetchedAt  string `json:"priceFetchedAt,omitempty"`
 	PriceCurrency   string `json:"priceCurrency,omitempty"`
 	PriceNativeText string `json:"priceNativeText,omitempty"`
+	// UpstreamModel 本渠道侧真实模型名(非空 = 发往本渠道时改写请求体 model;空 = 用模型级 name)。
+	UpstreamModel string `json:"upstreamModel,omitempty"`
 }
 
 // ModelRead 模型目录条目 = models 行 + 关联 offers + 展示字段。

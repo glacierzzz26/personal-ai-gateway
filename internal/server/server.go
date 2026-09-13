@@ -152,6 +152,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("POST /api/v1/models", adm(s.handleModelsCreate))
 	m.HandleFunc("PATCH /api/v1/models/{id}", adm(s.handleModelsUpdate))
 	m.HandleFunc("DELETE /api/v1/models/{id}", adm(s.handleModelsDelete))
+	m.HandleFunc("POST /api/v1/models/{id}/merge", adm(s.handleModelsMerge))
 	m.HandleFunc("GET /api/v1/models/{id}/usage", adm(s.handleModelUsage))
 	m.HandleFunc("POST /api/v1/models/{id}/offers", adm(s.handleOffersCreate))
 	m.HandleFunc("PUT /api/v1/models/{id}/offers/order", adm(s.handleOffersReorder))

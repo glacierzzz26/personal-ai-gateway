@@ -16,7 +16,16 @@ var migrations = []string{
 	m0003ModelDisplayName,
 	// v4:厂商官方定价(来源留证 + 官方参考价与手工报价分离)
 	m0004OfficialPricing,
+	// v5:供给源级上游模型名(对外统一名 → 各渠道各自真实名)
+	m0005OfferUpstreamModel,
 }
+
+// m0005OfferUpstreamModel 把「渠道侧真实模型名」从 model 级下沉到 offer(供给源)级:
+// 同一对外统一名可为不同渠道配各自的上游真实名,出站按实际命中的候选渠道改写请求体 model。
+// 空串 = 未配置,回落 model 级 name(存量数据与旧行为完全一致)。
+const m0005OfferUpstreamModel = `
+ALTER TABLE model_offers ADD COLUMN upstream_model TEXT NOT NULL DEFAULT '';
+`
 
 const m0004OfficialPricing = `
 -- 报价来源留证:应用官方价时写入。四字段空串 = 从未从官方来源应用过。

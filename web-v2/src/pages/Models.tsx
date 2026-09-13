@@ -166,6 +166,69 @@ function SyncModal({ open, onClose, channels, onSync, syncing }: {
   );
 }
 
+function MergeModal({ from, models, onClose, onConfirm }: {
+  from: ModelCatalogItem | null;
+  models: ModelCatalogItem[];
+  onClose: () => void;
+  onConfirm: (into: ModelCatalogItem) => void;
+}) {
+  const [intoId, setIntoId] = useState<number | undefined>(undefined);
+
+  useEffect(() => { if (from) setIntoId(undefined); }, [from]);
+
+  const candidates = from ? models.filter(m => m.id !== from.id) : [];
+
+  return (
+    <Modal
+      open={!!from}
+      title={from ? `把「${from.name}」合并到…` : '合并模型'}
+      onCancel={onClose}
+      destroyOnHidden
+      width={520}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="primary"
+            disabled={!intoId}
+            onClick={() => {
+              const into = candidates.find(m => m.id === intoId);
+              if (into) onConfirm(into);
+            }}
+          >
+            合并
+          </Button>
+        </div>
+      }
+    >
+      <div className="gw-note" role="status" style={{ marginBottom: 16 }}>
+        <b>消除重复模型</b>
+        <span>
+          「{from?.name}」的供给源会并入目标模型后删除源行；各供给源的上游真实名会保留。
+          若两者在同一渠道上都有供给源，会提示先删除其一。
+        </span>
+      </div>
+      {candidates.length === 0 ? (
+        <EmptyState title="没有可合并的目标" desc="目录里只有这一个模型。" />
+      ) : (
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择目标模型"
+          value={intoId}
+          onChange={setIntoId}
+          showSearch
+          optionFilterProp="label"
+          autoFocus
+          options={candidates.map(m => ({
+            value: m.id,
+            label: `${m.name}${m.displayName ? ` · 原始名 ${m.originalName}` : ''}（${m.offers.length} 家供给）`,
+          }))}
+        />
+      )}
+    </Modal>
+  );
+}
+
 export default function Models() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
@@ -182,6 +245,7 @@ export default function Models() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [mergeFrom, setMergeFrom] = useState<ModelCatalogItem | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const { data: models = [], isLoading, isError, refetch } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
@@ -198,10 +262,13 @@ export default function Models() {
     for (const op of official) m.set(`${op.provider}|${op.modelName}`, op);
     return m;
   }, [official]);
-  /** 该模型任一供给源能对上官方参考价 → 返回第一条(用于角标 tooltip)。 */
+  /** 该模型任一供给源能对上官方参考价 → 返回第一条(用于角标 tooltip)。
+   *  官方价按 (provider, 渠道侧真实名) 存;真实名现在优先取 offer 上的上游名。 */
   const officialOf = (m: ModelCatalogItem): OfficialPriceView | undefined => {
     for (const o of m.offers) {
-      const hit = officialByName.get(`${o.provider}|${m.originalName}`) ?? officialByName.get(`${o.provider}|${m.name}`);
+      const hit = officialByName.get(`${o.provider}|${o.upstreamModel}`)
+        ?? officialByName.get(`${o.provider}|${m.originalName}`)
+        ?? officialByName.get(`${o.provider}|${m.name}`);
       if (hit) return hit;
     }
     return undefined;
@@ -270,6 +337,29 @@ export default function Models() {
       okType: 'danger',
       cancelText: '取消',
       onOk: () => deleteModel.mutateAsync(m.id).catch(() => undefined),
+    });
+  };
+
+  const mergeModel = useMutation({
+    mutationFn: (v: { fromId: number; intoId: number }) => api.mergeModel(v.fromId, v.intoId),
+    onSuccess: () => {
+      message.success('模型已合并');
+      setMergeFrom(null);
+      qc.invalidateQueries({ queryKey: ['models'] });
+      qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+    onError: (e: Error) => message.error(e.message || '合并失败'),
+  });
+
+  const confirmMergeModel = (from: ModelCatalogItem, into: ModelCatalogItem) => {
+    if (from.id === into.id) return;
+    modal.confirm({
+      title: `把「${from.name}」合并到「${into.name}」`,
+      content: `「${from.name}」的 ${from.offers.length} 条供给源将并入「${into.name}」，源模型随后删除。`
+        + '若两者在同一渠道上都有供给源会冲突，需先删除其中一个。',
+      okText: '合并',
+      cancelText: '取消',
+      onOk: () => mergeModel.mutateAsync({ fromId: from.id, intoId: into.id }).catch(() => undefined),
     });
   };
 
@@ -527,6 +617,7 @@ export default function Models() {
                     onToggleCompare={() => toggleCompare(m.id)}
                     onToggleEnabled={next => toggleModel.mutate({ id: m.id, enabled: next })}
                     onDelete={() => confirmDeleteModel(m)}
+                    onMerge={() => setMergeFrom(m)}
                   />
                 ))}
               </div>
@@ -597,6 +688,12 @@ export default function Models() {
       <CompareModal open={compareOpen} models={compareModels} onClose={() => setCompareOpen(false)} />
       <SyncModal open={syncOpen} channels={channels} syncing={syncModel.isPending} onClose={() => setSyncOpen(false)} onSync={handleSyncModel} />
       <AddModelModal open={addOpen} creating={createModel.isPending} onClose={() => setAddOpen(false)} onCreate={handleCreateModel} />
+      <MergeModal
+        from={mergeFrom}
+        models={models}
+        onClose={() => setMergeFrom(null)}
+        onConfirm={into => { if (mergeFrom) confirmMergeModel(mergeFrom, into); }}
+      />
     </div>
   );
 }

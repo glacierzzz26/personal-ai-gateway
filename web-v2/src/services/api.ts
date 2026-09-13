@@ -78,6 +78,10 @@ export const api = {
     return http.patch<ModelCatalogItem>(`/models/${id}`, body).then(model);
   },
   deleteModel(id: number): Promise<unknown> { return http.del(`/models/${id}`); },
+  /** 合并重复模型:把 fromId 的供给源并入 intoId 后删除 fromId */
+  mergeModel(fromId: number, intoId: number): Promise<ModelCatalogItem> {
+    return http.post<ModelCatalogItem>(`/models/${fromId}/merge`, { intoId }).then(model);
+  },
   getModelUsage(id: number, days = 7): Promise<ModelUsageData> {
     return http.get(`/models/${id}/usage${qs({ days })}`);
   },
@@ -131,6 +135,8 @@ export const api = {
       priceFetchedAt: o.priceFetchedAt,
       priceCurrency: o.priceCurrency,
       priceNativeText: o.priceNativeText,
+      // 上游真实名同理:漏传即清空,出站会退回模型名
+      upstreamModel: o.upstreamModel,
     };
   },
 

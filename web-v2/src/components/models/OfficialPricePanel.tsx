@@ -54,8 +54,11 @@ export default function OfficialPricePanel({ model, offers }: Props) {
     return m;
   }, [all]);
 
+  // 官方价按 (provider, 渠道侧真实名) 存;真实名优先取 offer 上的上游名,再回落模型级真实名/统一名。
   const officialFor = (o: ModelOffer): OfficialPriceView | undefined =>
-    index.get(`${o.provider}|${model.originalName}`) ?? index.get(`${o.provider}|${model.name}`);
+    index.get(`${o.provider}|${o.upstreamModel}`)
+    ?? index.get(`${o.provider}|${model.originalName}`)
+    ?? index.get(`${o.provider}|${model.name}`);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['official-prices'] });
@@ -98,7 +101,8 @@ export default function OfficialPricePanel({ model, offers }: Props) {
     form.resetFields();
     form.setFieldsValue({
       provider: offers[0]?.provider ?? '智谱',
-      modelName: model.originalName,
+      // 手工价按渠道侧真实名存:优先用首个供给源的上游名,回落模型级真实名。
+      modelName: offers[0]?.upstreamModel || model.originalName,
       currency: 'CNY',
       inputPrice: 0,
       outputPrice: 0,
