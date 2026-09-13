@@ -218,10 +218,12 @@ func (s *Store) CreateOffer(modelID int64, in domain.OfferInput) (domain.OfferRe
 	}
 	res, err := s.db.Exec(`INSERT INTO model_offers (
 		model_id, channel_id, input_price_usd, output_price_usd, cache_read_price_usd,
-		override_price, priority, enabled, rate_limit_rpm, timeout_ms, note
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		override_price, priority, enabled, rate_limit_rpm, timeout_ms, note,
+		price_source_url, price_fetched_at, price_currency, price_native_text
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		modelID, in.ChannelID, in.InputPriceUsd, in.OutputPriceUsd, in.CacheReadPriceUsd,
-		b2i(in.OverridePrice), *in.Priority, b2i(*in.Enabled), in.RateLimitRpm, in.TimeoutMs, in.Note)
+		b2i(in.OverridePrice), *in.Priority, b2i(*in.Enabled), in.RateLimitRpm, in.TimeoutMs, in.Note,
+		in.PriceSourceURL, in.PriceFetchedAt, in.PriceCurrency, in.PriceNativeText)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.OfferRead{}, ErrConflict
@@ -292,10 +294,12 @@ func (s *Store) UpdateOffer(id int64, in domain.OfferInput) (domain.OfferRead, e
 	}
 	_, err = s.db.Exec(`UPDATE model_offers SET
 		input_price_usd=?, output_price_usd=?, cache_read_price_usd=?, override_price=?,
-		priority=?, enabled=?, rate_limit_rpm=?, timeout_ms=?, note=?
+		priority=?, enabled=?, rate_limit_rpm=?, timeout_ms=?, note=?,
+		price_source_url=?, price_fetched_at=?, price_currency=?, price_native_text=?
 		WHERE id=?`,
 		in.InputPriceUsd, in.OutputPriceUsd, in.CacheReadPriceUsd, b2i(in.OverridePrice),
-		*in.Priority, b2i(*in.Enabled), in.RateLimitRpm, in.TimeoutMs, in.Note, id)
+		*in.Priority, b2i(*in.Enabled), in.RateLimitRpm, in.TimeoutMs, in.Note,
+		in.PriceSourceURL, in.PriceFetchedAt, in.PriceCurrency, in.PriceNativeText, id)
 	if err != nil {
 		return domain.OfferRead{}, fmt.Errorf("update offer %d: %w", id, err)
 	}
@@ -381,7 +385,8 @@ func (s *Store) ReorderOffers(modelID int64, fromIdx, insertAt int) ([]domain.Of
 const offerSelect = `SELECT o.id, o.model_id, o.channel_id, c.name, c.provider,
 	o.input_price_usd, o.output_price_usd, o.cache_read_price_usd, o.override_price,
 	o.priority, o.enabled, o.rate_limit_rpm, o.timeout_ms, o.note,
-	m.context_window, c.enabled
+	m.context_window, c.enabled,
+	o.price_source_url, o.price_fetched_at, o.price_currency, o.price_native_text
 	FROM model_offers o
 	JOIN channels c ON c.id = o.channel_id
 	JOIN models   m ON m.id = o.model_id`
@@ -394,7 +399,8 @@ func scanOffer(row scanner) (domain.OfferRead, error) {
 	if err := row.Scan(&of.ID, &of.ModelID, &of.ChannelID, &of.ChannelName, &provider,
 		&of.InputPriceUsd, &of.OutputPriceUsd, &of.CacheReadPriceUsd, &overridePrice,
 		&of.Priority, &enabled, &of.RateLimitRpm, &timeout, &of.Note,
-		&of.ContextWindow, &channelEnabled); err != nil {
+		&of.ContextWindow, &channelEnabled,
+		&of.PriceSourceURL, &of.PriceFetchedAt, &of.PriceCurrency, &of.PriceNativeText); err != nil {
 		return domain.OfferRead{}, err
 	}
 	of.Provider = provider

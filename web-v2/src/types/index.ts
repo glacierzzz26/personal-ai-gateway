@@ -67,6 +67,11 @@ export interface ModelOffer {
   rateLimitRpm: number;
   status: HealthStatus;
   note?: string;
+  /** 官方价来源留证(空=未从官方来源应用过)。仅作核对,不参与计费。 */
+  priceSourceUrl?: string;
+  priceFetchedAt?: string;
+  priceCurrency?: string;
+  priceNativeText?: string;
 }
 
 /** 供给源创建/编辑入参 */
@@ -80,6 +85,11 @@ export interface OfferDraft {
   enabled?: boolean;
   priority?: number;
   note?: string;
+  /** 来源留证四字段必须原样回传(后端 PATCH 为全量替换,漏传即被清空) */
+  priceSourceUrl?: string;
+  priceFetchedAt?: string;
+  priceCurrency?: string;
+  priceNativeText?: string;
 }
 
 export interface ModelCatalogItem {
@@ -243,6 +253,71 @@ export interface Settings {
   tzOffsetMin: number;
   /** 生成 Claude 配置时对外可见的网关基址;留空=按访问地址推断 */
   publicBaseUrl?: string;
+  /** 人民币→美元换算率(手工维护,用于官方价换算展示;0=未设,官方人民币价不可应用) */
+  usdPerCny?: number;
+}
+
+/* —— 官方定价(厂商官网) —— */
+
+/** 官方计费形态:flat 单一价 / peak_offpeak 峰谷分时 / tiered 阶梯 / discount 限时折扣 */
+export type BillingShape = 'flat' | 'peak_offpeak' | 'tiered' | 'discount';
+export type PriceCurrency = 'CNY' | 'USD';
+
+/** 官方参考价一行(原币种 / 百万 token)。分时类取空闲价为「生效默认」,明细在 detail。 */
+export interface OfficialPrice {
+  id: number;
+  provider: Provider;
+  modelName: string;
+  sourceUrl: string;
+  fetchedAt: string;
+  currency: PriceCurrency;
+  billingShape: BillingShape;
+  inputPrice: number;
+  outputPrice: number;
+  cacheReadPrice: number;
+  /** 缓存价由官方规则推导(非官方列,如通义) */
+  cacheDerived: boolean;
+  nativeText?: string;
+  detail?: Record<string, unknown>;
+  contentSha256?: string;
+  note?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** 官方价 + 与现有 offer 的比对(GET 读接口返回) */
+export interface OfficialPriceView extends OfficialPrice {
+  /** 按 settings.usdPerCny 换算的 USD 价;汇率未设或原币为 USD 时同原价 */
+  inputPriceUsd: number;
+  outputPriceUsd: number;
+  cacheReadPriceUsd: number;
+  /** 原币为 CNY 且设置了汇率时才有意义 */
+  rateSet: boolean;
+  /** 已应用该官方价(来源 URL + 抓取时间匹配)的 offer */
+  appliedOfferIds: number[];
+}
+
+/** POST /channels/{id}/fetch-pricing 返回。失败即失败:failed 非空且 upserted=0。 */
+export interface FetchPricingResult {
+  provider: Provider;
+  sourceUrl: string;
+  upserted: number;
+  models: string[];
+  failed?: string[];
+  contentSha256?: string;
+}
+
+/** 手工录入官方参考价(智谱等页面不可抓的厂商) */
+export interface ManualPriceDraft {
+  provider: Provider;
+  modelName: string;
+  sourceUrl: string;
+  currency: PriceCurrency;
+  inputPrice: number;
+  outputPrice: number;
+  cacheReadPrice?: number;
+  nativeText?: string;
+  note?: string;
 }
 
 export type Role = 'admin' | 'user';

@@ -1,0 +1,291 @@
+package server
+
+import (
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"personal-ai-gateway/internal/config"
+	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/secret"
+	"personal-ai-gateway/internal/store"
+)
+
+// newTestServerS 同 newTestServer,但额外返回 *Server 以便注入 pricingBase(仅测试用)。
+func newTestServerS(t *testing.T) (*httptest.Server, *http.Client, *store.Store, *Server) {
+	t.Helper()
+	dir := t.TempDir()
+	if _, err := secret.BootstrapKey(dir); err != nil {
+		t.Fatalf("bootstrap master key: %v", err)
+	}
+	st, err := store.Open(filepath.Join(dir, "gw.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s := New(config.Config{}, st)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	jar, _ := cookiejar.New(nil)
+	return srv, &http.Client{Jar: jar}, st, s
+}
+
+// redirectRT 把出站请求改写到本地假官方页(仅测试)。
+// 注意:它被塞进 AllowlistClient 的 base.Transport —— 白名单校验发生在更外层,
+// 故「只允许官方域名」在测试注入下依旧被强制,本用例因此同时验证了该保证。
+type redirectRT struct{ target string }
+
+func (t *redirectRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	u, _ := url.Parse(t.target)
+	r2 := req.Clone(req.Context())
+	r2.URL.Scheme = u.Scheme
+	r2.URL.Host = u.Host
+	r2.Host = ""
+	return http.DefaultTransport.RoundTrip(r2)
+}
+
+// mkChannelOf 建一个指定 provider 的渠道供定价测试。
+func mkChannelOf(t *testing.T, c *http.Client, base string, name string, p domain.Provider) int64 {
+	t.Helper()
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels", map[string]any{
+		"name": name, "provider": string(p), "baseUrl": "https://upstream.example.com",
+	})
+	mustStatus(t, code, http.StatusOK, "create channel")
+	ch := decode[domain.ChannelRead](t, body)
+	return ch.ID
+}
+
+// TestFetchPricingManualOnlyProvider 智谱页面为动态渲染,抓取必须显式报错(不得静默成功)。
+func TestFetchPricingManualOnlyProvider(t *testing.T) {
+	srv, c, _ := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+	zid := mkChannelOf(t, c, base, "zhipu", domain.ProviderZhipu)
+
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels/"+itoa(zid)+"/fetch-pricing", nil)
+	mustStatus(t, code, http.StatusBadRequest, "zhipu fetch pricing")
+	e := decode[struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}](t, body)
+	if e.Error.Type != "manual_only" {
+		t.Fatalf("type = %q, body %s", e.Error.Type, body)
+	}
+}
+
+// TestFetchPricingUnsupportedProvider OpenAI 无受支持官方单价来源 → 400。
+func TestFetchPricingUnsupportedProvider(t *testing.T) {
+	srv, c, _ := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+	oid := mkChannelOf(t, c, base, "openai", domain.ProviderOpenAI)
+
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels/"+itoa(oid)+"/fetch-pricing", nil)
+	mustStatus(t, code, http.StatusBadRequest, "openai fetch pricing")
+	if !strings.Contains(string(body), "无受支持的官方单价页面") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+// TestManualPriceEntryAndApply 手工录入官方价 → 应用 → offer 三价 + 来源留证落库,override_price 不动。
+func TestManualPriceEntryAndApply(t *testing.T) {
+	srv, c, st := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+	chID := mkChannelOf(t, c, base, "zhipu", domain.ProviderZhipu)
+
+	// 手工录入(智谱 GLM,人民币,限时折扣)。
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/manual", map[string]any{
+		"provider": string(domain.ProviderZhipu), "modelName": "glm-4.6",
+		"sourceUrl": "https://bigmodel.cn/pricing", "currency": "CNY",
+		"inputPrice": 0.1, "outputPrice": 0.2, "nativeText": "限时5折",
+	})
+	mustStatus(t, code, http.StatusOK, "manual price")
+	op := decode[domain.OfficialPriceView](t, body)
+	if op.ID == 0 || op.ModelName != "glm-4.6" {
+		t.Fatalf("manual row bad: %+v", op)
+	}
+	// 未设汇率 → RateSet=false,USD 价留 0(不臆造)。
+	if op.RateSet {
+		t.Error("rateSet should be false before rate configured")
+	}
+
+	// 挂一个手工覆盖价 offer。
+	m, err := st.CreateModel(domain.ModelInput{Name: "glm-4.6", ContextWindow: 128000})
+	mustNoErrT(t, err, "create model")
+	of, err := st.CreateOffer(m.ID, domain.OfferInput{
+		ChannelID: chID, InputPriceUsd: 0.05, OutputPriceUsd: 0.1, OverridePrice: true, Note: "手填",
+	})
+	mustNoErrT(t, err, "create offer")
+
+	// 未确认就应用 → 409 override_required。
+	code, _ = doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/"+itoa(op.ID)+"/apply",
+		map[string]any{"offerId": of.ID})
+	mustStatus(t, code, http.StatusConflict, "apply without confirm")
+
+	// 无汇率时确认应用 → 400 no_rate(不臆造汇率)。
+	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/"+itoa(op.ID)+"/apply",
+		map[string]any{"offerId": of.ID, "confirmOverride": true})
+	mustStatus(t, code, http.StatusBadRequest, "apply without rate")
+	if !strings.Contains(string(body), "汇率") {
+		t.Fatalf("unexpected body: %s", body)
+	}
+
+	// 设置汇率后应用成功。
+	code, _ = doJSON(t, c, http.MethodPatch, base+"/api/v1/settings", map[string]any{
+		"requestTimeoutMs": 60000, "usdPerCny": 0.14,
+	})
+	mustStatus(t, code, http.StatusOK, "set rate")
+
+	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/"+itoa(op.ID)+"/apply",
+		map[string]any{"offerId": of.ID, "confirmOverride": true})
+	mustStatus(t, code, http.StatusOK, "apply with rate")
+	got := decode[domain.OfferRead](t, body)
+	// 0.1 CNY × 0.14 = 0.014;0.2 × 0.14 = 0.028。
+	if !closeTo(got.InputPriceUsd, 0.014) || !closeTo(got.OutputPriceUsd, 0.028) {
+		t.Errorf("usd prices not applied: %+v", got)
+	}
+	if !got.OverridePrice {
+		t.Error("override_price must be untouched")
+	}
+	if got.Note != "手填" {
+		t.Errorf("note must be untouched: %q", got.Note)
+	}
+	if got.PriceSourceURL != "https://bigmodel.cn/pricing" || got.PriceCurrency != "CNY" {
+		t.Errorf("provenance not written: %+v", got)
+	}
+
+	// 读回官方价:RateSet=true 且 AppliedOfferIDs 含该 offer。
+	code, body = doJSON(t, c, http.MethodGet,
+		base+"/api/v1/channels/"+itoa(chID)+"/official-prices", nil)
+	mustStatus(t, code, http.StatusOK, "list channel official prices")
+	views := decode[[]domain.OfficialPriceView](t, body)
+	if len(views) != 1 {
+		t.Fatalf("want 1 view, got %d", len(views))
+	}
+	if !views[0].RateSet {
+		t.Error("rateSet should be true after rate configured")
+	}
+	found := false
+	for _, id := range views[0].AppliedOfferIDs {
+		if id == of.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("appliedOfferIds = %v, want to contain %d", views[0].AppliedOfferIDs, of.ID)
+	}
+}
+
+// TestFetchPricingFailureWritesNothing 抓取失败时 official_prices 必须为空,且原 offer 报价不变。
+func TestFetchPricingFailureWritesNothing(t *testing.T) {
+	srv, c, st := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+	oid := mkChannelOf(t, c, base, "openai", domain.ProviderOpenAI)
+
+	m, err := st.CreateModel(domain.ModelInput{Name: "gpt-5", ContextWindow: 400000})
+	mustNoErrT(t, err, "create model")
+	of, err := st.CreateOffer(m.ID, domain.OfferInput{ChannelID: oid, InputPriceUsd: 1.5, OutputPriceUsd: 6})
+	mustNoErrT(t, err, "create offer")
+
+	code, _ := doJSON(t, c, http.MethodPost, base+"/api/v1/channels/"+itoa(oid)+"/fetch-pricing", nil)
+	mustStatus(t, code, http.StatusBadRequest, "fetch pricing fails")
+
+	rows, err := st.ListAllOfficialPrices()
+	mustNoErrT(t, err, "list all")
+	if len(rows) != 0 {
+		t.Fatalf("no official price should be written on failure, got %d", len(rows))
+	}
+	after, err := st.GetOffer(of.ID)
+	mustNoErrT(t, err, "get offer")
+	if after.InputPriceUsd != 1.5 || after.OutputPriceUsd != 6 {
+		t.Errorf("existing offer price must be unchanged: %+v", after)
+	}
+}
+
+// TestFetchPricingSuccessPath 走真解析器(绑官方样本)的端到端抓取:
+// 假官方页 + 出站改写 → DeepSeek 峰谷两档落库、来源 URL/时间/sha256 齐备。
+func TestFetchPricingSuccessPath(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "pricing", "testdata", "deepseek_pricing.html"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv, c, st, s := newTestServerS(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+	// 注入:所有官方域出站改写本地假页。
+	s.pricingBase = func(p domain.Provider, _ domain.Settings) *http.Client {
+		return &http.Client{Transport: &redirectRT{target: upstream.URL}}
+	}
+	did := mkChannelOf(t, c, base, "deepseek", domain.ProviderDeepSeek)
+
+	code, body2 := doJSON(t, c, http.MethodPost, base+"/api/v1/channels/"+itoa(did)+"/fetch-pricing", nil)
+	mustStatus(t, code, http.StatusOK, "deepseek fetch pricing")
+	res := decode[domain.FetchPricingResult](t, body2)
+	if res.Upserted == 0 || len(res.Models) == 0 {
+		t.Fatalf("nothing upserted: %+v", res)
+	}
+	if res.ContentSHA == "" {
+		t.Error("content sha256 must be recorded")
+	}
+	if !strings.Contains(res.SourceURL, "api-docs.deepseek.com") {
+		t.Errorf("source url should be official domain: %q", res.SourceURL)
+	}
+
+	// 落库的官方价:CNY + 峰谷形态 + 来源可追溯。
+	rows, err := st.ListOfficialPrices(domain.ProviderDeepSeek)
+	mustNoErrT(t, err, "list official prices")
+	if len(rows) == 0 {
+		t.Fatal("official prices not persisted")
+	}
+	if rows[0].Currency != domain.CurrencyCNY || rows[0].BillingShape != domain.ShapePeakOff {
+		t.Errorf("bad row: %+v", rows[0])
+	}
+	if rows[0].SourceURL == "" || rows[0].FetchedAt.IsZero() || rows[0].ContentSHA256 == "" {
+		t.Errorf("provenance incomplete: %+v", rows[0])
+	}
+}
+
+// TestManualPriceRequiresSourceURL 手工录入缺来源 URL → 400(手工也要留证)。
+func TestManualPriceRequiresSourceURL(t *testing.T) {
+	srv, c, _ := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+
+	code, _ := doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/manual", map[string]any{
+		"provider": string(domain.ProviderZhipu), "modelName": "glm-4.6",
+		"currency": "CNY", "inputPrice": 0.1, "outputPrice": 0.2,
+	})
+	mustStatus(t, code, http.StatusBadRequest, "manual without source url")
+}
+
+// ---- 小工具 ----
+
+func mustNoErrT(t *testing.T, err error, msg string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v", msg, err)
+	}
+}
+
+func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+func closeTo(a, b float64) bool {
+	d := a - b
+	return d < 1e-6 && d > -1e-6
+}

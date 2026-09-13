@@ -14,7 +14,44 @@ var migrations = []string{
 	m0002MultiUser,
 	// v3:模型统一名称(网关侧对外名,与渠道侧真实模型名解耦)
 	m0003ModelDisplayName,
+	// v4:厂商官方定价(来源留证 + 官方参考价与手工报价分离)
+	m0004OfficialPricing,
 }
+
+const m0004OfficialPricing = `
+-- 报价来源留证:应用官方价时写入。四字段空串 = 从未从官方来源应用过。
+--   price_source_url  来源官方页面 URL(可点击核对)
+--   price_fetched_at  抓取时间(UTC RFC3339),不是「改动时间」
+--   price_currency    原币种(CNY|USD);offer 计价恒为 USD
+--   price_native_text 原始单价文本(如 "高峰 8元 / 空闲 4元"),便于人工核对
+ALTER TABLE model_offers ADD COLUMN price_source_url  TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_offers ADD COLUMN price_fetched_at  TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_offers ADD COLUMN price_currency    TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_offers ADD COLUMN price_native_text TEXT NOT NULL DEFAULT '';
+
+-- 官方参考价:与手工报价(model_offers)分离存放。手工价优先,官方价作默认值与比对源。
+-- 价格一律以「原币种 / 百万 token」存储;分时类取空闲价作生效默认(见 detail_json)。
+CREATE TABLE IF NOT EXISTS official_prices (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider         TEXT    NOT NULL,              -- domain.Provider 原值
+  model_name       TEXT    NOT NULL,              -- 渠道侧真实模型名
+  source_url       TEXT    NOT NULL,              -- 官方域名页面
+  fetched_at       TEXT    NOT NULL,              -- 抓取时间 UTC RFC3339
+  currency         TEXT    NOT NULL,              -- CNY | USD
+  billing_shape    TEXT    NOT NULL DEFAULT 'flat', -- flat|peak_offpeak|tiered|discount
+  in_price         REAL    NOT NULL,              -- 原币种/百万 token
+  out_price        REAL    NOT NULL,
+  cache_read_price REAL    NOT NULL DEFAULT 0,
+  cache_derived    INTEGER NOT NULL DEFAULT 0,    -- 缓存价是否由官方规则推导(非官方列)
+  native_text      TEXT    NOT NULL DEFAULT '',   -- 原始单价文本
+  detail_json      TEXT    NOT NULL DEFAULT '{}', -- 分时/阶梯/折扣明细
+  content_sha256   TEXT    NOT NULL DEFAULT '',   -- 官方页面内容指纹
+  created_at       TEXT    NOT NULL,
+  updated_at       TEXT    NOT NULL,
+  UNIQUE (provider, model_name)
+);
+CREATE INDEX IF NOT EXISTS idx_official_prices_provider ON official_prices (provider);
+`
 
 const m0003ModelDisplayName = `
 -- 统一名称:空串表示未重命名(对外回落为真实模型名 name)。

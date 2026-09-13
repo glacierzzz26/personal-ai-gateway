@@ -1,8 +1,8 @@
-import { Button, Card, Dropdown, Switch, Typography } from 'antd';
+import { Button, Card, Dropdown, Switch, Tooltip, Typography } from 'antd';
 import { MoreOutlined } from '@ant-design/icons';
 import ProviderMark from '@/components/ProviderMark';
 import { CAP_LABEL, fmt } from '@/utils/format';
-import type { ModelCatalogItem } from '@/types';
+import type { ModelCatalogItem, OfficialPriceView } from '@/types';
 
 /** 从真实供给源推导最优报价：输入价 / 输出价各自取启用供给源的最低值 */
 export function bestPrice(m: ModelCatalogItem): { inP: number; outP: number } | null {
@@ -19,6 +19,8 @@ interface Props {
   picked: boolean;
   /** 启用开关请求进行中 */
   busy?: boolean;
+  /** 匹配到的官方参考价(任一供给源 provider + 模型名对上),有则显示来源角标 */
+  officialPrice?: OfficialPriceView;
   onOpen: () => void;
   onToggleCompare: () => void;
   onToggleEnabled: (v: boolean) => void;
@@ -26,10 +28,11 @@ interface Props {
 }
 
 export default function ModelCard({
-  model, picked, busy, onOpen, onToggleCompare, onToggleEnabled, onDelete,
+  model, picked, busy, officialPrice, onOpen, onToggleCompare, onToggleEnabled, onDelete,
 }: Props) {
   const p = bestPrice(model);
   const usable = model.offers.filter(o => o.enabled).length;
+  const officialBadge = officialPrice;
 
   return (
     <Card
@@ -82,6 +85,28 @@ export default function ModelCard({
             </span>
             <span className="gw-num" style={{ fontSize: 13, color: 'var(--gw-text-2)' }}> / {fmt.price(p.outP)}</span>
             <span style={{ fontSize: 11, color: 'var(--gw-text-3)', marginLeft: 4 }}>输入/输出 · 每 1M tokens</span>
+            {officialBadge && (
+              <Tooltip
+                title={
+                  <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    <div>官方参考价 {officialBadge.currency === 'CNY' ? '¥' : '$'}{officialBadge.inputPrice} / {officialBadge.currency === 'CNY' ? '¥' : '$'}{officialBadge.outputPrice}</div>
+                    <div>来源:{officialBadge.sourceUrl}</div>
+                    <div>抓取:{fmt.dt(officialBadge.fetchedAt)}</div>
+                  </div>
+                }
+              >
+                <a
+                  className="gw-badge"
+                  href={officialBadge.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ marginLeft: 6, fontSize: 11 }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  官方 ↗
+                </a>
+              </Tooltip>
+            )}
           </span>
         ) : (
           <span style={{ color: 'var(--gw-text-3)', fontSize: 13 }}>未启用供给源</span>

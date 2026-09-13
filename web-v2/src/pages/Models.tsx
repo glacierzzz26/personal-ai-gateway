@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  App, Button, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Table,
+  App, Button, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Table, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,7 +13,7 @@ import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import { api } from '@/services/api';
 import { capabilities, providers } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
-import type { Capability, Channel, ModelCatalogItem, ModelDraft } from '@/types';
+import type { Capability, Channel, ModelCatalogItem, ModelDraft, OfficialPriceView } from '@/types';
 
 type SortKey = 'price' | 'latency' | 'hot' | 'ctx';
 /** 启用状态筛选:all / 仅已启用 / 仅未启用 */
@@ -186,6 +186,26 @@ export default function Models() {
 
   const { data: models = [], isLoading, isError, refetch } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
   const { data: channels = [] } = useQuery({ queryKey: ['channels'], queryFn: api.getChannels });
+  // 官方参考价:用于给「最低价」列加来源角标(只读,失败静默)。
+  const { data: official = [] } = useQuery({
+    queryKey: ['official-prices'],
+    queryFn: () => api.officialPrices(),
+    retry: 0,
+    staleTime: 30_000,
+  });
+  const officialByName = useMemo(() => {
+    const m = new Map<string, OfficialPriceView>();
+    for (const op of official) m.set(`${op.provider}|${op.modelName}`, op);
+    return m;
+  }, [official]);
+  /** 该模型任一供给源能对上官方参考价 → 返回第一条(用于角标 tooltip)。 */
+  const officialOf = (m: ModelCatalogItem): OfficialPriceView | undefined => {
+    for (const o of m.offers) {
+      const hit = officialByName.get(`${o.provider}|${m.originalName}`) ?? officialByName.get(`${o.provider}|${m.name}`);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
 
   const toggleModel = useMutation({
     mutationFn: (v: { id: number; enabled: boolean }) => {
@@ -325,10 +345,30 @@ export default function Models() {
     },
     { title: '上下文', dataIndex: 'contextWindow', align: 'right', width: 110, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
     {
-      title: '最低输入价', key: 'inP', align: 'right', width: 130,
+      title: '最低输入价', key: 'inP', align: 'right', width: 150,
       render: (_, m) => {
         const p = bestPrice(m);
-        return <span className="gw-num" style={{ color: p ? 'var(--gw-primary)' : undefined }}>{p ? fmt.price(p.inP) : '—'}</span>;
+        const op = officialOf(m);
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+            <span className="gw-num" style={{ color: p ? 'var(--gw-primary)' : undefined }}>{p ? fmt.price(p.inP) : '—'}</span>
+            {op && (
+              <Tooltip
+                title={
+                  <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    <div>官方参考价 {op.currency === 'CNY' ? '¥' : '$'}{op.inputPrice} / {op.currency === 'CNY' ? '¥' : '$'}{op.outputPrice}</div>
+                    <div>来源:{op.sourceUrl}</div>
+                    <div>抓取:{fmt.dt(op.fetchedAt)}</div>
+                  </div>
+                }
+              >
+                <a className="gw-badge" href={op.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 11.5 }}>
+                  官方 ↗
+                </a>
+              </Tooltip>
+            )}
+          </span>
+        );
       },
     },
     {
@@ -482,6 +522,7 @@ export default function Models() {
                     model={m}
                     picked={compare.includes(m.id)}
                     busy={busyId === m.id}
+                    officialPrice={officialOf(m)}
                     onOpen={() => setDrawerId(m.id)}
                     onToggleCompare={() => toggleCompare(m.id)}
                     onToggleEnabled={next => toggleModel.mutate({ id: m.id, enabled: next })}
@@ -496,7 +537,7 @@ export default function Models() {
                 dataSource={list}
                 columns={tableCols}
                 pagination={list.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
-                scroll={{ x: 1100 }}
+                scroll={{ x: 1180 }}
                 onRow={r => ({
                   onClick: () => setDrawerId(r.id),
                   onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrawerId(r.id); } },

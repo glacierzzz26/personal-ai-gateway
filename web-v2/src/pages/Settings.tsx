@@ -176,6 +176,18 @@ export default function Settings() {
               value={f.publicBaseUrl ?? ''} onChange={e => s('publicBaseUrl', e.target.value)} />
           ),
         },
+        {
+          key: 'usdPerCny', t: 'USD/CNY 汇率',
+          d: '官方价多为人民币,网关口径为美元。此处手工维护换算率(如 0.14),仅用于官方价换算展示;留 0 = 未设,官方人民币价不可应用',
+          render: (f, s) => (
+            <InputNumber
+              style={{ width: 200 }} min={0} max={10} step={0.001} precision={4}
+              placeholder="0 = 未设"
+              value={f.usdPerCny ?? 0}
+              onChange={v => s('usdPerCny', Number(v) || 0)}
+            />
+          ),
+        },
       ],
     },
     {

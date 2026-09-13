@@ -43,6 +43,18 @@ func decodeStringList(raw string) []string {
 	return out
 }
 
+// decodeAnyMap 解析任意 JSON 对象(官方价 detail_json 等)。空/非法 → 空 map。
+func decodeAnyMap(raw string) map[string]any {
+	out := map[string]any{}
+	if raw == "" {
+		return out
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return map[string]any{}
+	}
+	return out
+}
+
 // decodeWeightMap 解析 {"<channelId>": weight} JSON 到 map[int64]int。
 func decodeWeightMap(raw string) map[int64]int {
 	out := map[int64]int{}

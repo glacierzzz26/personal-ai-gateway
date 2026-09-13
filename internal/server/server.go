@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"personal-ai-gateway/internal/config"
+	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/engine"
 	"personal-ai-gateway/internal/proxy"
 	"personal-ai-gateway/internal/store"
@@ -28,6 +29,10 @@ type Server struct {
 	eng *engine.Engine
 	gw  *proxy.Gateway
 	rl  *proxy.Relay
+
+	// pricingBase 覆盖官方定价抓取的基础 client(仅测试注入;生产 nil → 用 s.rl.Client)。
+	// 官方域名白名单在此之上照常套用,注入的 base 也不例外。
+	pricingBase func(p domain.Provider, settings domain.Settings) *http.Client
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
@@ -133,6 +138,14 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("POST /api/v1/channels/{id}/test", adm(s.handleChannelTest))
 	m.HandleFunc("GET /api/v1/channels/{id}/quota", adm(s.handleChannelQuota))
 	m.HandleFunc("POST /api/v1/channels/{id}/sync-models", adm(s.handleChannelSyncModels))
+
+	// 官方定价(厂商官网抓取;只采信官方域名,来源可追溯,失败即失败)
+	m.HandleFunc("POST /api/v1/channels/{id}/fetch-pricing", adm(s.handleFetchPricing))
+	m.HandleFunc("GET /api/v1/channels/{id}/official-prices", adm(s.handleChannelOfficialPrices))
+	m.HandleFunc("GET /api/v1/official-prices", adm(s.handleOfficialPricesAll))
+	m.HandleFunc("POST /api/v1/official-prices/manual", adm(s.handleOfficialPriceManual))
+	m.HandleFunc("POST /api/v1/official-prices/{id}/apply", adm(s.handleOfficialPriceApply))
+	m.HandleFunc("DELETE /api/v1/official-prices/{id}", adm(s.handleOfficialPriceDelete))
 
 	// 模型目录:GET 全站可读(用户建令牌需选模型);写操作管理员专用
 	m.HandleFunc("GET /api/v1/models", s.handleModelsList)

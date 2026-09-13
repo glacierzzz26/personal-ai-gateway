@@ -229,6 +229,9 @@ func (m ModelRow) PublicName() string {
 }
 
 // OfferInput 添加/更新供给源。
+//
+// PriceSourceURL/PriceFetchedAt/PriceCurrency/PriceNativeText 为「官方价来源留证」,
+// 由应用官方定价时写入;管理端编辑报价时必须原样回传,否则会被清空(全量替换语义)。
 type OfferInput struct {
 	ChannelID         int64   `json:"channelId"`
 	InputPriceUsd     float64 `json:"inputPriceUsd"`
@@ -240,6 +243,10 @@ type OfferInput struct {
 	Enabled           *bool   `json:"enabled"`
 	Priority          *int    `json:"priority"`
 	Note              string  `json:"note"`
+	PriceSourceURL    string  `json:"priceSourceUrl,omitempty"`
+	PriceFetchedAt    string  `json:"priceFetchedAt,omitempty"`
+	PriceCurrency     string  `json:"priceCurrency,omitempty"`
+	PriceNativeText   string  `json:"priceNativeText,omitempty"`
 }
 
 func (o *OfferInput) Defaults() {
@@ -272,6 +279,11 @@ type OfferRead struct {
 	TimeoutMs         *int         `json:"timeoutMs,omitempty"`
 	Status            HealthStatus `json:"status"`
 	Note              string       `json:"note,omitempty"`
+	// 官方价来源留证(空 = 未从官方来源应用过)。仅作核对,不参与计费。
+	PriceSourceURL  string `json:"priceSourceUrl,omitempty"`
+	PriceFetchedAt  string `json:"priceFetchedAt,omitempty"`
+	PriceCurrency   string `json:"priceCurrency,omitempty"`
+	PriceNativeText string `json:"priceNativeText,omitempty"`
 }
 
 // ModelRead 模型目录条目 = models 行 + 关联 offers + 展示字段。
@@ -287,6 +299,94 @@ type ModelRead struct {
 	Offers        []OfferRead  `json:"offers"`
 	TodayRequests int          `json:"todayRequests"`
 	SuccessRate   float64      `json:"successRate"`
+}
+
+// ---------- 官方定价(厂商官网) ----------
+
+// BillingShape 官方计费形态。决定「不能把分时/阶梯价当单一价静默落库」如何表达。
+type BillingShape string
+
+const (
+	ShapeFlat     BillingShape = "flat"         // 单一价
+	ShapePeakOff  BillingShape = "peak_offpeak" // 峰谷分时(DeepSeek)
+	ShapeTiered   BillingShape = "tiered"       // 按单次请求输入 token 区间(通义)
+	ShapeDiscount BillingShape = "discount"     // 限时折扣(智谱)
+)
+
+// Currency 官方源币种。网关内部报价恒为 USD,官方价按原币种留存。
+type Currency string
+
+const (
+	CurrencyUSD Currency = "USD"
+	CurrencyCNY Currency = "CNY"
+)
+
+// Valid 是否为受支持的币种。
+func (c Currency) Valid() bool { return c == CurrencyUSD || c == CurrencyCNY }
+
+// OfficialPriceInput 手工录入官方参考价(智谱等页面不可抓的厂商)。
+type OfficialPriceInput struct {
+	Provider       Provider `json:"provider"`
+	ModelName      string   `json:"modelName"`
+	SourceURL      string   `json:"sourceUrl"`
+	Currency       Currency `json:"currency"`
+	InputPrice     float64  `json:"inputPrice"`
+	OutputPrice    float64  `json:"outputPrice"`
+	CacheReadPrice float64  `json:"cacheReadPrice"`
+	NativeText     string   `json:"nativeText,omitempty"`
+	Note           string   `json:"note,omitempty"`
+}
+
+// OfficialPriceRow 官方参考价一行(原币种 / 百万 token)。
+// 分时类(peak_offpeak)的 InPrice/OutPrice 取空闲价作「生效默认」,明细在 Detail。
+type OfficialPriceRow struct {
+	ID             int64          `json:"id"`
+	Provider       Provider       `json:"provider"`
+	ModelName      string         `json:"modelName"`
+	SourceURL      string         `json:"sourceUrl"`
+	FetchedAt      time.Time      `json:"fetchedAt"`
+	Currency       Currency       `json:"currency"`
+	BillingShape   BillingShape   `json:"billingShape"`
+	InputPrice     float64        `json:"inputPrice"`
+	OutputPrice    float64        `json:"outputPrice"`
+	CacheReadPrice float64        `json:"cacheReadPrice"`
+	CacheDerived   bool           `json:"cacheDerived"` // 缓存价由官方规则推导,非官方列
+	NativeText     string         `json:"nativeText,omitempty"`
+	Detail         map[string]any `json:"detail,omitempty"`
+	ContentSHA256  string         `json:"contentSha256,omitempty"`
+	Note           string         `json:"note,omitempty"`
+	CreatedAt      time.Time      `json:"createdAt"`
+	UpdatedAt      time.Time      `json:"updatedAt"`
+}
+
+// OfficialPriceView 官方价 + 与现有 offer 的比对(读接口填充)。
+type OfficialPriceView struct {
+	OfficialPriceRow
+	// USD 换算价(按 settings.usd_per_cny;汇率未设或原币为 USD 时等同原价)。
+	InputPriceUsd     float64 `json:"inputPriceUsd"`
+	OutputPriceUsd    float64 `json:"outputPriceUsd"`
+	CacheReadPriceUsd float64 `json:"cacheReadPriceUsd"`
+	// RateSet 原币为 CNY 且设置了汇率时才有意义。
+	RateSet bool `json:"rateSet"`
+	// AppliedOfferIDs 已应用该官方价(来源 URL + 抓取时间均匹配)的 offer。
+	AppliedOfferIDs []int64 `json:"appliedOfferIds"`
+}
+
+// FetchPricingResult POST /channels/{id}/fetch-pricing 返回。
+// 抓取失败即失败:Failed 非空且 Upserted=0,原报价与旧官方价保持不变。
+type FetchPricingResult struct {
+	Provider   Provider `json:"provider"`
+	SourceURL  string   `json:"sourceUrl"`
+	Upserted   int      `json:"upserted"`
+	Models     []string `json:"models"`
+	Failed     []string `json:"failed,omitempty"`
+	ContentSHA string   `json:"contentSha256,omitempty"`
+}
+
+// ApplyPriceReq POST /official-prices/{id}/apply 请求体。
+type ApplyPriceReq struct {
+	OfferID         int64 `json:"offerId"`
+	ConfirmOverride bool  `json:"confirmOverride"` // offer.override_price=true 时须显式确认
 }
 
 // ---------- 路由规则 ----------
@@ -551,6 +651,9 @@ type Settings struct {
 	RecordRequestBody bool   `json:"recordRequestBody"`
 	SampleRatePct     int    `json:"sampleRatePct"` // 0-100
 	TZOffsetMin       int    `json:"tzOffsetMin"`   // 默认 480(Asia/Shanghai)
+	// USDPerCNY 手工维护的人民币→美元换算率(官方价多为 CNY,内部计价为 USD)。
+	// 0 = 未设置:仅展示原币种,不做换算。汇率非厂商官方数据,故不自动抓取。
+	USDPerCNY float64 `json:"usdPerCny"`
 	// PublicBaseURL 生成 Claude 配置时对外可见的网关基址(如 https://ai-gateway.lan)。
 	// 留空则按请求的 scheme+host 推断(X-Forwarded-Proto/Host 优先)。
 	PublicBaseURL string `json:"publicBaseUrl,omitempty"`

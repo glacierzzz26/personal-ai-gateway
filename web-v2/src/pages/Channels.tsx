@@ -14,7 +14,22 @@ import { api } from '@/services/api';
 import { providers } from '@/constants';
 import { fmt } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
-import type { Channel, ChannelDraft, ChannelQuota, HealthStatus, Provider, QuotaWindowKey } from '@/types';
+import type {
+  Channel, ChannelDraft, ChannelQuota, FetchPricingResult, HealthStatus, Provider, QuotaWindowKey,
+} from '@/types';
+
+/** 官方定价抓取结果弹窗载荷(失败即失败:error 非空时 models 为空)。 */
+interface PricingRes {
+  name: string;
+  provider: Provider;
+  result?: FetchPricingResult;
+  error?: string;
+}
+
+/** 有官方单价来源(可抓)的 provider —— 与后端 internal/pricing 的 scrapers 表一致。 */
+const PRICING_FETCHABLE: Provider[] = ['DeepSeek', '通义千问'];
+/** 仅可手工录入官方参考价(官方页为动态渲染)的 provider。 */
+const PRICING_MANUAL_ONLY: Provider[] = ['智谱'];
 
 /** 新建渠道表单默认值 */
 const DEFAULTS = {
@@ -136,6 +151,8 @@ export default function Channels() {
   const [status, setStatus] = useState('');
   const [testingId, setTestingId] = useState<number | null>(null);
   const [syncingId, setSyncingId] = useState<number | null>(null);
+  const [pricingId, setPricingId] = useState<number | null>(null);
+  const [pricingRes, setPricingRes] = useState<PricingRes | null>(null);
 
   // 新建 / 编辑共享弹窗
   const [editing, setEditing] = useState<Channel | null>(null);
@@ -294,6 +311,22 @@ export default function Channels() {
     }
   }
 
+  // —— 获取官方定价(按 provider 抓厂商官网单价表 → 落「官方参考价」,不改 offer 价)——
+  // 失败即失败:抓不到/解析不出/页面改版一律弹窗显式报错,原报价保持不变。
+  async function handleFetchPricing(row: Channel) {
+    setPricingId(row.id);
+    try {
+      const r = await api.fetchPricing(row.id);
+      setPricingRes({ name: row.name, provider: row.provider, result: r });
+      // 官方参考价变化 → 模型抽屉/广场的比对视图需重取。
+      qc.invalidateQueries({ queryKey: ['official-prices'] });
+    } catch (e) {
+      setPricingRes({ name: row.name, provider: row.provider, error: errText(e) });
+    } finally {
+      setPricingId(null);
+    }
+  }
+
   const list = channels.filter(c => {
     if (kw && !`${c.name}${c.baseUrl}`.toLowerCase().includes(kw.toLowerCase())) return false;
     if (provider && c.provider !== provider) return false;
@@ -367,23 +400,39 @@ export default function Channels() {
       ),
     },
     {
-      title: '操作', align: 'right', width: 270,
-      render: (_, r) => (
-        <Space size={4} wrap>
-          <Button
-            size="small"
-            loading={testingId === r.id}
-            onClick={() => { setTestingId(r.id); test.mutate(r.id); }}
-          >
-            测试
-          </Button>
-          <Button size="small" loading={syncingId === r.id} onClick={() => handleSyncModels(r)}>
-            同步模型
-          </Button>
-          <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
-          <Button size="small" danger onClick={() => handleDelete(r)}>删除</Button>
-        </Space>
-      ),
+      title: '操作', align: 'right', width: 380,
+      render: (_, r) => {
+        const canFetch = PRICING_FETCHABLE.includes(r.provider);
+        const manualOnly = PRICING_MANUAL_ONLY.includes(r.provider);
+        return (
+          <Space size={4} wrap>
+            <Button
+              size="small"
+              loading={testingId === r.id}
+              onClick={() => { setTestingId(r.id); test.mutate(r.id); }}
+            >
+              测试
+            </Button>
+            <Button size="small" loading={syncingId === r.id} onClick={() => handleSyncModels(r)}>
+              同步模型
+            </Button>
+            {canFetch && (
+              <Tooltip title="从厂商官方计费页抓取单价表 → 存入「官方参考价」(不直接改报价)">
+                <Button size="small" loading={pricingId === r.id} onClick={() => handleFetchPricing(r)}>
+                  获取官方定价
+                </Button>
+              </Tooltip>
+            )}
+            {manualOnly && (
+              <Tooltip title="该厂商官方页为动态渲染,无法稳定抓取;请到「模型广场」手工录入官方参考价">
+                <Button size="small" disabled>官方页不可抓</Button>
+              </Tooltip>
+            )}
+            <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
+            <Button size="small" danger onClick={() => handleDelete(r)}>删除</Button>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -450,7 +499,7 @@ export default function Channels() {
             loading={isLoading && channels.length === 0}
             dataSource={list}
             columns={columns}
-            scroll={{ x: 1720 }}
+            scroll={{ x: 1830 }}
             pagination={channels.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'default' } : false}
             locale={{ emptyText: emptyNode }}
           />
@@ -578,6 +627,51 @@ export default function Channels() {
             )}
           </>
         )}
+      </Modal>
+
+      {/* 获取官方定价结果(成功=落库条数;失败=显式报错,原报价不变) */}
+      <Modal
+        title={pricingRes ? `获取官方定价 · ${pricingRes.name}` : ''}
+        open={!!pricingRes}
+        footer={<Button type="primary" onClick={() => setPricingRes(null)}>关闭</Button>}
+        onCancel={() => setPricingRes(null)}
+        width={560}
+      >
+        {pricingRes?.error ? (
+          <div className="gw-note" role="alert" style={{ borderLeftColor: 'var(--gw-err)' }}>
+            <b style={{ color: 'var(--gw-err)' }}>获取失败</b>
+            <span>
+              {pricingRes.error}
+              <br />
+              本次未写入任何价格,原有报价保持不变。请核对官方页面后重试。
+            </span>
+          </div>
+        ) : pricingRes?.result ? (
+          <>
+            <div className="gw-note" role="status" style={{ marginBottom: 14 }}>
+              <b>已从官方计费页抓取 {pricingRes.result.upserted} 个模型的单价</b>
+              <span>
+                来源：
+                <a href={pricingRes.result.sourceUrl} target="_blank" rel="noreferrer">{pricingRes.result.sourceUrl}</a>
+                <br />
+                已存入「官方参考价」,未改动任何现有报价;需到「模型广场」逐个核对并「应用」。
+                {pricingRes.result.contentSha256 && (
+                  <>
+                    <br />
+                    <span className="gw-mono" style={{ fontSize: 12 }}>
+                      页面指纹 {pricingRes.result.contentSha256.slice(0, 16)}…
+                    </span>
+                  </>
+                )}
+              </span>
+            </div>
+            {pricingRes.result.models.length > 0 && (
+              <pre className="gw-pre" style={{ maxHeight: 280, overflow: 'auto' }}>
+                {pricingRes.result.models.join('\n')}
+              </pre>
+            )}
+          </>
+        ) : null}
       </Modal>
     </div>
   );

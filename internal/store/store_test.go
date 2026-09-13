@@ -61,7 +61,7 @@ func TestOpenMigratesAndIdempotent(t *testing.T) {
 		t.Errorf("migration version = %d, want %d", version, len(migrations))
 	}
 	// 业务表应就绪(抽查几张三件套)
-	for _, table := range []string{"channels", "models", "model_offers", "rules", "tokens", "request_logs", "settings", "admins"} {
+	for _, table := range []string{"channels", "models", "model_offers", "rules", "tokens", "request_logs", "settings", "admins", "official_prices"} {
 		var n int
 		err := st2.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&n)
 		mustNoErr(t, err, "sqlite_master")

@@ -18,11 +18,13 @@ const (
 	keySampleRate     = "sample_rate_pct"
 	keyTZOffsetMin    = "tz_offset_min"
 	keyPublicBaseURL  = "public_base_url"
+	keyUSDPerCNY      = "usd_per_cny"
 )
 
 var settingsKeys = []string{
 	keyRequestTimeout, keyMaxRetries, keyDegradeOnError, keyHTTPProxy, keySkipTLSVerify,
 	keyLogRetention, keyRecordBody, keySampleRate, keyTZOffsetMin, keyPublicBaseURL,
+	keyUSDPerCNY,
 }
 
 // GetSettings 读取全部设置;表为空返回默认值(不落库)。
@@ -56,6 +58,7 @@ func (s *Store) GetSettings() (domain.Settings, error) {
 	cfg.SampleRatePct = intOr(cfg.SampleRatePct, raw[keySampleRate])
 	cfg.TZOffsetMin = intOr(cfg.TZOffsetMin, raw[keyTZOffsetMin])
 	cfg.PublicBaseURL = strOr(raw[keyPublicBaseURL])
+	cfg.USDPerCNY = floatOr(cfg.USDPerCNY, raw[keyUSDPerCNY])
 	return cfg, nil
 }
 
@@ -72,6 +75,7 @@ func (s *Store) SaveSettings(cfg domain.Settings) error {
 		keySampleRate:     strconv.Itoa(cfg.SampleRatePct),
 		keyTZOffsetMin:    strconv.Itoa(cfg.TZOffsetMin),
 		keyPublicBaseURL:  cfg.PublicBaseURL,
+		keyUSDPerCNY:      strconv.FormatFloat(cfg.USDPerCNY, 'f', -1, 64),
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -93,6 +97,16 @@ func intOr(def int, raw string) int {
 	}
 	if n, err := strconv.Atoi(raw); err == nil {
 		return n
+	}
+	return def
+}
+
+func floatOr(def float64, raw string) float64 {
+	if raw == "" {
+		return def
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil {
+		return f
 	}
 	return def
 }

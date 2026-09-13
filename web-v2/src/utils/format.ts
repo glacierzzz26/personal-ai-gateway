@@ -8,6 +8,14 @@ export const fmt = {
   ms: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`),
   ctx: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}K` : String(v)),
   k: (v: number) => (v >= 1000000 ? `${(v / 1000000).toFixed(2)}M` : v >= 1000 ? `${(v / 1000).toFixed(1)}K` : String(v)),
+  /** RFC3339 → 本地「YYYY-MM-DD HH:mm」。用于官方价抓取时间留证展示。 */
+  dt: (v?: string | null) => {
+    if (!v) return '—';
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return v;
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  },
 };
 
 /** 空值统一占位，避免各页各写一个破折号 */

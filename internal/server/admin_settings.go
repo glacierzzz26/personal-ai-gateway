@@ -42,6 +42,10 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, "validation", "tzOffsetMin out of range [-720, 840]")
 		return
 	}
+	// USD/CNY 换算率:0 = 未设(官方人民币价将拒绝应用);负值归 0。仅在设置页手工维护,不接第三方汇率源。
+	if in.USDPerCNY < 0 {
+		in.USDPerCNY = 0
+	}
 	// 对外基址:规范化(去空白与尾斜杠);留空=按访问地址推断。
 	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
 	if err := s.st.SaveSettings(in); err != nil {

@@ -6,10 +6,11 @@
  * 这里统一除以 100 还原为 0..1 小数供 UI(fmt.pct)使用;errorRate 本身即小数。
  */
 import type {
-  AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig, GatewayToken,
-  LogFilters, LogPage, MatchMode, MetricPoint, ModelCatalogItem, ModelDraft, ModelOffer,
-  ModelUsageData, OfferDraft, OverviewData, RequestLogItem, RouteRule, RuleDraft,
-  Settings, SyncResult, TokenCreateResult, TokenDraft, UsageDim, UsageRow, UserAccount,
+  AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
+  FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
+  ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView,
+  OverviewData, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
+  TokenDraft, UsageDim, UsageRow, UserAccount,
 } from '@/types';
 import { http } from './http';
 
@@ -125,8 +126,37 @@ export const api = {
       rateLimitRpm: o.rateLimitRpm,
       enabled,
       note: o.note,
+      // 来源留证必须原样回传,否则任一编辑都会清空官方价来源(PATCH 全量替换语义)
+      priceSourceUrl: o.priceSourceUrl,
+      priceFetchedAt: o.priceFetchedAt,
+      priceCurrency: o.priceCurrency,
+      priceNativeText: o.priceNativeText,
     };
   },
+
+  /* —— 官方定价(厂商官网) —— */
+  /** 按渠道 provider 抓取官方单价表 → 落 official_prices(不直接改 offer 价) */
+  fetchPricing(channelId: number): Promise<FetchPricingResult> {
+    return http.post(`/channels/${channelId}/fetch-pricing`);
+  },
+  /** 某渠道 provider 的官方参考价 + 与现有 offer 的比对 */
+  channelOfficialPrices(channelId: number): Promise<OfficialPriceView[]> {
+    return http.get(`/channels/${channelId}/official-prices`);
+  },
+  /** 全部官方参考价(模型广场;可按 provider 过滤) */
+  officialPrices(provider?: string): Promise<OfficialPriceView[]> {
+    return http.get(`/official-prices${qs({ provider })}`);
+  },
+  /** 手工录入官方参考价(智谱等页面不可抓的厂商;来源 URL 必填) */
+  manualOfficialPrice(body: ManualPriceDraft): Promise<OfficialPriceView> {
+    return http.post('/official-prices/manual', body);
+  },
+  /** 应用官方价到某 offer(写三价 + 来源留证;手工覆盖价需 confirmOverride) */
+  applyOfficialPrice(id: number, offerId: number, confirmOverride = false): Promise<ModelOffer> {
+    return http.post<ModelOffer>(`/official-prices/${id}/apply`, { offerId, confirmOverride }).then(offer);
+  },
+  /** 删除一条官方参考价(已应用到 offer 的价与留证不受影响) */
+  deleteOfficialPrice(id: number): Promise<unknown> { return http.del(`/official-prices/${id}`); },
 
   /* —— 令牌 —— */
   getTokens(): Promise<GatewayToken[]> { return http.get('/tokens'); },

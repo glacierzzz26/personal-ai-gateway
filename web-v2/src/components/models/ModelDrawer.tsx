@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   App, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Form, Input, InputNumber,
-  Modal, Row, Select, Space, Switch, Table, Tabs,
+  Modal, Row, Select, Space, Switch, Table, Tabs, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
 import ProviderMark from '@/components/ProviderMark';
 import StatusDot from '@/components/StatusDot';
+import OfficialPricePanel from '@/components/models/OfficialPricePanel';
 import { useSortableRows } from '@/hooks/useSortableRows';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
@@ -92,6 +93,11 @@ function OfferFormModal({ open, modelId, editing, channels, usedChannelIds, onCl
         rateLimitRpm: values.rateLimitRpm || 60,
         enabled: values.enabled ?? true,
         note: values.note ?? '',
+        // 编辑时原样回传来源留证(PATCH 全量替换,漏传会清空官方价来源)
+        priceSourceUrl: editing?.priceSourceUrl,
+        priceFetchedAt: editing?.priceFetchedAt,
+        priceCurrency: editing?.priceCurrency,
+        priceNativeText: editing?.priceNativeText,
       };
       return editing ? api.updateOffer(editing.id, draft) : api.createOffer(modelId, draft);
     },
@@ -424,6 +430,27 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     {
       title: '成功率', dataIndex: 'successRate', align: 'right',
       render: v => <span className="gw-num">{fmt.pct(v, 2)}</span>,
+    },
+    {
+      title: '价格来源', key: 'src',
+      render: (_, r) =>
+        r.priceSourceUrl ? (
+          <Tooltip
+            title={
+              <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                <div>来源:{r.priceSourceUrl}</div>
+                <div>抓取:{fmt.dt(r.priceFetchedAt)}</div>
+                {r.priceNativeText && <div>原文:{r.priceNativeText}</div>}
+              </div>
+            }
+          >
+            <a href={r.priceSourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>
+              官方 {r.priceCurrency} ↗
+            </a>
+          </Tooltip>
+        ) : (
+          <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>手工</span>
+        ),
     },
     {
       title: '状态', dataIndex: 'status',
@@ -763,6 +790,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                         },
                       ]}
                     />
+                    <OfficialPricePanel model={model} offers={offers} />
                   </>
                 ),
               },
