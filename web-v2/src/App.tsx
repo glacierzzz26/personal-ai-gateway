@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import AppLayout from '@/layout/AppLayout';
 import Login from '@/pages/Login';
 import { SkLines } from '@/components/States';
@@ -7,9 +8,11 @@ import { Blocks } from '@/components/Block';
 import { setUnauthorizedHandler } from '@/services/http';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
+import { useCurrency } from '@/stores/currency';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const Models = lazy(() => import('@/pages/Models'));
+const OfficialPricing = lazy(() => import('@/pages/OfficialPricing'));
 const Channels = lazy(() => import('@/pages/Channels'));
 const Routing = lazy(() => import('@/pages/Routing'));
 const Tokens = lazy(() => import('@/pages/Tokens'));
@@ -41,6 +44,27 @@ function PageLoading() {
   );
 }
 
+/**
+ * 水合计价币种：全站价格的展示单位来自 settings.displayCurrency。
+ * 仅管理员会话可读 /settings —— 普通用户请求会 401，被 setUnauthorizedHandler 直接登出。
+ * 与「系统设置」页共用 ['settings'] 缓存，故在那里改币种会即时反映到全站。
+ */
+function CurrencySync() {
+  const isAdmin = useSession(s => s.admin?.role === 'admin');
+  const setCurrency = useCurrency(s => s.setCurrency);
+  const { data } = useQuery({
+    queryKey: ['settings'],
+    queryFn: api.getSettings,
+    enabled: isAdmin,
+    retry: 0,
+    staleTime: 300_000,
+  });
+  useEffect(() => {
+    if (data) setCurrency(data.displayCurrency ?? 'CNY');
+  }, [data, setCurrency]);
+  return null;
+}
+
 function Boot() {
   return (
     <div
@@ -69,6 +93,8 @@ export default function App() {
   const admin = useSession(s => s.admin);
   const setAdmin = useSession(s => s.setAdmin);
   const [booting, setBooting] = useState(true);
+  // 订阅计价币种：fmt.price/fmt.usd 以非 React 方式读取它，靠 App 重渲染带动全树刷新。
+  useCurrency(s => s.currency);
 
   useEffect(() => {
     setUnauthorizedHandler(() => setAdmin(null)); // 任一请求 401 → 回到登录态
@@ -97,26 +123,30 @@ export default function App() {
   const wrap = (el: React.ReactNode) => <AdminOnly><Suspense fallback={<PageLoading />}>{el}</Suspense></AdminOnly>;
 
   return (
-    <Routes>
-      <Route path="/" element={<AppLayout />}>
-        <Route index element={<Home />} />
-        <Route path="dashboard" element={wrap(<Dashboard />)} />
-        <Route path="models" element={wrap(<Models />)} />
-        <Route path="channels" element={wrap(<Channels />)} />
-        <Route path="routing" element={wrap(<Routing />)} />
-        <Route path="tokens" element={<Suspense fallback={<PageLoading />}><Tokens /></Suspense>} />
-        <Route path="logs" element={wrap(<Logs />)} />
-        <Route path="settings" element={wrap(<Settings />)} />
-        <Route path="users" element={wrap(<Users />)} />
-        <Route
-          path="*"
-          element={
-            <Blocks>
-              <div style={{ padding: 48, textAlign: 'center', color: 'var(--gw-text-3)' }}>页面不存在</div>
-            </Blocks>
-          }
-        />
-      </Route>
-    </Routes>
+    <>
+      <CurrencySync />
+      <Routes>
+        <Route path="/" element={<AppLayout />}>
+          <Route index element={<Home />} />
+          <Route path="dashboard" element={wrap(<Dashboard />)} />
+          <Route path="models" element={wrap(<Models />)} />
+          <Route path="pricing" element={wrap(<OfficialPricing />)} />
+          <Route path="channels" element={wrap(<Channels />)} />
+          <Route path="routing" element={wrap(<Routing />)} />
+          <Route path="tokens" element={<Suspense fallback={<PageLoading />}><Tokens /></Suspense>} />
+          <Route path="logs" element={wrap(<Logs />)} />
+          <Route path="settings" element={wrap(<Settings />)} />
+          <Route path="users" element={wrap(<Users />)} />
+          <Route
+            path="*"
+            element={
+              <Blocks>
+                <div style={{ padding: 48, textAlign: 'center', color: 'var(--gw-text-3)' }}>页面不存在</div>
+              </Blocks>
+            }
+          />
+        </Route>
+      </Routes>
+    </>
   );
 }

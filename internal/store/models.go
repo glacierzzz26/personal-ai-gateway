@@ -11,6 +11,11 @@ import (
 
 // ---------------- 模型目录 ----------------
 
+// modelSelect models 表读列清单(与 scanModel 的扫描顺序严格一致)。
+// 新增列时只需改这里 + scanModel,避免四处内联 SELECT 漂移。
+const modelSelect = `SELECT id,name,display_name,official_vendor,official_model_name,
+	context_window,capabilities,enabled,created_at,updated_at FROM models`
+
 // CreateModel 新建目录模型(模型名唯一)。
 func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
 	in.Defaults()
@@ -19,14 +24,24 @@ func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
 	if in.DisplayName != nil {
 		display = strings.TrimSpace(*in.DisplayName)
 	}
+	vendor := domain.Provider("")
+	if in.OfficialVendor != nil {
+		vendor = domain.Provider(strings.TrimSpace(*in.OfficialVendor))
+	}
+	officialName := ""
+	if in.OfficialModelName != nil {
+		officialName = strings.TrimSpace(*in.OfficialModelName)
+	}
 	if taken, err := s.publicNameTaken(in.Name, display, 0); err != nil {
 		return domain.ModelRow{}, err
 	} else if taken {
 		return domain.ModelRow{}, ErrConflict
 	}
-	res, err := s.db.Exec(`INSERT INTO models (name, display_name, context_window, capabilities, enabled, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?)`,
-		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled), now, now)
+	res, err := s.db.Exec(`INSERT INTO models (name, display_name, context_window, capabilities, enabled,
+		official_vendor, official_model_name, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled),
+		vendor, officialName, now, now)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ModelRow{}, ErrConflict
@@ -38,8 +53,7 @@ func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
 }
 
 func (s *Store) GetModel(id int64) (domain.ModelRow, error) {
-	row := s.db.QueryRow(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
-		FROM models WHERE id=?`, id)
+	row := s.db.QueryRow(modelSelect+` WHERE id=?`, id)
 	m, err := scanModel(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ModelRow{}, ErrNotFound
@@ -49,8 +63,7 @@ func (s *Store) GetModel(id int64) (domain.ModelRow, error) {
 
 // GetModelByName 供同步与去重(按渠道侧真实模型名)。
 func (s *Store) GetModelByName(name string) (domain.ModelRow, error) {
-	row := s.db.QueryRow(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
-		FROM models WHERE name=?`, name)
+	row := s.db.QueryRow(modelSelect+` WHERE name=?`, name)
 	m, err := scanModel(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ModelRow{}, ErrNotFound
@@ -61,8 +74,7 @@ func (s *Store) GetModelByName(name string) (domain.ModelRow, error) {
 // GetModelByPublicName 模型面/选路按对外统一名解析:先查重命名后的 display_name,
 // 未重命名时回落真实模型名,name 命中同样返回。供 engine 选路与令牌 allowed_models 校验。
 func (s *Store) GetModelByPublicName(name string) (domain.ModelRow, error) {
-	row := s.db.QueryRow(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
-		FROM models WHERE (display_name <> '' AND display_name = ?) OR name = ?
+	row := s.db.QueryRow(modelSelect+` WHERE (display_name <> '' AND display_name = ?) OR name = ?
 		ORDER BY CASE WHEN display_name = ? THEN 0 ELSE 1 END LIMIT 1`, name, name, name)
 	m, err := scanModel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -145,8 +157,7 @@ func (s *Store) publicNameTaken(name, display string, excludeID int64) (bool, er
 
 // ListModels 全部目录模型,最新创建在前。
 func (s *Store) ListModels() ([]domain.ModelRow, error) {
-	rows, err := s.db.Query(`SELECT id,name,display_name,context_window,capabilities,enabled,created_at,updated_at
-		FROM models ORDER BY id DESC`)
+	rows, err := s.db.Query(modelSelect + ` ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +173,9 @@ func (s *Store) ListModels() ([]domain.ModelRow, error) {
 	return out, rows.Err()
 }
 
-// UpdateModel 更新名称/统一名/上下文/能力/启停。DisplayName 非 nil 才改动(空串=取消重命名)。
+// UpdateModel 更新名称/统一名/上下文/能力/启停/官方价绑定。
+// DisplayName/OfficialVendor/OfficialModelName 非 nil 才改动(空串 = 清空,指针区分「未传」与「清空」);
+// 其余字段按请求体原值写入 —— 调用方须提交完整草稿,不要只传要改的字段。
 func (s *Store) UpdateModel(id int64, in domain.ModelInput) (domain.ModelRow, error) {
 	in.Defaults()
 	cur, err := s.GetModel(id)
@@ -176,15 +189,24 @@ func (s *Store) UpdateModel(id int64, in domain.ModelInput) (domain.ModelRow, er
 	if in.DisplayName != nil {
 		display = strings.TrimSpace(*in.DisplayName)
 	}
+	vendor := cur.OfficialVendor
+	if in.OfficialVendor != nil {
+		vendor = domain.Provider(strings.TrimSpace(*in.OfficialVendor))
+	}
+	officialName := cur.OfficialModelName
+	if in.OfficialModelName != nil {
+		officialName = strings.TrimSpace(*in.OfficialModelName)
+	}
 	if taken, err := s.publicNameTaken(in.Name, display, id); err != nil {
 		return domain.ModelRow{}, err
 	} else if taken {
 		return domain.ModelRow{}, ErrConflict
 	}
-	res, err := s.db.Exec(`UPDATE models SET name=?, display_name=?, context_window=?, capabilities=?, enabled=?, updated_at=?
+	res, err := s.db.Exec(`UPDATE models SET name=?, display_name=?, context_window=?, capabilities=?, enabled=?,
+		official_vendor=?, official_model_name=?, updated_at=?
 		WHERE id=?`,
 		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled),
-		formatRFC3339(s.nowUTC()), id)
+		vendor, officialName, formatRFC3339(s.nowUTC()), id)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ModelRow{}, ErrConflict
@@ -223,6 +245,7 @@ func (s *Store) DeleteModel(id int64) error {
 
 // MergeModels 把 fromID 模型的全部供给源并入 intoID 模型,并删除 from 行(手工合并重复模型)。
 // 单事务完成;同渠道冲突(两模型在同一 channel 都有 offer)返回 ErrConflict,由用户先删其一。
+// 官方价绑定属于模型级字段:into 行的绑定保留,from 行的绑定随该行删除而丢弃。
 func (s *Store) MergeModels(fromID, intoID int64) (domain.ModelRow, error) {
 	if fromID == intoID {
 		return domain.ModelRow{}, ErrConflict
@@ -301,7 +324,8 @@ func scanModel(row scanner) (domain.ModelRow, error) {
 	var caps string
 	var enabled int
 	var created, updated string
-	if err := row.Scan(&m.ID, &m.Name, &m.DisplayName, &m.ContextWindow, &caps, &enabled, &created, &updated); err != nil {
+	if err := row.Scan(&m.ID, &m.Name, &m.DisplayName, &m.OfficialVendor, &m.OfficialModelName,
+		&m.ContextWindow, &caps, &enabled, &created, &updated); err != nil {
 		return domain.ModelRow{}, err
 	}
 	m.Capabilities = decodeCaps(caps)

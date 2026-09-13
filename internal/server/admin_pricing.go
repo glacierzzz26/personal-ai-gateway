@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -17,8 +18,52 @@ import (
 // 抓取/解析/校验任一失败一律显式报错,绝不写非官方或估算值,原报价保持不变。
 // 抓取结果先落 official_prices(官方参考价,与手工报价分表),再需人工点「应用」才写 offer。
 
-// handleFetchPricing 按渠道 provider 抓取官方单价表 → upsert official_prices。
+// fetchOfficialPrices 按 provider 抓取官方单价表并 upsert official_prices(渠道级与厂商级共用核心)。
+//
+// 返回 (结果, httpStatus, errType, err):err == nil 时后三者无意义;status == 0 表示 store 错误
+// (调用方用 writeStoreErr 呈现),否则用 apiErr(status, errType, ...)。
 // 抓取失败返回 502 + 明确 message(不落库、不动原价);无官方来源/仅手工录入返回 400。
+func (s *Server) fetchOfficialPrices(ctx context.Context, p domain.Provider) (domain.FetchPricingResult, int, string, error) {
+	if !pricing.Supports(p) {
+		return domain.FetchPricingResult{}, http.StatusBadRequest, "unsupported",
+			fmt.Errorf("%w: %s", pricing.ErrNoOfficialSource, p)
+	}
+	settings, err := s.st.GetSettings()
+	if err != nil {
+		return domain.FetchPricingResult{}, 0, "", err
+	}
+	// 复用出站 client(代理/跳过 TLS/超时),再包一层官方域名白名单 —— 结构性保证只访问官方域。
+	base := s.rl.Client(settings, 0)
+	if s.pricingBase != nil {
+		base = s.pricingBase(p, settings)
+	}
+	client := pricing.AllowlistClient(*base, pricing.Hosts(p))
+
+	rows, _, err := pricing.Fetch(ctx, client, p)
+	if err != nil {
+		status, typ := http.StatusBadGateway, "fetch_failed"
+		if errors.Is(err, pricing.ErrManualOnly) || errors.Is(err, pricing.ErrNoOfficialSource) {
+			status, typ = http.StatusBadRequest, "manual_only"
+		}
+		return domain.FetchPricingResult{}, status, typ, err
+	}
+
+	resp := domain.FetchPricingResult{Provider: p, SourceURL: pricing.SourceURL(p)}
+	for _, row := range rows {
+		saved, err := s.st.UpsertOfficialPrice(row)
+		if err != nil {
+			return resp, 0, "", err
+		}
+		resp.Models = append(resp.Models, saved.ModelName)
+		resp.Upserted++
+		if resp.ContentSHA == "" {
+			resp.ContentSHA = saved.ContentSHA256
+		}
+	}
+	return resp, http.StatusOK, "", nil
+}
+
+// handleFetchPricing 按渠道 provider 抓取官方单价表 → upsert official_prices。
 func (s *Server) handleFetchPricing(w http.ResponseWriter, r *http.Request) {
 	id, ok := paramID(r, "id")
 	if !ok {
@@ -30,50 +75,52 @@ func (s *Server) handleFetchPricing(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	srcURL := pricing.SourceURL(ch.Provider)
-	if !pricing.Supports(ch.Provider) {
-		apiErr(w, http.StatusBadRequest, "unsupported", pricing.ErrNoOfficialSource.Error()+": "+string(ch.Provider))
-		return
-	}
-	settings, err := s.st.GetSettings()
-	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	// 复用出站 client(代理/跳过 TLS/超时),再包一层官方域名白名单 —— 结构性保证只访问官方域。
-	base := s.rl.Client(settings, 0)
-	if s.pricingBase != nil {
-		base = s.pricingBase(ch.Provider, settings)
-	}
-	client := pricing.AllowlistClient(*base, pricing.Hosts(ch.Provider))
-
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-
-	rows, _, err := pricing.Fetch(ctx, client, ch.Provider)
+	resp, status, typ, err := s.fetchOfficialPrices(ctx, ch.Provider)
 	if err != nil {
-		status, typ := http.StatusBadGateway, "fetch_failed"
-		if errors.Is(err, pricing.ErrManualOnly) || errors.Is(err, pricing.ErrNoOfficialSource) {
-			status, typ = http.StatusBadRequest, "manual_only"
+		if status == 0 {
+			writeStoreErr(w, err)
+			return
 		}
 		apiErr(w, status, typ, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
-	resp := domain.FetchPricingResult{Provider: ch.Provider, SourceURL: srcURL}
-	for _, row := range rows {
-		saved, err := s.st.UpsertOfficialPrice(row)
-		if err != nil {
+// handleOfficialPricesFetch 按厂商抓取官方单价表(无需厂商直连渠道)。
+//
+// 聚合中转渠道的 provider 不是厂商,渠道级抓取(handleFetchPricing)对它们不适用;
+// 此接口直接指定厂商抓取,复用同一抓取核心与官方域名白名单。
+func (s *Server) handleOfficialPricesFetch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider domain.Provider `json:"provider"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.Provider == "" {
+		apiErr(w, http.StatusBadRequest, "validation", "provider is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	resp, status, typ, err := s.fetchOfficialPrices(ctx, req.Provider)
+	if err != nil {
+		if status == 0 {
 			writeStoreErr(w, err)
 			return
 		}
-		resp.Models = append(resp.Models, saved.ModelName)
-		resp.Upserted++
-		if resp.ContentSHA == "" {
-			resp.ContentSHA = saved.ContentSHA256
-		}
+		apiErr(w, status, typ, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleOfficialVendors 可抓取/可手工录入的厂商清单(前端据此驱动入口与门禁,替代硬编码)。
+func (s *Server) handleOfficialVendors(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, pricing.Vendors())
 }
 
 // handleChannelOfficialPrices 某渠道 provider 的官方参考价 + 与现有 offer 的比对。
@@ -188,7 +235,7 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 		writeStoreErr(w, err)
 		return
 	}
-	in, out, cache, err := convertToUSD(q, settings.USDPerCNY)
+	in, out, cache, err := convertPrice(q, settings.DisplayCurrency, settings.USDPerCNY)
 	if err != nil {
 		apiErr(w, http.StatusBadRequest, "no_rate", err.Error())
 		return
@@ -205,17 +252,26 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// convertToUSD 官方原币价 → 网关内部 USD 价(每百万 token)。
-// USD 原样返回;CNY 需已设汇率(0 表示未设 → 拒绝,不臆造汇率)。四舍五入到 6 位,避免浮点尾数进库。
-func convertToUSD(q domain.OfficialPriceRow, usdPerCNY float64) (in, out, cache float64, err error) {
-	switch q.Currency {
-	case domain.CurrencyUSD:
+// convertPrice 官方原币价 → 计价币种金额(每百万 token)。
+// 原币种与计价币种一致时原样返回(不需要汇率);不一致时按 USDPerCNY 折算,汇率为 0 则拒绝
+// (不臆造汇率)。四舍五入到 6 位,避免浮点尾数进库。
+// USDPerCNY 语义 = 1 元人民币折合的美元数(如 0.139):CNY→USD 乘,USD→CNY 除。
+func convertPrice(q domain.OfficialPriceRow, target domain.Currency, usdPerCNY float64) (in, out, cache float64, err error) {
+	if !target.Valid() {
+		return 0, 0, 0, errors.New("计价币种未设置(应为 CNY 或 USD)")
+	}
+	if q.Currency == target {
 		return q.InputPrice, q.OutputPrice, q.CacheReadPrice, nil
-	case domain.CurrencyCNY:
-		if usdPerCNY <= 0 {
-			return 0, 0, 0, errors.New("官方价为人民币,请先在【设置】填写 USD/CNY 汇率后再应用")
-		}
+	}
+	if usdPerCNY <= 0 {
+		return 0, 0, 0, fmt.Errorf(
+			"官方价为 %s、当前计价币种为 %s,请先在【系统设置】填写 USD/CNY 汇率后再应用", q.Currency, target)
+	}
+	switch {
+	case q.Currency == domain.CurrencyCNY && target == domain.CurrencyUSD:
 		return round6(q.InputPrice * usdPerCNY), round6(q.OutputPrice * usdPerCNY), round6(q.CacheReadPrice * usdPerCNY), nil
+	case q.Currency == domain.CurrencyUSD && target == domain.CurrencyCNY:
+		return round6(q.InputPrice / usdPerCNY), round6(q.OutputPrice / usdPerCNY), round6(q.CacheReadPrice / usdPerCNY), nil
 	default:
 		return 0, 0, 0, errors.New("未知币种: " + string(q.Currency))
 	}
@@ -237,21 +293,16 @@ func (s *Server) officialPriceViews(p domain.Provider, rows []domain.OfficialPri
 	return out
 }
 
-// officialPriceView 单行读视图(换算三价 + 汇率标记)。
+// officialPriceView 单行读视图(换算三价 + 可用标记)。
 func (s *Server) officialPriceView(q domain.OfficialPriceRow) domain.OfficialPriceView {
 	v := domain.OfficialPriceView{OfficialPriceRow: q, AppliedOfferIDs: []int64{}}
-	rate := 0.0
+	target, rate := domain.CurrencyCNY, 0.0
 	if st, err := s.st.GetSettings(); err == nil {
-		rate = st.USDPerCNY
+		target, rate = st.DisplayCurrency, st.USDPerCNY
 	}
-	if q.Currency == domain.CurrencyUSD {
-		v.InputPriceUsd, v.OutputPriceUsd, v.CacheReadPriceUsd = q.InputPrice, q.OutputPrice, q.CacheReadPrice
-		v.RateSet = true
-	} else if rate > 0 {
-		v.InputPriceUsd = round6(q.InputPrice * rate)
-		v.OutputPriceUsd = round6(q.OutputPrice * rate)
-		v.CacheReadPriceUsd = round6(q.CacheReadPrice * rate)
-		v.RateSet = true
+	if in, out, cache, err := convertPrice(q, target, rate); err == nil {
+		v.InputPriceUsd, v.OutputPriceUsd, v.CacheReadPriceUsd = in, out, cache
+		v.RateSet = true // 金额已按计价币种给出(同币种,或已按汇率折算)
 	}
 	return v
 }

@@ -22,22 +22,22 @@ var (
 	reTierBound = regexp.MustCompile(`([0-9.]+)\s*([KkMm]?)`)
 )
 
-// parseQwen 解析阿里云百炼「模型计费」页。
+// parseQwen 解析阿里云百炼「模型计费」页(国内站)。
 //
-// 页面形态(实测 2026-09-13):静态 HTML,真 <table>(251 个),列头形如
-// 「模型 ID / 服務部署範圍 / 模式 / 單次請求的輸入Token數 / 輸入單價（每百萬Token） / 輸出單價（每百萬Token）」。
-// 币种美元($),按「单次请求输入 token 区间」阶梯计价;无缓存价列(由正文规则推导)。
+// 页面形态(实测 2026-09-13):静态 HTML,真 <table>(284 个),列头形如
+// 「模型 ID（Model ID） / 模式 / 单次请求的输入Token数 / 输入单价（每百万Token） / 输出单价（每百万Token）」,
+// 按地域分块(北京 / 全球 / 国际)。币种人民币(元),按「单次请求输入 token 区间」阶梯计价;
+// 无缓存价列(由正文规则推导)。
 //
-// 表格按地区分块(國際/北京/…),同一模型可出现多次。取首个出现的档位(國際优先,页面顺序),
-// 并把全部档位记入 Detail。
+// 取首个出现的档位(页面顺序 = 北京优先)为「生效默认」,并把全部档位记入 Detail。
 func parseQwen(body []byte) ([]quote, domain.Currency, domain.BillingShape, error) {
 	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
 		return nil, "", "", err
 	}
-	// 单位/缓存规则必须在正文出现,否则说明页面改版,直接失败。
-	if !bytes.Contains(body, []byte("百萬Token")) && !bytes.Contains(body, []byte("百万Token")) {
-		return nil, "", "", fmt.Errorf("页面未出现「每百萬Token」计价单位说明")
+	// 计价单位必须在正文出现,否则说明页面改版,直接失败。
+	if !bytes.Contains(body, []byte("每百万")) && !bytes.Contains(body, []byte("每百萬")) {
+		return nil, "", "", fmt.Errorf("页面未出现「每百万 Token」计价单位说明")
 	}
 	tables, _ := parseTables(doc)
 
@@ -93,12 +93,12 @@ func parseQwen(body []byte) ([]quote, domain.Currency, domain.BillingShape, erro
 	for _, h := range hits {
 		a, ok := byModel[h.model]
 		if !ok {
-			a = &agg{currency: domain.CurrencyUSD}
+			a = &agg{currency: domain.CurrencyCNY}
 			a.ModelName = h.model
 			a.In, a.Out = h.in, h.out
 			a.CacheRead = round6(h.in * cacheHitRatio)
 			a.CacheDerived = true
-			a.currency = domain.CurrencyUSD
+			a.currency = domain.CurrencyCNY
 			byModel[h.model] = a
 			order = append(order, h.model)
 		}
@@ -114,9 +114,9 @@ func parseQwen(body []byte) ([]quote, domain.Currency, domain.BillingShape, erro
 	out := make([]quote, 0, len(order))
 	for _, name := range order {
 		a := byModel[name]
-		native := fmt.Sprintf("$%v / $%v (每百萬Token)", a.In, a.Out)
+		native := fmt.Sprintf("%v元 / %v元 (每百万Token)", a.In, a.Out)
 		if len(a.tiers) > 1 {
-			native = fmt.Sprintf("阶梯计价,共 %d 档;首档 $%v / $%v", len(a.tiers), a.In, a.Out)
+			native = fmt.Sprintf("阶梯计价,共 %d 档;首档 %v元 / %v元", len(a.tiers), a.In, a.Out)
 		}
 		detail := map[string]any{
 			"tiers":        a.tiers,
@@ -137,7 +137,7 @@ func parseQwen(body []byte) ([]quote, domain.Currency, domain.BillingShape, erro
 			Detail:       detail,
 		})
 	}
-	return out, domain.CurrencyUSD, shape, nil
+	return out, domain.CurrencyCNY, shape, nil
 }
 
 // locateCols 按列头文本定位「模型/区间/输入价/输出价」列。

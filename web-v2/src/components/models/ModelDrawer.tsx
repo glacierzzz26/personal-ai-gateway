@@ -252,6 +252,8 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   const [form] = Form.useForm<BasicFormValues>();
   const prevModelId = useRef<number | null>(null);
   const [offerModal, setOfferModal] = useState<{ open: boolean; editing: ModelOffer | null }>({ open: false, editing: null });
+  /** 「原始模型名(渠道侧)」在供给源已各自指定上游名时默认折叠,可展开编辑 */
+  const [showRawName, setShowRawName] = useState(false);
 
   const handleClose = () => {
     setOfferModal({ open: false, editing: null });
@@ -270,6 +272,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     const id = model?.id ?? null;
     if (id !== prevModelId.current) {
       prevModelId.current = id;
+      setShowRawName(false);
       if (model) {
         form.setFieldsValue({
           name: model.originalName,
@@ -282,6 +285,8 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   }, [model, form]);
 
   const offers = model?.offers ?? [];
+  /** 每个供给源都单独指定了上游真实名 → 模型级名称只剩同步去重用途,可折叠 */
+  const allUpstream = offers.length > 0 && offers.every(o => (o.upstreamModel ?? '').trim() !== '');
   const enabledOffers = offers.filter(o => o.enabled);
   const usableOffers = enabledOffers.length;
   const usedChannelIds = useMemo(() => offers.map(o => o.channelId), [offers]);
@@ -709,14 +714,52 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                         >
                           <Input className="gw-mono" placeholder="如 deepseek-v3（留空=用原始名）" />
                         </Form.Item>
-                        <Form.Item
-                          name="name"
-                          label="原始模型名（渠道侧）"
-                          rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}
-                          extra="渠道上游真实模型名；修改会改变同步去重与出站请求的模型名，请谨慎操作"
-                        >
-                          <Input className="gw-mono" />
-                        </Form.Item>
+                        {allUpstream && !showRawName ? (
+                          <div style={{ marginBottom: 24 }}>
+                            <div style={{ fontSize: 14, color: 'var(--gw-text-2)', marginBottom: 4 }}>
+                              原始模型名（渠道侧）
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
+                              已在每个供给源单独指定上游名，出站按命中的供给源改写请求体 model；模型级名称仅用于同步去重。
+                              <button
+                                type="button"
+                                className="gw-link"
+                                style={{ marginLeft: 6 }}
+                                onClick={() => setShowRawName(true)}
+                              >
+                                展开编辑
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <Form.Item
+                            name="name"
+                            label="原始模型名（渠道侧）"
+                            rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}
+                            extra={
+                              allUpstream ? (
+                                <>
+                                  渠道上游真实模型名；修改会改变同步去重与出站请求的模型名，请谨慎操作。
+                                  <button
+                                    type="button"
+                                    className="gw-link"
+                                    style={{ marginLeft: 6 }}
+                                    onClick={() => setShowRawName(false)}
+                                  >
+                                    收起
+                                  </button>
+                                </>
+                              ) : (
+                                <span style={{ color: 'var(--gw-warn)' }}>
+                                  渠道上游真实模型名。部分供给源未填上游名，出站将回落此名称 ——
+                                  建议到「供给源」补齐。
+                                </span>
+                              )
+                            }
+                          >
+                            <Input className="gw-mono" />
+                          </Form.Item>
+                        )}
                         <Form.Item
                           name="contextWindow"
                           label="上下文窗口（tokens）"
@@ -777,7 +820,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                 children: (
                   <>
                     <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginBottom: 12 }}>
-                      单位：美元 / 1M tokens
+                      单位:每百万 tokens(币种随「系统设置 → 计价币种」)
                     </div>
                     <Chart option={priceOption} height={Math.max(120, offers.length * 42 + 70)} />
                     <Table<ModelOffer>

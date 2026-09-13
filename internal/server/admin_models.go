@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/store"
 )
 
@@ -351,7 +352,9 @@ func (s *Server) singleModelRead(id int64) (domain.ModelRead, error) {
 		ID: m.ID, Name: m.PublicName(), DisplayName: m.DisplayName, OriginalName: m.Name,
 		ContextWindow: m.ContextWindow,
 		Capabilities:  m.Capabilities, Enabled: m.Enabled,
-		Offers: make([]domain.OfferRead, 0, len(offers)),
+		Offers:         make([]domain.OfferRead, 0, len(offers)),
+		OfficialVendor: m.OfficialVendor, OfficialModelName: m.OfficialModelName,
+		InferredVendor: pricing.InferVendor(m.Name),
 	}
 	for _, o := range offers {
 		mr.Offers = append(mr.Offers, s.offerRead(v, o))

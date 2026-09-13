@@ -138,7 +138,7 @@ export default function CompareModal({ open, models, onClose }: Props) {
       >
         <span>按供给源报价</span>
         <span style={{ fontSize: 12, color: 'var(--gw-text-3)', fontWeight: 400 }}>
-          单位：美元 / 1M tokens（仅列已启用的供给源）
+          单位：每百万 tokens（仅列已启用的供给源）
         </span>
       </div>
       {offerRows.length ? (

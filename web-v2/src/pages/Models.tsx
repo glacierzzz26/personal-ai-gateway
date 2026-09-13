@@ -13,6 +13,7 @@ import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import { api } from '@/services/api';
 import { capabilities, providers } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
+import { buildOfficialIndex, officialOfModel } from '@/utils/official';
 import type { Capability, Channel, ModelCatalogItem, ModelDraft, OfficialPriceView } from '@/types';
 
 type SortKey = 'price' | 'latency' | 'hot' | 'ctx';
@@ -257,22 +258,11 @@ export default function Models() {
     retry: 0,
     staleTime: 30_000,
   });
-  const officialByName = useMemo(() => {
-    const m = new Map<string, OfficialPriceView>();
-    for (const op of official) m.set(`${op.provider}|${op.modelName}`, op);
-    return m;
-  }, [official]);
+  const officialIndex = useMemo(() => buildOfficialIndex(official), [official]);
   /** 该模型任一供给源能对上官方参考价 → 返回第一条(用于角标 tooltip)。
-   *  官方价按 (provider, 渠道侧真实名) 存;真实名现在优先取 offer 上的上游名。 */
-  const officialOf = (m: ModelCatalogItem): OfficialPriceView | undefined => {
-    for (const o of m.offers) {
-      const hit = officialByName.get(`${o.provider}|${o.upstreamModel}`)
-        ?? officialByName.get(`${o.provider}|${m.originalName}`)
-        ?? officialByName.get(`${o.provider}|${m.name}`);
-      if (hit) return hit;
-    }
-    return undefined;
-  };
+   *  匹配优先级(显式绑定 → provider 直连 → 推断厂商)见 utils/official。 */
+  const officialOf = (m: ModelCatalogItem): OfficialPriceView | undefined =>
+    officialOfModel(officialIndex, m);
 
   const toggleModel = useMutation({
     mutationFn: (v: { id: number; enabled: boolean }) => {

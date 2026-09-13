@@ -9,7 +9,8 @@
 //
 // 页面形态实测(2026-09-13):
 //   - DeepSeek api-docs.deepseek.com/.../pricing  静态 HTML,真 <table>(rowspan/colspan),CNY,峰谷分时
-//   - 通义千问 www.alibabacloud.com/help/tc/model-studio/model-pricing  静态 HTML,真 <table>,USD,阶梯
+//   - 通义千问 help.aliyun.com/zh/model-studio/model-pricing  国内站静态 HTML,真 <table>,CNY,阶梯
+//     (国际站 www.alibabacloud.com 为美元原币;网关计价币种为人民币,故取国内站,避免汇率折算)
 //   - 智谱 GLM bigmodel.cn/pricing  Vue SPA,正文无价格 → 不可抓,走手工录入(manual.go)
 package pricing
 
@@ -60,8 +61,8 @@ var scrapers = map[domain.Provider]scraper{
 		parse: parseDeepSeek,
 	},
 	domain.ProviderQwen: {
-		Hosts: []string{"www.alibabacloud.com"},
-		URL:   "https://www.alibabacloud.com/help/tc/model-studio/model-pricing",
+		Hosts: []string{"help.aliyun.com"},
+		URL:   "https://help.aliyun.com/zh/model-studio/model-pricing",
 		parse: parseQwen,
 	},
 	domain.ProviderZhipu: {

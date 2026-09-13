@@ -122,3 +122,10 @@ export const IconAlert = (p: IconProps) => (
     <path d="M12 7.5v5.5M12 16.5h.01" />
   </Svg>
 );
+
+export const IconPricing = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3.5 12.6 11 5.1a2 2 0 0 1 1.4-.6H19a1.5 1.5 0 0 1 1.5 1.5v6.6a2 2 0 0 1-.6 1.4l-7.5 7.5a1.5 1.5 0 0 1-2.1 0l-6.8-6.8a1.5 1.5 0 0 1 0-2.1z" />
+    <path d="M16 8h.01" />
+  </Svg>
+);

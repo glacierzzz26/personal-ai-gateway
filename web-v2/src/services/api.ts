@@ -8,8 +8,8 @@
 import type {
   AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
-  ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView,
-  OverviewData, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
+  ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
+  OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
   TokenDraft, UsageDim, UsageRow, UserAccount,
 } from '@/types';
 import { http } from './http';
@@ -88,11 +88,24 @@ export const api = {
   async toggleModel(modelId: number, enabled: boolean): Promise<void> {
     const m = (await api.getModels()).find(x => x.id === modelId);
     if (!m) throw new Error('模型不存在');
-    await api.updateModel(modelId, {
-      name: m.originalName, displayName: m.displayName ?? '',
+    await api.updateModel(modelId, api.modelDraft(m, { enabled }));
+  },
+  /**
+   * 模型编辑全量草稿(基于当前快照)。
+   * 后端 PATCH 为全量替换:除 name/displayName/绑定字段外按请求体原值写入,
+   * 手搓部分草稿会清零上下文/能力并强制启用 —— 一律经此构造。
+   */
+  modelDraft(m: ModelCatalogItem, patch: Partial<ModelDraft> = {}): ModelDraft {
+    return {
+      name: m.originalName,
+      displayName: m.displayName ?? '',
       contextWindow: m.contextWindow,
-      capabilities: m.capabilities, enabled,
-    });
+      capabilities: m.capabilities,
+      enabled: m.enabled,
+      officialVendor: m.officialVendor ?? '',
+      officialModelName: m.officialModelName ?? '',
+      ...patch,
+    };
   },
 
   /* —— 供给源 —— */
@@ -145,6 +158,12 @@ export const api = {
   fetchPricing(channelId: number): Promise<FetchPricingResult> {
     return http.post(`/channels/${channelId}/fetch-pricing`);
   },
+  /** 按厂商抓取官方单价表(无需厂商直连渠道;聚合中转场景) */
+  fetchOfficialPrices(provider: Provider): Promise<FetchPricingResult> {
+    return http.post('/official-prices/fetch', { provider });
+  },
+  /** 有官方来源的厂商清单(驱动抓取/手工录入入口与门禁) */
+  officialVendors(): Promise<OfficialVendorInfo[]> { return http.get('/official-prices/vendors'); },
   /** 某渠道 provider 的官方参考价 + 与现有 offer 的比对 */
   channelOfficialPrices(channelId: number): Promise<OfficialPriceView[]> {
     return http.get(`/channels/${channelId}/official-prices`);

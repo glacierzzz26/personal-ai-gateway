@@ -18,7 +18,23 @@ var migrations = []string{
 	m0004OfficialPricing,
 	// v5:供给源级上游模型名(对外统一名 → 各渠道各自真实名)
 	m0005OfferUpstreamModel,
+	// v6:模型级官方价绑定(厂商官方价行 ↔ 目录模型,供聚合渠道显示厂商官方价)
+	m0006ModelOfficialBinding,
 }
+
+// m0006ModelOfficialBinding 模型级「官方参考价来源」绑定:
+// 聚合中转渠道的 provider 不是厂商(多为 OpenAI),模型名(如 deepseek/deepseek-v4.1-flash)
+// 也与厂商官网名(如 deepseek-flash)对不上,故需要一个显式的模型 ↔ 官方价行映射。
+//
+//	official_vendor     官方价所属厂商(domain.Provider 原值,空 = 未绑定)
+//	official_model_name 该厂商 official_prices.model_name(空 = 未绑定)
+//
+// 二者皆空 = 走「provider 直连 / 厂商名推断」自动匹配;非空 = 显式覆盖,优先级最高。
+// 纯附加、两列默认空串,存量库无需回填,行为不变。
+const m0006ModelOfficialBinding = `
+ALTER TABLE models ADD COLUMN official_vendor     TEXT NOT NULL DEFAULT '';
+ALTER TABLE models ADD COLUMN official_model_name TEXT NOT NULL DEFAULT '';
+`
 
 // m0005OfferUpstreamModel 把「渠道侧真实模型名」从 model 级下沉到 offer(供给源)级:
 // 同一对外统一名可为不同渠道配各自的上游真实名,出站按实际命中的候选渠道改写请求体 model。

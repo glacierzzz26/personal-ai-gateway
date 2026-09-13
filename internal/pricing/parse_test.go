@@ -66,8 +66,12 @@ func TestParseQwenOfficialSample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseQwen: %v", err)
 	}
-	if cur != domain.CurrencyUSD {
-		t.Errorf("currency = %q, want USD", cur)
+	// 国内站为人民币原生价(计价币种为 CNY,故不走汇率折算)。
+	if cur != domain.CurrencyCNY {
+		t.Errorf("currency = %q, want CNY", cur)
+	}
+	if shape != domain.ShapeTiered {
+		t.Errorf("shape = %q, want tiered", shape)
 	}
 	byName := map[string]quote{}
 	for _, q := range quotes {
@@ -78,15 +82,22 @@ func TestParseQwenOfficialSample(t *testing.T) {
 	if !ok {
 		t.Fatalf("qwen3.8-max missing; got %d models e.g. %v", len(byName), sampleNames(byName))
 	}
-	// 页面实测:qwen3.8-max 国际 $2 / $6。
-	mustClose(t, "qwen3.8-max.In", mx.In, 2)
-	mustClose(t, "qwen3.8-max.Out", mx.Out, 6)
+	// 页面实测(北京首档):qwen3.8-max 12 元 / 36 元。
+	mustClose(t, "qwen3.8-max.In", mx.In, 12)
+	mustClose(t, "qwen3.8-max.Out", mx.Out, 36)
 	// 缓存价是推导值,必须标注(不能冒充官方列)。
 	if !mx.CacheDerived {
 		t.Errorf("qwen cache price must be marked derived")
 	}
-	mustClose(t, "qwen3.8-max.CacheRead", mx.CacheRead, 0.2)
-	_ = shape
+	mustClose(t, "qwen3.8-max.CacheRead", mx.CacheRead, 1.2)
+	// 阶梯档位须完整留证,不能只留首档。
+	tiers, _ := mx.Detail["tiers"].([]map[string]any)
+	if len(tiers) < 2 {
+		t.Errorf("tiers = %d, want >= 2", len(tiers))
+	}
+	if mx.Detail["effectiveDefault"] != "first-tier" {
+		t.Errorf("effectiveDefault = %v, want first-tier", mx.Detail["effectiveDefault"])
+	}
 }
 
 // 页面改版(结构变化)必须解析失败,绝不能静默给出错误值。

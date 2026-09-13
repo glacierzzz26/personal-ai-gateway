@@ -143,6 +143,8 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("POST /api/v1/channels/{id}/fetch-pricing", adm(s.handleFetchPricing))
 	m.HandleFunc("GET /api/v1/channels/{id}/official-prices", adm(s.handleChannelOfficialPrices))
 	m.HandleFunc("GET /api/v1/official-prices", adm(s.handleOfficialPricesAll))
+	m.HandleFunc("POST /api/v1/official-prices/fetch", adm(s.handleOfficialPricesFetch))
+	m.HandleFunc("GET /api/v1/official-prices/vendors", adm(s.handleOfficialVendors))
 	m.HandleFunc("POST /api/v1/official-prices/manual", adm(s.handleOfficialPriceManual))
 	m.HandleFunc("POST /api/v1/official-prices/{id}/apply", adm(s.handleOfficialPriceApply))
 	m.HandleFunc("DELETE /api/v1/official-prices/{id}", adm(s.handleOfficialPriceDelete))

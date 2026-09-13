@@ -196,6 +196,10 @@ type ModelInput struct {
 	ContextWindow int          `json:"contextWindow"`
 	Capabilities  []Capability `json:"capabilities"`
 	Enabled       *bool        `json:"enabled"`
+	// OfficialVendor/OfficialModelName 模型级官方价绑定(指向某厂商 official_prices 的一行);
+	// 用于聚合中转等 provider 非厂商的渠道显示厂商官方价。更新时非 nil 才改动(nil = 不动)。
+	OfficialVendor    *string `json:"officialVendor"`
+	OfficialModelName *string `json:"officialModelName"`
 }
 
 func (m *ModelInput) Defaults() {
@@ -216,8 +220,11 @@ type ModelRow struct {
 	ContextWindow int          `json:"contextWindow"`
 	Capabilities  []Capability `json:"capabilities"`
 	Enabled       bool         `json:"enabled"`
-	CreatedAt     time.Time    `json:"createdAt"`
-	UpdatedAt     time.Time    `json:"updatedAt"`
+	// 模型级官方价绑定(空 = 未绑定,走自动匹配)。
+	OfficialVendor    Provider  `json:"officialVendor"`
+	OfficialModelName string    `json:"officialModelName"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // PublicName 网关对外统一名:重命名后为 display_name,否则回落真实模型名。
@@ -289,6 +296,8 @@ type OfferRead struct {
 	PriceNativeText string `json:"priceNativeText,omitempty"`
 	// UpstreamModel 本渠道侧真实模型名(非空 = 发往本渠道时改写请求体 model;空 = 用模型级 name)。
 	UpstreamModel string `json:"upstreamModel,omitempty"`
+	// InferredVendor 由上游名/模型名推断出的厂商(空 = 判不出)。供前端做官方价「推断厂商」匹配。
+	InferredVendor Provider `json:"inferredVendor,omitempty"`
 }
 
 // ModelRead 模型目录条目 = models 行 + 关联 offers + 展示字段。
@@ -304,6 +313,12 @@ type ModelRead struct {
 	Offers        []OfferRead  `json:"offers"`
 	TodayRequests int          `json:"todayRequests"`
 	SuccessRate   float64      `json:"successRate"`
+	// OfficialVendor/OfficialModelName 模型级官方价绑定(空 = 未绑定)。
+	OfficialVendor    Provider `json:"officialVendor,omitempty"`
+	OfficialModelName string   `json:"officialModelName,omitempty"`
+	// InferredVendor 由模型名(取首个 '/' 前的段)推断出的厂商;空 = 判不出。
+	// 前端据此在「provider 直连」之外追加一次「推断厂商」官方价匹配(聚合渠道场景)。
+	InferredVendor Provider `json:"inferredVendor,omitempty"`
 }
 
 // ---------- 官方定价(厂商官网) ----------
@@ -367,11 +382,14 @@ type OfficialPriceRow struct {
 // OfficialPriceView 官方价 + 与现有 offer 的比对(读接口填充)。
 type OfficialPriceView struct {
 	OfficialPriceRow
-	// USD 换算价(按 settings.usd_per_cny;汇率未设或原币为 USD 时等同原价)。
+	// 按 settings.displayCurrency 换算后的计价金额(每百万 token)。
+	// 字段名保留 *Usd 是历史命名(内部口径原为美元);计价币种为 CNY 时这里就是人民币金额。
+	// 原币种与计价币种一致时等同原价。
 	InputPriceUsd     float64 `json:"inputPriceUsd"`
 	OutputPriceUsd    float64 `json:"outputPriceUsd"`
 	CacheReadPriceUsd float64 `json:"cacheReadPriceUsd"`
-	// RateSet 原币为 CNY 且设置了汇率时才有意义。
+	// RateSet 金额可用:原币种与计价币种一致,或已按汇率折算成功。
+	// false = 币种不一致且未设汇率,前端应提示补汇率(此三价均为 0,不可应用)。
 	RateSet bool `json:"rateSet"`
 	// AppliedOfferIDs 已应用该官方价(来源 URL + 抓取时间均匹配)的 offer。
 	AppliedOfferIDs []int64 `json:"appliedOfferIds"`
@@ -656,8 +674,14 @@ type Settings struct {
 	RecordRequestBody bool   `json:"recordRequestBody"`
 	SampleRatePct     int    `json:"sampleRatePct"` // 0-100
 	TZOffsetMin       int    `json:"tzOffsetMin"`   // 默认 480(Asia/Shanghai)
-	// USDPerCNY 手工维护的人民币→美元换算率(官方价多为 CNY,内部计价为 USD)。
-	// 0 = 未设置:仅展示原币种,不做换算。汇率非厂商官方数据,故不自动抓取。
+	// DisplayCurrency 计价币种:网关所有价格的展示币种,也是「应用官方价」的目标币种。
+	// 供给源报价与官方价换算结果都以该币种为金额单位 —— offers.*_usd / input_price_usd 是历史
+	// 命名,语义已是「当前计价币种的金额」,故不随币种改动而迁移。
+	// 官方价原币种与之一致时可直接应用,无需汇率;不一致才需要 USDPerCNY 折算。
+	DisplayCurrency Currency `json:"displayCurrency"`
+	// USDPerCNY 手工维护的美元→人民币换算率(如 0.139 = 1 元折 0.139 美元)。
+	// 仅当官方价原币种与 DisplayCurrency 不一致时用于折算;0 = 未设置(此时拒绝折算,不臆造汇率)。
+	// 汇率非厂商官方数据,故不自动抓取。
 	USDPerCNY float64 `json:"usdPerCny"`
 	// PublicBaseURL 生成 Claude 配置时对外可见的网关基址(如 https://ai-gateway.lan)。
 	// 留空则按请求的 scheme+host 推断(X-Forwarded-Proto/Host 优先)。
@@ -672,6 +696,7 @@ func (s *Settings) Defaults() {
 	s.RecordRequestBody = true
 	s.SampleRatePct = 100
 	s.TZOffsetMin = 480
+	s.DisplayCurrency = CurrencyCNY
 }
 
 // ---------- 其他小类型 ----------

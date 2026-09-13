@@ -5,7 +5,7 @@ import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import { DegradedNote, ErrorState, SkLines } from '@/components/States';
 import { api } from '@/services/api';
-import type { Settings as SettingsModel } from '@/types';
+import type { PriceCurrency, Settings as SettingsModel } from '@/types';
 
 /** 时区选择:分钟偏移 东为正。仅列常见值,默认 Asia/Shanghai(+480)。 */
 const TZ_OPTIONS = [
@@ -177,8 +177,17 @@ export default function Settings() {
           ),
         },
         {
+          key: 'displayCurrency', t: '计价币种',
+          d: '全站价格(模型单价 / 用量花费 / 官方参考价)统一按此币种展示,也是「应用官方价」的目标币种',
+          render: (f, s) => (
+            <Select<PriceCurrency> style={{ width: 200 }} value={f.displayCurrency ?? 'CNY'}
+              onChange={v => s('displayCurrency', v)}
+              options={[{ value: 'CNY', label: '人民币 ¥' }, { value: 'USD', label: '美元 $' }]} />
+          ),
+        },
+        {
           key: 'usdPerCny', t: 'USD/CNY 汇率',
-          d: '官方价多为人民币,网关口径为美元。此处手工维护换算率(如 0.14),仅用于官方价换算展示;留 0 = 未设,官方人民币价不可应用',
+          d: '仅当官方价原币种与计价币种不一致时用于折算(如官方为美元、计价为人民币)。手工维护:1 元人民币合多少美元就填多少(如 0.139);留 0 = 未设,此时拒绝折算,不臆造汇率',
           render: (f, s) => (
             <InputNumber
               style={{ width: 200 }} min={0} max={10} step={0.001} precision={4}

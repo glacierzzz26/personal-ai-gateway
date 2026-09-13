@@ -26,11 +26,6 @@ interface PricingRes {
   error?: string;
 }
 
-/** 有官方单价来源(可抓)的 provider —— 与后端 internal/pricing 的 scrapers 表一致。 */
-const PRICING_FETCHABLE: Provider[] = ['DeepSeek', '通义千问'];
-/** 仅可手工录入官方参考价(官方页为动态渲染)的 provider。 */
-const PRICING_MANUAL_ONLY: Provider[] = ['智谱'];
-
 /** 新建渠道表单默认值 */
 const DEFAULTS = {
   provider: 'OpenAI' as Provider,
@@ -167,6 +162,15 @@ export default function Channels() {
     queryFn: api.getChannels,
     retry: 0,
   });
+
+  // 官方价来源能力(可抓 / 仅手工)由后端下发,避免前端再抄一份厂商清单。
+  const { data: officialVendors = [] } = useQuery({
+    queryKey: ['official-vendors'],
+    queryFn: () => api.officialVendors(),
+    retry: 0,
+    staleTime: 300_000,
+  });
+  const vendorInfo = (p: Provider) => officialVendors.find(v => v.provider === p);
 
   // 额度:对每条渠道并发查询上游 /v1/usage(Anthropic 协议渠道不查)。失败静默,UI 显示灰色占位。
   const quotaQueries = useQueries({
@@ -402,8 +406,9 @@ export default function Channels() {
     {
       title: '操作', align: 'right', width: 380,
       render: (_, r) => {
-        const canFetch = PRICING_FETCHABLE.includes(r.provider);
-        const manualOnly = PRICING_MANUAL_ONLY.includes(r.provider);
+        const vi = vendorInfo(r.provider);
+        const canFetch = !!vi && !vi.manualOnly;
+        const manualOnly = !!vi?.manualOnly;
         return (
           <Space size={4} wrap>
             <Button
@@ -424,7 +429,7 @@ export default function Channels() {
               </Tooltip>
             )}
             {manualOnly && (
-              <Tooltip title="该厂商官方页为动态渲染,无法稳定抓取;请到「模型广场」手工录入官方参考价">
+              <Tooltip title="该厂商官方页为动态渲染,无法稳定抓取;请到「官方定价」页手工录入官方参考价">
                 <Button size="small" disabled>官方页不可抓</Button>
               </Tooltip>
             )}

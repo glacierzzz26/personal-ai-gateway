@@ -8,23 +8,24 @@ import (
 
 // settings 键名(下划线常量,与 domain.Settings JSON 字段一一对应)。
 const (
-	keyRequestTimeout = "request_timeout_ms"
-	keyMaxRetries     = "max_retries"
-	keyDegradeOnError = "degrade_on_error"
-	keyHTTPProxy      = "http_proxy"
-	keySkipTLSVerify  = "skip_tls_verify"
-	keyLogRetention   = "log_retention_days"
-	keyRecordBody     = "record_request_body"
-	keySampleRate     = "sample_rate_pct"
-	keyTZOffsetMin    = "tz_offset_min"
-	keyPublicBaseURL  = "public_base_url"
-	keyUSDPerCNY      = "usd_per_cny"
+	keyRequestTimeout  = "request_timeout_ms"
+	keyMaxRetries      = "max_retries"
+	keyDegradeOnError  = "degrade_on_error"
+	keyHTTPProxy       = "http_proxy"
+	keySkipTLSVerify   = "skip_tls_verify"
+	keyLogRetention    = "log_retention_days"
+	keyRecordBody      = "record_request_body"
+	keySampleRate      = "sample_rate_pct"
+	keyTZOffsetMin     = "tz_offset_min"
+	keyPublicBaseURL   = "public_base_url"
+	keyUSDPerCNY       = "usd_per_cny"
+	keyDisplayCurrency = "display_currency"
 )
 
 var settingsKeys = []string{
 	keyRequestTimeout, keyMaxRetries, keyDegradeOnError, keyHTTPProxy, keySkipTLSVerify,
 	keyLogRetention, keyRecordBody, keySampleRate, keyTZOffsetMin, keyPublicBaseURL,
-	keyUSDPerCNY,
+	keyUSDPerCNY, keyDisplayCurrency,
 }
 
 // GetSettings 读取全部设置;表为空返回默认值(不落库)。
@@ -59,23 +60,28 @@ func (s *Store) GetSettings() (domain.Settings, error) {
 	cfg.TZOffsetMin = intOr(cfg.TZOffsetMin, raw[keyTZOffsetMin])
 	cfg.PublicBaseURL = strOr(raw[keyPublicBaseURL])
 	cfg.USDPerCNY = floatOr(cfg.USDPerCNY, raw[keyUSDPerCNY])
+	// 计价币种:键缺失/空串时保留默认(CNY),不把空值写进语义。
+	if v := raw[keyDisplayCurrency]; v != "" {
+		cfg.DisplayCurrency = domain.Currency(v)
+	}
 	return cfg, nil
 }
 
 // SaveSettings 整体写入(调用方先把未改字段从 GetSettings 合并)。
 func (s *Store) SaveSettings(cfg domain.Settings) error {
 	kv := map[string]string{
-		keyRequestTimeout: strconv.Itoa(cfg.RequestTimeoutMs),
-		keyMaxRetries:     strconv.Itoa(cfg.MaxRetries),
-		keyDegradeOnError: boolStr(cfg.DegradeOnError),
-		keyHTTPProxy:      cfg.HTTPProxy,
-		keySkipTLSVerify:  boolStr(cfg.SkipTLSVerify),
-		keyLogRetention:   strconv.Itoa(cfg.LogRetentionDays),
-		keyRecordBody:     boolStr(cfg.RecordRequestBody),
-		keySampleRate:     strconv.Itoa(cfg.SampleRatePct),
-		keyTZOffsetMin:    strconv.Itoa(cfg.TZOffsetMin),
-		keyPublicBaseURL:  cfg.PublicBaseURL,
-		keyUSDPerCNY:      strconv.FormatFloat(cfg.USDPerCNY, 'f', -1, 64),
+		keyRequestTimeout:  strconv.Itoa(cfg.RequestTimeoutMs),
+		keyMaxRetries:      strconv.Itoa(cfg.MaxRetries),
+		keyDegradeOnError:  boolStr(cfg.DegradeOnError),
+		keyHTTPProxy:       cfg.HTTPProxy,
+		keySkipTLSVerify:   boolStr(cfg.SkipTLSVerify),
+		keyLogRetention:    strconv.Itoa(cfg.LogRetentionDays),
+		keyRecordBody:      boolStr(cfg.RecordRequestBody),
+		keySampleRate:      strconv.Itoa(cfg.SampleRatePct),
+		keyTZOffsetMin:     strconv.Itoa(cfg.TZOffsetMin),
+		keyPublicBaseURL:   cfg.PublicBaseURL,
+		keyUSDPerCNY:       strconv.FormatFloat(cfg.USDPerCNY, 'f', -1, 64),
+		keyDisplayCurrency: string(cfg.DisplayCurrency),
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

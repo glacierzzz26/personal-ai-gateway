@@ -74,6 +74,8 @@ export interface ModelOffer {
   priceNativeText?: string;
   /** 本渠道侧真实模型名(非空=出站发往本渠道时用该名;空=用模型名) */
   upstreamModel?: string;
+  /** 由上游名/模型名推断出的厂商(空=判不出)。聚合渠道据此匹配厂商官方价 */
+  inferredVendor?: Provider;
 }
 
 /** 供给源创建/编辑入参 */
@@ -110,6 +112,11 @@ export interface ModelCatalogItem {
   enabled: boolean;
   todayRequests: number;
   successRate: number;
+  /** 模型级官方价绑定:显式指向某厂商 official_prices 的一行(空=走自动匹配) */
+  officialVendor?: Provider;
+  officialModelName?: string;
+  /** 由模型名推断出的厂商(空=判不出)。聚合渠道据此自动匹配厂商官方价 */
+  inferredVendor?: Provider;
 }
 
 /** 模型创建/编辑入参 */
@@ -120,6 +127,17 @@ export interface ModelDraft {
   contextWindow: number;
   capabilities: Capability[];
   enabled: boolean;
+  /** 官方价绑定;不传=保持原值,空串=清空 */
+  officialVendor?: string;
+  officialModelName?: string;
+}
+
+/** 可抓取/可手工录入官方价的厂商(GET /official-prices/vendors) */
+export interface OfficialVendorInfo {
+  provider: Provider;
+  sourceUrl: string;
+  /** true=官方页动态渲染,只能手工录入 */
+  manualOnly: boolean;
 }
 
 export interface GatewayToken {
@@ -257,7 +275,10 @@ export interface Settings {
   tzOffsetMin: number;
   /** 生成 Claude 配置时对外可见的网关基址;留空=按访问地址推断 */
   publicBaseUrl?: string;
-  /** 人民币→美元换算率(手工维护,用于官方价换算展示;0=未设,官方人民币价不可应用) */
+  /** 网关计价币种:所有价格的展示币种,也是「应用官方价」的目标币种。默认 CNY。 */
+  displayCurrency?: PriceCurrency;
+  /** 人民币→美元换算率(手工维护,如 1 元 = 0.139 美元)。仅当官方价原币种与计价币种
+   *  不一致时才用于折算;0=未设,此时拒绝折算(不臆造汇率)。 */
   usdPerCny?: number;
 }
 
@@ -291,11 +312,13 @@ export interface OfficialPrice {
 
 /** 官方价 + 与现有 offer 的比对(GET 读接口返回) */
 export interface OfficialPriceView extends OfficialPrice {
-  /** 按 settings.usdPerCny 换算的 USD 价;汇率未设或原币为 USD 时同原价 */
+  /** 按 settings.displayCurrency 换算后的计价金额(每百万 token)。
+   *  字段名保留 *Usd 是历史命名,语义已是「当前计价币种的金额」。
+   *  官方原币种与计价币种一致 → 原值直通;不一致 → 按汇率折算;折算不了则留 0。 */
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd: number;
-  /** 原币为 CNY 且设置了汇率时才有意义 */
+  /** 金额可用:原币种与计价币种一致,或已按汇率折算成功 */
   rateSet: boolean;
   /** 已应用该官方价(来源 URL + 抓取时间匹配)的 offer */
   appliedOfferIds: number[];

@@ -42,7 +42,15 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, "validation", "tzOffsetMin out of range [-720, 840]")
 		return
 	}
-	// USD/CNY 换算率:0 = 未设(官方人民币价将拒绝应用);负值归 0。仅在设置页手工维护,不接第三方汇率源。
+	// 计价币种:空 = 未指定,回落默认;非法值拒绝(不静默吞掉拼写错误)。
+	if in.DisplayCurrency == "" {
+		in.DisplayCurrency = domain.CurrencyCNY
+	}
+	if !in.DisplayCurrency.Valid() {
+		apiErr(w, http.StatusBadRequest, "validation", "displayCurrency must be CNY or USD")
+		return
+	}
+	// 汇率:0 = 未设(官方价原币种与计价币种不一致时将拒绝应用);负值归 0。仅在设置页手工维护,不接第三方汇率源。
 	if in.USDPerCNY < 0 {
 		in.USDPerCNY = 0
 	}

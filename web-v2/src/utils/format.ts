@@ -1,9 +1,17 @@
 import { TOKENS } from '@/styles/tokens';
+import { currentCurrency } from '@/stores/currency';
+import type { PriceCurrency } from '@/types';
+
+/** 币种符号。币种由 settings.displayCurrency 决定(见 stores/currency.ts)。 */
+const SYMBOL: Record<PriceCurrency, string> = { CNY: '¥', USD: '$' };
+const sym = () => SYMBOL[currentCurrency()];
 
 export const fmt = {
   n: (v: number) => v.toLocaleString('en-US'),
-  usd: (v: number, d = 2) => `$${v.toFixed(d)}`,
-  price: (v: number) => `$${v.toFixed(4)}`,
+  /** 金额(2 位小数),用于用量/花费等记账口径 —— 单位同计价币种。 */
+  usd: (v: number, d = 2) => `${sym()}${v.toFixed(d)}`,
+  /** 单价(4 位小数),用于每百万 token 的模型价格 —— 单位同计价币种。 */
+  price: (v: number) => `${sym()}${v.toFixed(4)}`,
   pct: (v: number, d = 1) => `${(v * 100).toFixed(d)}%`,
   ms: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`),
   ctx: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}K` : String(v)),

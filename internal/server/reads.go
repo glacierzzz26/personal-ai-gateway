@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/store"
 )
 
@@ -121,6 +122,8 @@ func (s *Server) channelRead(v *adminView, ch domain.ChannelRow) domain.ChannelR
 
 // offerRead 组合供给源展示行(健康随其渠道,渠道禁用→disabled)。
 func (s *Server) offerRead(v *adminView, of domain.OfferRead) domain.OfferRead {
+	// 厂商推断只看该供给源自己的上游名;为空则交给模型级 InferredVendor 兜底(前端逻辑)。
+	of.InferredVendor = pricing.InferVendor(of.UpstreamModel)
 	ch, ok := v.chByID[of.ChannelID]
 	if !ok {
 		of.Status = domain.StatusDisabled
@@ -163,6 +166,8 @@ func (s *Server) modelsListRead() ([]domain.ModelRead, error) {
 			ID: m.ID, Name: m.PublicName(), DisplayName: m.DisplayName, OriginalName: m.Name,
 			ContextWindow: m.ContextWindow,
 			Capabilities:  m.Capabilities, Enabled: m.Enabled, Offers: decorated,
+			OfficialVendor: m.OfficialVendor, OfficialModelName: m.OfficialModelName,
+			InferredVendor: pricing.InferVendor(m.Name),
 		}
 		if u, ok := today[m.PublicName()]; ok {
 			mr.TodayRequests = u.Requests
