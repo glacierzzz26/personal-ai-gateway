@@ -6,12 +6,18 @@ import type { PriceCurrency } from '@/types';
 const SYMBOL: Record<PriceCurrency, string> = { CNY: '¥', USD: '$' };
 const sym = () => SYMBOL[currentCurrency()];
 
+/**
+ * 金额小数位:默认 2 位。但 0 < v < 0.005 时 2 位会渲染成 0.00,把「很小的花费/单价」
+ * 读成「免费」,这种小额退回 4 位(显式要求更多位时取较大者)。
+ */
+const dec = (v: number, d: number) => (v > 0 && v < 0.005 ? Math.max(d, 4) : d);
+
 export const fmt = {
   n: (v: number) => v.toLocaleString('en-US'),
-  /** 金额(2 位小数),用于用量/花费等记账口径 —— 单位同计价币种。 */
-  usd: (v: number, d = 2) => `${sym()}${v.toFixed(d)}`,
-  /** 单价(4 位小数),用于每百万 token 的模型价格 —— 单位同计价币种。 */
-  price: (v: number) => `${sym()}${v.toFixed(4)}`,
+  /** 金额(默认 2 位小数),用于用量/花费等记账口径 —— 单位同计价币种。 */
+  usd: (v: number, d = 2) => `${sym()}${v.toFixed(dec(v, d))}`,
+  /** 单价(默认 2 位小数),用于每百万 token 的模型价格 —— 单位同计价币种。 */
+  price: (v: number, d = 2) => `${sym()}${v.toFixed(dec(v, d))}`,
   pct: (v: number, d = 1) => `${(v * 100).toFixed(d)}%`,
   ms: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`),
   ctx: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}K` : String(v)),

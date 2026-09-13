@@ -89,7 +89,7 @@ export default function Logs() {
     },
     { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 90, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
     { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.usd(v, 4)}</span> },
+    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
   ];
 
   const errorText = error instanceof Error ? error.message : String(error ?? '加载失败');

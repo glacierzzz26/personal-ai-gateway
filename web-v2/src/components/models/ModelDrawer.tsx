@@ -605,7 +605,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     },
     {
       title: '花费', dataIndex: 'costUsd', align: 'right',
-      render: v => <span className="gw-num">{fmt.usd(v, 3)}</span>,
+      render: v => <span className="gw-num">{fmt.usd(v)}</span>,
     },
     {
       title: '占比', key: 'share', align: 'right',
@@ -869,7 +869,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                     <Row gutter={12} style={{ marginBottom: 16 }}>
                       {[
                         ['今日请求', fmt.k(lastDay?.requests ?? 0)],
-                        ['今日花费', fmt.usd(lastDay?.costUsd ?? 0, 3)],
+                        ['今日花费', fmt.usd(lastDay?.costUsd ?? 0)],
                         ['近 7 日请求', fmt.k(periodTotal.requests)],
                         ['近 7 日成功率', fmt.pct(periodOkRate, 2)],
                       ].map(([label, value]) => (

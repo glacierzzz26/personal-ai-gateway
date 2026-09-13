@@ -206,7 +206,7 @@ export default function Dashboard() {
     },
     { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 90, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
     { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 100, render: v => <span className="gw-num">{v ? fmt.usd(v, 4) : '—'}</span> },
+    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 100, render: v => <span className="gw-num">{v ? fmt.usd(v) : '—'}</span> },
   ];
 
   const maxFail = Math.max(...fails.buckets.map(b => b.count), 1);
