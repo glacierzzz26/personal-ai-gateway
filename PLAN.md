@@ -114,7 +114,7 @@ charge = 官方价 × rate                                 // 客户付你(与 c
 | **S1** ✓ | 迁移 v7 + `SettleRequest` 单事务 + 钱包扣减 + 倍率 | 一个 user key 跑请求 → 余额按售价下降、`balance_logs` 有流水、`cost ≠ charge` |
 | **S2** ✓ | admin 充值/调倍率接口 + `Users.tsx`;`/me/balance`、`/me/usage`、`/me/logs` + 「我的用量」页 + 角色导航 | 客户登录只见「我的用量 / 访问令牌」,看得到余额与自己的请求 |
 | **S3** ✓ | `GET /models` 分角色收敛 + 迁移 v8 用户令牌上限 ceiling | 客户 token 看到的模型无渠道/上游/来源/成本字段;超限令牌被拒 |
-| **S4** | **放开手工录入的厂商白名单**(✓ 已做:Claude/GPT/智谱/Moonshot/Azure 可手工录入 + 默认原币随厂商)+ Cmd+K 角色过滤(✓)+ 用户侧币种(✓)+ 阈值提醒(待做) | issue #8 的 P1/P2 清单收敛 |
+| **S4** ✓ | **放开手工录入的厂商白名单**(Claude/GPT/智谱/Moonshot/Azure 可手工录入 + 默认原币随厂商)+ Cmd+K 角色过滤 + 用户侧币种 + 阈值提醒 + **Key 自检** `POST /tokens/{id}/probe`(不访问上游/不计费) | issue #8 的 P1/P2 清单收敛 |
 
 > **S4 的放开是 S3 展示的前置**:没有官方价就没得乘。
 
