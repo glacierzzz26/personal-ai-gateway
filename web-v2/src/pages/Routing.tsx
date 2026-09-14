@@ -432,26 +432,26 @@ export default function Routing() {
 
   const columns: ColumnsType<RouteRule> = [
     {
-      title: '', width: 40,
+      title: '', width: 36,
       render: (_, __, i) => <span {...handleProps(i ?? 0)} aria-label="拖动调整顺序">⋮⋮</span>,
     },
     {
-      title: '顺序', key: 'order', width: 64, align: 'right',
-      render: (_, __, i) => <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{i! + 1}</span>,
-    },
-    {
-      title: '名称', dataIndex: 'name', width: 180,
-      render: (v, r) => (
-        <div>
-          <div style={{ fontWeight: 500, color: r.enabled ? 'var(--gw-text)' : 'var(--gw-text-3)' }}>{v}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>
-            命中 <span className="gw-num">{fmt.n(r.hit)}</span> 次
+      // 顺序号并入名称列(拖动柄已表达先后,序号只是辅助)
+      title: '名称', dataIndex: 'name', width: 170,
+      render: (v, r, i) => (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+          <span className="gw-num" style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>{i! + 1}</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 500, color: r.enabled ? 'var(--gw-text)' : 'var(--gw-text-3)' }}>{v}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>
+              命中 <span className="gw-num">{fmt.n(r.hit)}</span> 次
+            </div>
           </div>
         </div>
       ),
     },
     {
-      title: '启用', dataIndex: 'enabled', align: 'center', width: 80,
+      title: '启用', dataIndex: 'enabled', align: 'center', width: 64,
       render: (_, r) => (
         <Switch
           size="small"
@@ -464,7 +464,7 @@ export default function Routing() {
       ),
     },
     {
-      title: '匹配条件', key: 'match', width: 220,
+      title: '匹配条件', key: 'match', width: 168,
       render: (_, r) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           <span className="gw-badge">{MODE_TEXT[r.matchMode]}</span>
@@ -473,7 +473,7 @@ export default function Routing() {
       ),
     },
     {
-      title: '分发策略', key: 'strategy', width: 220,
+      title: '分发策略', key: 'strategy', width: 168,
       render: (_, r) => (
         <div>
           <span className={`gw-badge${r.strategy === 'weight' ? ' tint' : ''}`}>{STRATEGY_TEXT[r.strategy]}</span>
@@ -488,7 +488,7 @@ export default function Routing() {
       ),
     },
     {
-      title: '目标渠道', key: 'channelIds', width: 220,
+      title: '目标渠道', key: 'channelIds', width: 168,
       render: (_, r) =>
         r.channelIds.length === 0 ? (
           <span style={{ color: 'var(--gw-text-3)' }}>—</span>
@@ -507,27 +507,23 @@ export default function Routing() {
         ),
     },
     {
-      title: '兜底', key: 'fallback', width: 120,
-      render: (_, r) =>
-        r.fallbackChannelId == null ? (
-          <span style={{ color: 'var(--gw-text-3)' }}>无兜底</span>
-        ) : (
-          <span className="gw-badge" style={{ color: TOKENS.warn, borderColor: TOKENS.warn }}>
-            {channelName(r.fallbackChannelId)}
-          </span>
-        ),
-    },
-    {
-      title: '重试 / 超时', key: 'retryTimeout', width: 140,
+      // 兜底渠道 / 重试次数 / 超时 三合一 —— 都是「主渠道失败后怎么办」
+      title: '兜底 / 重试', key: 'fallbackRetry', width: 144,
       render: (_, r) => (
-        <span style={{ fontSize: 13.5 }}>
-          <span className="gw-num">{r.retry}</span> 次
-          <span style={{ color: 'var(--gw-text-3)' }}> · {timeoutLabel(r.timeoutMs)}</span>
-        </span>
+        <div style={{ fontSize: 13 }}>
+          {r.fallbackChannelId == null
+            ? <span style={{ color: 'var(--gw-text-3)' }}>无兜底</span>
+            : <span className="gw-badge" style={{ color: TOKENS.warn, borderColor: TOKENS.warn }}>
+                {channelName(r.fallbackChannelId)}
+              </span>}
+          <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginTop: 4 }}>
+            重试 <span className="gw-num">{r.retry}</span> 次 · {timeoutLabel(r.timeoutMs)}
+          </div>
+        </div>
       ),
     },
     {
-      title: '操作', key: 'actions', align: 'right', width: 130,
+      title: '操作', key: 'actions', align: 'right', width: 120,
       render: (_, r) => (
         <Space size={4}>
           <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
@@ -577,7 +573,7 @@ export default function Routing() {
               dataSource={rules}
               columns={columns}
               pagination={false}
-              scroll={{ x: 1500 }}
+              scroll={{ x: 'max-content' }}
               onRow={onRow}
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无规则" /> }}
             />

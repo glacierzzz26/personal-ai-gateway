@@ -162,9 +162,9 @@ export default function Me() {
   ];
 
   const logColumns: ColumnsType<RequestLogItem> = [
-    { title: '时间', dataIndex: 'ts', width: 160, render: v => <span className="gw-mono">{v}</span> },
+    { title: '时间', dataIndex: 'ts', width: 148, render: v => <span className="gw-mono">{v}</span> },
     {
-      title: '状态', dataIndex: 'statusCode', width: 150,
+      title: '状态', dataIndex: 'statusCode', width: 110,
       render: (v: number, r) => {
         if (v === STATUS_CLIENT_CLOSED) return <StatusDot status="" text="中断" tone="aux" />;
         if (okCode(v)) return <StatusDot status="" text="成功" tone="ok" />;
@@ -177,31 +177,31 @@ export default function Me() {
       },
     },
     { title: '模型', dataIndex: 'model', render: v => <span className="gw-mono">{v}</span> },
-    { title: '令牌', dataIndex: 'tokenName', width: 140, ellipsis: true, render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span> },
-    { title: '输入', dataIndex: 'inTokens', align: 'right', width: 96, render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '输出', dataIndex: 'outTokens', align: 'right', width: 96, render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 96, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
-    { title: '花费', dataIndex: 'chargeUsd', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
+    { title: '令牌', dataIndex: 'tokenName', width: 116, ellipsis: true, render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span> },
+    { title: '输入', dataIndex: 'inTokens', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '输出', dataIndex: 'outTokens', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
+    { title: '花费', dataIndex: 'chargeUsd', align: 'right', width: 92, render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
   const ledgerColumns: ColumnsType<BalanceLogItem> = [
     {
-      title: '时间', dataIndex: 'createdAt', width: 170,
+      title: '时间', dataIndex: 'createdAt', width: 168,
       render: v => <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{fmt.dt(v)}</span>,
     },
     {
-      title: '类型', dataIndex: 'reason', width: 90,
+      title: '类型', dataIndex: 'reason', width: 88,
       render: (v: string) => <span className="gw-badge">{REASON[v]?.t ?? v}</span>,
     },
     {
-      title: '金额', dataIndex: 'delta', align: 'right', width: 130,
+      title: '金额', dataIndex: 'delta', align: 'right', width: 120,
       render: (v: number) => (
         <span className="gw-num" style={{ color: v < 0 ? TOKENS.err : TOKENS.ok }}>
           {v > 0 ? '+' : ''}{fmt.usd(v)}
         </span>
       ),
     },
-    { title: '余额', dataIndex: 'balanceAfter', align: 'right', width: 130, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
+    { title: '余额', dataIndex: 'balanceAfter', align: 'right', width: 120, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
     { title: '备注', dataIndex: 'note', ellipsis: true, render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span> },
   ];
 
@@ -209,7 +209,7 @@ export default function Me() {
     { title: '模型', dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
     { title: '上下文', dataIndex: 'contextWindow', width: 100, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
     {
-      title: '能力', dataIndex: 'capabilities', width: 200,
+      title: '能力', dataIndex: 'capabilities', width: 176,
       render: (caps: string[]) => caps.length === 0
         ? <span style={{ color: 'var(--gw-text-3)' }}>—</span>
         : (
@@ -388,7 +388,7 @@ export default function Me() {
             loading={logsQ.isFetching && logs.length === 0}
             dataSource={logs}
             columns={logColumns}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 'max-content' }}
             locale={{
               emptyText: logsQ.isError ? (
                 <ErrorState title="日志加载失败" desc="无法读取请求日志。" onRetry={() => void logsQ.refetch()} />

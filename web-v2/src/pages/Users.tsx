@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { App, Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip } from 'antd';
+import { App, Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
@@ -365,10 +366,10 @@ export default function Users() {
   };
 
   const columns: ColumnsType<UserAccount> = [
-    { title: '用户名', dataIndex: 'username', width: 160, render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
-    { title: '角色', dataIndex: 'role', width: 120, render: v => <RoleBadge role={v} /> },
+    { title: '用户名', dataIndex: 'username', width: 140, render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
+    { title: '角色', dataIndex: 'role', width: 96, render: v => <RoleBadge role={v} /> },
     {
-      title: '余额', dataIndex: 'balanceUsd', width: 130, align: 'right',
+      title: '余额', dataIndex: 'balanceUsd', width: 116, align: 'right',
       render: (v: number, r) =>
         r.role !== 'user' ? (
           <span style={{ color: 'var(--gw-text-3)' }}>—</span>
@@ -377,7 +378,7 @@ export default function Users() {
         ),
     },
     {
-      title: '售价倍率', key: 'rate', width: 110, align: 'right',
+      title: '售价倍率', key: 'rate', width: 96, align: 'right',
       render: (_, r) => {
         if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
         const own = r.rateOverride != null;
@@ -391,7 +392,7 @@ export default function Users() {
       },
     },
     {
-      title: '令牌上限', key: 'ceiling', width: 130, align: 'right',
+      title: '令牌上限', key: 'ceiling', width: 110, align: 'right',
       render: (_, r) => {
         if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
         if (r.tokenQuotaCeiling <= 0 && r.tokenRpmCeiling <= 0) {
@@ -406,16 +407,17 @@ export default function Users() {
         );
       },
     },
-    { title: 'Key 数量', dataIndex: 'keyCount', width: 100, align: 'right', render: v => <span className="gw-num">{v}</span> },
+    { title: 'Key 数量', dataIndex: 'keyCount', width: 90, align: 'right', render: v => <span className="gw-num">{v}</span> },
     {
-      title: '创建时间', dataIndex: 'createdAt', width: 170,
+      title: '创建时间', dataIndex: 'createdAt', width: 150,
       render: v => {
         const d = dayjs(v);
         return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
     {
-      title: '操作', align: 'right', width: 300,
+      // 高频（充值/倍率）外露，低频（令牌上限/重置密码/删除）收进「更多」
+      title: '操作', align: 'right', width: 160,
       render: (_, r) => {
         const isSelf = r.id === me?.id;
         const isLastAdmin = r.role === 'admin' && adminCount <= 1;
@@ -430,22 +432,29 @@ export default function Users() {
               onClick={() => setRateUser(r)}>
               倍率
             </Button>
-            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员建令牌不受限'}
-              onClick={() => setCeilingUser(r)}>
-              令牌上限
-            </Button>
-            <Button size="small" disabled={isSelf} title={isSelf ? '不能重置自己的密码，请用右上角菜单' : undefined}
-              onClick={() => setResetting(r)}>
-              重置密码
-            </Button>
-            <Button
-              size="small" danger
-              disabled={isSelf || isLastAdmin}
-              title={isSelf ? '不能删除自己' : isLastAdmin ? '不能删除最后一个管理员' : undefined}
-              onClick={() => confirmDelete(r)}
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'ceiling', label: '令牌上限', disabled: !isUser },
+                  { key: 'password', label: '重置密码', disabled: isSelf },
+                  { type: 'divider' as const },
+                  { key: 'delete', label: '删除', danger: true, disabled: isSelf || isLastAdmin },
+                ],
+                onClick: ({ key, domEvent }) => {
+                  domEvent.stopPropagation();
+                  if (key === 'ceiling') setCeilingUser(r);
+                  else if (key === 'password') setResetting(r);
+                  else if (key === 'delete') confirmDelete(r);
+                },
+              }}
             >
-              删除
-            </Button>
+              <Button
+                type="text" size="small" icon={<MoreOutlined />}
+                aria-label={`更多操作 ${r.username}`}
+                title={isLastAdmin ? '最后一个管理员不可删除' : undefined}
+              />
+            </Dropdown>
           </Space>
         );
       },
@@ -478,7 +487,7 @@ export default function Users() {
               dataSource={users}
               columns={columns}
               pagination={false}
-              scroll={{ x: 820 }}
+              scroll={{ x: 'max-content' }}
               locale={{
                 emptyText: (
                   <EmptyState

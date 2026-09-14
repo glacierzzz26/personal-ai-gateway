@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import {
-  App, Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tooltip,
+  App, Button, Col, Dropdown, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
+import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { Block as BlockCard, Blocks } from '@/components/Block';
@@ -340,77 +342,87 @@ export default function Channels() {
 
   const columns: ColumnsType<Channel> = [
     {
-      title: '渠道', dataIndex: 'name',
+      // 渠道名 / 供应商 / Base URL 三合一 —— 都是「这条渠道是什么」,同格堆叠
+      title: '渠道', dataIndex: 'name', width: 248,
       render: (v, r) => (
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>{r.modelCount} 个模型</div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--gw-text-3)' }}>
+            <ProviderMark name={r.provider} size={14} />{r.provider} · {r.modelCount} 个模型
+          </div>
+          <Tooltip title={r.baseUrl}>
+            <div
+              className="gw-mono"
+              style={{ fontSize: 12, color: 'var(--gw-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {r.baseUrl}
+            </div>
+          </Tooltip>
         </div>
       ),
     },
     {
-      title: '供应商', dataIndex: 'provider', width: 130,
-      render: v => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-          <ProviderMark name={v} />{v}
+      // 优先级 / 权重 合并 —— 两者都是选路参数,同列上下排列
+      title: '选路', key: 'route', align: 'right', width: 84,
+      render: (_, r) => (
+        <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>
+          P{r.priority} · W{r.weight}
         </span>
       ),
     },
     {
-      title: 'Base URL', dataIndex: 'baseUrl',
-      render: v => (
-        <Tooltip title={v}>
-          <span
-            className="gw-mono"
-            style={{
-              display: 'inline-block', maxWidth: 220, overflow: 'hidden',
-              textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom',
-              color: 'var(--gw-text-3)',
-            }}
-          >
-            {v}
+      // 成功率 / 延迟 / 状态 合并 —— 都是「这条渠道现在健不健康」
+      title: '健康度', key: 'health', align: 'right', width: 132,
+      render: (_, r) => (
+        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+          <StatusDot status={r.status} />
+          <span className="gw-num" style={{ fontSize: 12.5 }}>
+            {fmt.pct(r.successRate, 2)} · {r.status === 'down' || r.status === 'disabled' ? '—' : fmt.ms(r.latencyMs)}
           </span>
-        </Tooltip>
+          {r.circuitOpen && <span className="gw-badge" style={{ color: TOKENS.err, borderColor: TOKENS.err }}>熔断中</span>}
+        </span>
       ),
     },
-    { title: '优先级', dataIndex: 'priority', align: 'right', width: 90, render: v => <span className="gw-num">{v}</span> },
-    { title: '权重', dataIndex: 'weight', align: 'right', width: 80, render: v => <span className="gw-num">{v}</span> },
     {
-      title: '成功率', dataIndex: 'successRate', align: 'right', width: 100,
-      render: v => <span className="gw-num">{fmt.pct(v, 2)}</span>,
-    },
-    {
-      title: '延迟', dataIndex: 'latencyMs', align: 'right', width: 100,
-      render: (v, r) => (
-        <span className="gw-num">{r.status === 'down' || r.status === 'disabled' ? '—' : fmt.ms(v)}</span>
+      // 今日 Token / 花费 合并 —— 同一时段的量价,一行显示
+      title: '今日用量', key: 'today', align: 'right', width: 104,
+      render: (_, r) => (
+        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+          <span className="gw-num">{fmt.k(r.todayTokens)}</span>
+          <span className="gw-num" style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>{fmt.usd(r.todayCostUsd)}</span>
+        </span>
       ),
     },
-    { title: '今日 Token', dataIndex: 'todayTokens', align: 'right', width: 120, render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '今日花费', dataIndex: 'todayCostUsd', align: 'right', width: 110, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
     {
-      title: '额度', key: 'quota', width: 180,
+      title: '额度', key: 'quota', width: 140,
       render: (_, r) => {
         const q = quotaById.get(r.id);
         return q ? <QuotaCell q={q} provider={r.provider} /> : dash;
       },
     },
     {
-      title: '状态', dataIndex: 'status', width: 150,
-      render: (_, r) => (
-        <Space size={6}>
-          <StatusDot status={r.status} />
-          {r.circuitOpen && <span className="gw-badge" style={{ color: TOKENS.err, borderColor: TOKENS.err }}>熔断中</span>}
-        </Space>
-      ),
-    },
-    {
-      title: '操作', align: 'right', width: 380,
+      // 高频（测试/编辑）外露，低频（同步/抓价/删除）收进「更多」——12 列表格放得进笔记本宽
+      title: '操作', align: 'right', width: 160,
       render: (_, r) => {
         const vi = vendorInfo(r.provider);
         const canFetch = !!vi && !vi.manualOnly;
         const manualOnly = !!vi?.manualOnly;
+        const menu: MenuProps = {
+          items: [
+            { key: 'sync', label: '同步模型', disabled: syncingId === r.id },
+            ...(canFetch ? [{ key: 'pricing', label: '获取官方定价', disabled: pricingId === r.id }] : []),
+            { type: 'divider' as const },
+            { key: 'delete', label: '删除', danger: true },
+          ],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            if (key === 'sync') handleSyncModels(r);
+            else if (key === 'pricing') handleFetchPricing(r);
+            else if (key === 'delete') handleDelete(r);
+          },
+        };
         return (
-          <Space size={4} wrap>
+          <Space size={4}>
             <Button
               size="small"
               loading={testingId === r.id}
@@ -418,23 +430,12 @@ export default function Channels() {
             >
               测试
             </Button>
-            <Button size="small" loading={syncingId === r.id} onClick={() => handleSyncModels(r)}>
-              同步模型
-            </Button>
-            {canFetch && (
-              <Tooltip title="从厂商官方计费页抓取单价表 → 存入「官方参考价」(不直接改报价)">
-                <Button size="small" loading={pricingId === r.id} onClick={() => handleFetchPricing(r)}>
-                  获取官方定价
-                </Button>
-              </Tooltip>
-            )}
-            {manualOnly && (
-              <Tooltip title="该厂商官方页为动态渲染,无法稳定抓取;请到「官方定价」页手工录入官方参考价">
-                <Button size="small" disabled>官方页不可抓</Button>
-              </Tooltip>
-            )}
             <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
-            <Button size="small" danger onClick={() => handleDelete(r)}>删除</Button>
+            <Tooltip title={canFetch ? undefined : manualOnly ? '该厂商官方页为动态渲染,无法稳定抓取;请到「官方定价」页手工录入' : undefined}>
+              <Dropdown menu={menu} trigger={['click']}>
+                <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`更多操作 ${r.name}`} />
+              </Dropdown>
+            </Tooltip>
           </Space>
         );
       },
@@ -504,7 +505,7 @@ export default function Channels() {
             loading={isLoading && channels.length === 0}
             dataSource={list}
             columns={columns}
-            scroll={{ x: 1830 }}
+            scroll={{ x: 'max-content' }}
             pagination={channels.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'default' } : false}
             locale={{ emptyText: emptyNode }}
           />

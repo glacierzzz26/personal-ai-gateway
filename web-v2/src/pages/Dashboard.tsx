@@ -186,12 +186,12 @@ export default function Dashboard() {
   };
 
   const logCols: ColumnsType<RequestLogItem> = [
-    { title: '时间', dataIndex: 'ts', width: 100, render: v => <span className="gw-mono" style={{ fontSize: 13 }}>{String(v).slice(11, 19)}</span> },
+    { title: '时间', dataIndex: 'ts', width: 92, render: v => <span className="gw-mono" style={{ fontSize: 13 }}>{String(v).slice(11, 19)}</span> },
     { title: '模型', dataIndex: 'model', render: v => <span className="gw-mono" style={{ fontSize: 13.5 }}>{v}</span> },
-    { title: '渠道', dataIndex: 'channelName', width: 150 },
-    { title: '令牌', dataIndex: 'tokenName', width: 140, render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v}</span> },
+    { title: '渠道', dataIndex: 'channelName', width: 128, ellipsis: true },
+    { title: '令牌', dataIndex: 'tokenName', width: 116, ellipsis: true, render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v}</span> },
     {
-      title: '状态', dataIndex: 'statusCode', width: 170,
+      title: '状态', dataIndex: 'statusCode', width: 132,
       render: (v: number, r) => {
         if (v === STATUS_CLIENT_CLOSED) return <StatusDot status="" text="中断" tone="aux" />;
         if (v >= 400 || r.error) {
@@ -206,9 +206,9 @@ export default function Dashboard() {
         return <StatusDot status="" text="成功" tone="ok" />;
       },
     },
-    { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 90, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
-    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 100, render: v => <span className="gw-num">{v ? fmt.usd(v) : '—'}</span> },
+    { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 76, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
+    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
+    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 92, render: v => <span className="gw-num">{v ? fmt.usd(v) : '—'}</span> },
   ];
 
   const maxFail = Math.max(...fails.buckets.map(b => b.count), 1);
@@ -518,7 +518,7 @@ export default function Dashboard() {
               loading={logLoading && recent.length === 0}
               dataSource={recent}
               columns={logCols}
-              scroll={{ x: 1080 }}
+              scroll={{ x: 'max-content' }}
               pagination={false}
               locale={{
                 emptyText: logError ? (

@@ -59,9 +59,9 @@ const components: NonNullable<ThemeConfig['components']> = {
     rowHoverBg: TOKENS.bg,
     borderColor: TOKENS.border,
     cellPaddingBlock: 13,
-    cellPaddingInline: 16,
+    cellPaddingInline: 12,
     cellPaddingBlockSM: 8,
-    cellPaddingInlineSM: 12,
+    cellPaddingInlineSM: 10,
     fontSize: 14,
   },
   Button: {

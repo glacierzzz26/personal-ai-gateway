@@ -423,9 +423,9 @@ export default function Models() {
         </span>
       ),
     },
-    { title: '上下文', dataIndex: 'contextWindow', align: 'right', width: 110, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
+    { title: '上下文', dataIndex: 'contextWindow', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
     {
-      title: '最低输入价', key: 'inP', align: 'right', width: 150,
+      title: '最低输入价', key: 'inP', align: 'right', width: 136,
       render: (_, m) => {
         const p = bestPrice(m);
         const op = officialOf(m);
@@ -452,19 +452,19 @@ export default function Models() {
       },
     },
     {
-      title: '最低输出价', key: 'outP', align: 'right', width: 130,
+      title: '最低输出价', key: 'outP', align: 'right', width: 118,
       render: (_, m) => {
         const p = bestPrice(m);
         return <span className="gw-num">{p ? fmt.price(p.outP) : '—'}</span>;
       },
     },
     {
-      title: '能力', dataIndex: 'capabilities', width: 220,
+      title: '能力', dataIndex: 'capabilities', width: 172,
       render: v => (v.length ? v.map((x: Capability) => CAP_LABEL[x]).join(' · ') : '—'),
     },
-    { title: '今日调用', dataIndex: 'todayRequests', align: 'right', width: 120, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '今日调用', dataIndex: 'todayRequests', align: 'right', width: 108, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     {
-      title: '启用', dataIndex: 'enabled', align: 'center', width: 90,
+      title: '启用', dataIndex: 'enabled', align: 'center', width: 80,
       render: (v, m) => (
         <span onClick={e => e.stopPropagation()}>
           <Switch
@@ -618,7 +618,7 @@ export default function Models() {
                 dataSource={list}
                 columns={tableCols}
                 pagination={list.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
-                scroll={{ x: 1180 }}
+                scroll={{ x: 'max-content' }}
                 onRow={r => ({
                   onClick: () => setDrawerId(r.id),
                   onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrawerId(r.id); } },

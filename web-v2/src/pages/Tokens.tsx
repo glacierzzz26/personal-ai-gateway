@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Modal,
+  App, Button, Checkbox, DatePicker, Dropdown, Form, Input, InputNumber, Modal,
   Radio, Select, Space, Switch, Table, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
+import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
@@ -467,22 +469,25 @@ export default function Tokens() {
   };
 
   const columns: ColumnsType<GatewayToken> = useMemo(() => [
-    { title: '名称', dataIndex: 'name', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
-    ...(isAdmin
-      ? [{
-          title: '归属', dataIndex: 'ownerName', width: 130,
-          render: (_: unknown, r: GatewayToken) =>
-            r.ownerId == null
-              ? <span style={{ color: 'var(--gw-text-3)' }}>全局</span>
-              : <span className="gw-badge">{r.ownerName}</span>,
-        }] as ColumnsType<GatewayToken>
-      : []),
     {
-      title: 'Key', dataIndex: 'keyMasked', width: 200,
-      render: v => <span className="gw-mono" style={{ color: 'var(--gw-text-3)' }}>{v}</span>,
+      // 名称 / 归属 / Key 三合一 —— 都是「这个令牌是谁的、长什么样」
+      title: '令牌', dataIndex: 'name', width: 200,
+      render: (v, r) => (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b>
+            {isAdmin && (r.ownerId == null
+              ? <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>全局</span>
+              : <span className="gw-badge">{r.ownerName}</span>)}
+          </div>
+          <div className="gw-mono" style={{ fontSize: 12, color: 'var(--gw-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {r.keyMasked}
+          </div>
+        </div>
+      ),
     },
     {
-      title: '可用模型', dataIndex: 'allowedModels', width: 200,
+      title: '可用模型', dataIndex: 'allowedModels', width: 140,
       render: v => {
         const list = v as string[];
         if (list.length === 1 && list[0] === '*') return <span className="gw-badge tint">不限</span>;
@@ -500,10 +505,10 @@ export default function Tokens() {
         );
       },
     },
-    { title: '额度使用', key: 'quota', width: 210, render: (_, r) => quotaCell(r) },
-    { title: 'RPM', dataIndex: 'rpmLimit', align: 'right', width: 90, render: v => <span className="gw-num">{v || '不限'}</span> },
+    { title: '额度使用', key: 'quota', width: 158, render: (_, r) => quotaCell(r) },
+    { title: 'RPM', dataIndex: 'rpmLimit', align: 'right', width: 72, render: v => <span className="gw-num">{v || '不限'}</span> },
     {
-      title: '过期时间', dataIndex: 'expiresAt', width: 140,
+      title: '过期时间', dataIndex: 'expiresAt', width: 108,
       render: v => {
         if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>永不过期</span>;
         const d = dayjs(v);
@@ -512,28 +517,44 @@ export default function Tokens() {
       },
     },
     {
-      title: '最后使用', dataIndex: 'lastUsedAt', width: 160,
+      title: '最后使用', dataIndex: 'lastUsedAt', width: 120,
       render: v => {
         if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>从未使用</span>;
         const d = dayjs(v);
         return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
-    { title: '状态', dataIndex: 'status', width: 100, render: v => <StatusDot status={v} /> },
+    { title: '状态', dataIndex: 'status', width: 78, render: v => <StatusDot status={v} /> },
     {
-      title: '操作', align: 'right', width: 270,
-      render: (_, r) => (
-        <Space size={4}>
-          <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
-            <Button size="small" disabled={!r.keyRetrievable} onClick={() => setConfigToken(r)}>
-              生成配置
-            </Button>
-          </Tooltip>
-          <Button size="small" onClick={() => setProbeToken(r)}>自检</Button>
-          <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
-          <Button size="small" danger onClick={() => confirmDelete(r)}>删除</Button>
-        </Space>
-      ),
+      // 高频（生成配置/编辑）外露，低频（自检/删除）收进「更多」
+      title: '操作', align: 'right', width: 156,
+      render: (_, r) => {
+        const menu: MenuProps = {
+          items: [
+            { key: 'probe', label: '自检' },
+            { type: 'divider' as const },
+            { key: 'delete', label: '删除', danger: true },
+          ],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            if (key === 'probe') setProbeToken(r);
+            else if (key === 'delete') confirmDelete(r);
+          },
+        };
+        return (
+          <Space size={4}>
+            <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
+              <Button size="small" disabled={!r.keyRetrievable} onClick={() => setConfigToken(r)}>
+                生成配置
+              </Button>
+            </Tooltip>
+            <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
+            <Dropdown menu={menu} trigger={['click']}>
+              <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`更多操作 ${r.name}`} />
+            </Dropdown>
+          </Space>
+        );
+      },
     },
   ], [isAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -599,7 +620,7 @@ export default function Tokens() {
             loading={isLoading && tokens.length === 0}
             dataSource={view}
             columns={columns}
-            scroll={{ x: 1420 }}
+            scroll={{ x: 'max-content' }}
             pagination={false}
             locale={{ emptyText: emptyNode }}
           />

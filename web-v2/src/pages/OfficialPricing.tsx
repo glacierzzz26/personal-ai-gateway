@@ -163,7 +163,7 @@ export default function OfficialPricing() {
       render: v => <span className="gw-mono">{v}</span>,
     },
     {
-      title: '原币价(每百万)', key: 'native', align: 'right', width: 200,
+      title: '原币价(每百万)', key: 'native', align: 'right', width: 176,
       render: (_, r) => (
         <div className="gw-num">
           {curOf(r.currency)}{r.inputPrice} / {curOf(r.currency)}{r.outputPrice}
@@ -174,7 +174,7 @@ export default function OfficialPricing() {
       ),
     },
     {
-      title: '计价金额(每百万)', key: 'converted', align: 'right', width: 190,
+      title: '计价金额(每百万)', key: 'converted', align: 'right', width: 168,
       render: (_, r) => (r.rateSet ? (
         <div className="gw-num">
           {fmt.price(r.inputPriceUsd)} / {fmt.price(r.outputPriceUsd)}
@@ -197,7 +197,7 @@ export default function OfficialPricing() {
       ),
     },
     {
-      title: '来源', key: 'src', width: 160,
+      title: '来源', key: 'src', width: 148,
       render: (_, r) => (
         <div style={{ fontSize: 12 }}>
           <a href={r.sourceUrl} target="_blank" rel="noreferrer" className="gw-mono">官方页面 ↗</a>
@@ -335,7 +335,7 @@ export default function OfficialPricing() {
                 dataSource={list}
                 columns={cols}
                 pagination={list.length > 30 ? { pageSize: 30, showSizeChanger: false } : false}
-                scroll={{ x: 1180 }}
+                scroll={{ x: 'max-content' }}
               />
             )}
           </div>
