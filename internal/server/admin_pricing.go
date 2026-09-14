@@ -60,6 +60,13 @@ func (s *Server) fetchOfficialPrices(ctx context.Context, p domain.Provider) (do
 			resp.ContentSHA = saved.ContentSHA256
 		}
 	}
+	// 对账:页面已不再列出的模型视为下架,清掉陈旧行。
+	// 解析器收敛(如修复「第三方模型被并入通义千问」)后,旧错误行不会因 upsert 而消失,
+	// 必须靠这一步才从管理台/用户面消失。删除失败不阻断抓取本身(已入库的行仍有效),
+	// 但记录到结果里由管理端提示。
+	if removed, err := s.st.DeleteOfficialPricesNotIn(p, resp.SourceURL, resp.Models); err == nil {
+		resp.Removed = removed
+	}
 	return resp, http.StatusOK, "", nil
 }
 

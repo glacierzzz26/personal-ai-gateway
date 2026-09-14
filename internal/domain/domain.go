@@ -470,6 +470,8 @@ type FetchPricingResult struct {
 	Models     []string `json:"models"`
 	Failed     []string `json:"failed,omitempty"`
 	ContentSHA string   `json:"contentSha256,omitempty"`
+	// Removed 本次对账删掉的陈旧行数(该厂商来源页已不再列出的模型)。
+	Removed int64 `json:"removed,omitempty"`
 }
 
 // ApplyPriceReq POST /official-prices/{id}/apply 请求体。

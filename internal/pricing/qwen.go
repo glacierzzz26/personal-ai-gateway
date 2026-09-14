@@ -39,7 +39,7 @@ func parseQwen(body []byte) ([]quote, domain.Currency, domain.BillingShape, erro
 	if !bytes.Contains(body, []byte("每百万")) && !bytes.Contains(body, []byte("每百萬")) {
 		return nil, "", "", fmt.Errorf("页面未出现「每百万 Token」计价单位说明")
 	}
-	tables, _ := parseTables(doc)
+	tables := parseSectionTables(doc)
 
 	// 收集所有「模型 ID」表,按出现顺序遍历。
 	type hit struct {
@@ -49,7 +49,14 @@ func parseQwen(body []byte) ([]quote, domain.Currency, domain.BillingShape, erro
 	}
 	var hits []hit
 	seenShape := false
-	for _, t := range tables {
+	for _, st := range tables {
+		t := st.table
+		// 只取本厂商小节:百炼同页转售第三方模型(「文本生成-第三方模型」等),
+		// 其模型名(glm-4.5 / deepseek-v3 …)与通义无关,价格也是百炼转售价。
+		// 误并入会让用户在模型广场看到「通义千问 · glm-4.5」这种错配。
+		if isThirdPartySection(st.heading) {
+			continue
+		}
 		if !hasHeader(t, reModelIDHead) || !hasHeader(t, reInputHeader) {
 			continue
 		}
@@ -138,6 +145,13 @@ func parseQwen(body []byte) ([]quote, domain.Currency, domain.BillingShape, erro
 		})
 	}
 	return out, domain.CurrencyCNY, shape, nil
+}
+
+// isThirdPartySection 判断小节标题是否为「第三方模型」转售区(如「文本生成-第三方模型」)。
+// 这些小节列的是他厂模型 + 阿里转售价,不属于通义千问官方价,必须跳过。
+// 判据用「第三方」而非「-第三方模型」,以覆盖 图像生成/视频生成/3D模型 等各模态转售块。
+func isThirdPartySection(heading string) bool {
+	return strings.Contains(heading, "第三方")
 }
 
 // locateCols 按列头文本定位「模型/区间/输入价/输出价」列。

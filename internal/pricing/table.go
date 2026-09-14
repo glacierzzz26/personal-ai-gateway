@@ -40,6 +40,37 @@ func parseTables(doc *html.Node) ([]table, error) {
 	return out, nil
 }
 
+// sectionTable 一张 <table> 及其所处的最近一个 <h2> 小节标题。
+type sectionTable struct {
+	heading string
+	table   table
+}
+
+// parseSectionTables 按文档顺序抽出全部 <table>,并记录每张表所属的最近 <h2> 小节标题。
+//
+// 为什么需要:阿里云百炼等页面既是厂商自营清单、又转售第三方模型,两者同页不同小节
+// (「文本生成-千问」vs「文本生成-第三方模型」)。只按表头匹配会把转售的他厂模型
+// 一并算成本厂商(github: glm-4.5 被记到通义千问名下)。带出小节标题即可按归属过滤。
+func parseSectionTables(doc *html.Node) []sectionTable {
+	var out []sectionTable
+	heading := ""
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "h2" {
+			heading = normalizeText(nodeText(n))
+		}
+		if n.Type == html.ElementNode && n.Data == "table" {
+			out = append(out, sectionTable{heading: heading, table: expandTable(n)})
+			return // 不再递归进表体
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return out
+}
+
 // rawCell 物理单元格(含 span)。
 type rawCell struct {
 	text    string

@@ -13,8 +13,8 @@ func mkOfficialPrice(p domain.Provider, model, url string, in, out float64) doma
 		FetchedAt: time.Date(2026, 9, 13, 8, 0, 0, 0, time.UTC),
 		Currency:  domain.CurrencyCNY, BillingShape: domain.ShapePeakOff,
 		InputPrice: in, OutputPrice: out, CacheReadPrice: 0.02, CacheDerived: false,
-		NativeText: "1元 / 4元(每百万tokens)",
-		Detail:     map[string]any{"peak": map[string]any{"in": 2.0, "out": 8.0}},
+		NativeText:    "1元 / 4元(每百万tokens)",
+		Detail:        map[string]any{"peak": map[string]any{"in": 2.0, "out": 8.0}},
 		ContentSHA256: "abc123",
 	}
 }
@@ -123,6 +123,43 @@ func TestDeleteOfficialPrice(t *testing.T) {
 	mustNoErr(t, err, "upsert")
 	mustNoErr(t, st.DeleteOfficialPrice(q.ID), "delete")
 	mustErrIs(t, st.DeleteOfficialPrice(q.ID), ErrNotFound, "delete again")
+}
+
+// TestReconcileOfficialPrices 抓取对账:来源页不再列出的模型被删,同页保留项与他厂数据不受影响。
+func TestReconcileOfficialPrices(t *testing.T) {
+	st := newTestStore(t)
+	const url = "https://help.aliyun.com/zh/model-studio/model-pricing"
+	for _, m := range []string{"qwen-max", "glm-4.5", "deepseek-v3", "kimi-k2.5"} {
+		if _, err := st.UpsertOfficialPrice(mkOfficialPrice(domain.ProviderQwen, m, url, 1, 2)); err != nil {
+			t.Fatalf("seed %s: %v", m, err)
+		}
+	}
+	// 另一厂商同页 URL 的行不得被误删(按 provider 隔离)。
+	if _, err := st.UpsertOfficialPrice(mkOfficialPrice(domain.ProviderDeepSeek, "glm-4.5", url, 9, 9)); err != nil {
+		t.Fatalf("seed deepseek: %v", err)
+	}
+
+	// 修正后的页面只剩 qwen-max → 其余 Qwen 视图内的第三方模型应被清掉。
+	removed, err := st.DeleteOfficialPricesNotIn(domain.ProviderQwen, url, []string{"qwen-max"})
+	mustNoErr(t, err, "reconcile")
+	if removed != 3 {
+		t.Fatalf("removed = %d, want 3", removed)
+	}
+	qwen, _ := st.ListOfficialPrices(domain.ProviderQwen)
+	if len(qwen) != 1 || qwen[0].ModelName != "qwen-max" {
+		t.Fatalf("qwen rows = %+v, want only qwen-max", qwen)
+	}
+	ds, _ := st.ListOfficialPrices(domain.ProviderDeepSeek)
+	if len(ds) != 1 {
+		t.Fatalf("deepseek rows = %+v, 不应被 Qwen 对账影响", ds)
+	}
+
+	// 空 keep → 不删(防御:宁留不误删)。
+	removed, err = st.DeleteOfficialPricesNotIn(domain.ProviderQwen, url, nil)
+	mustNoErr(t, err, "empty keep")
+	if removed != 0 {
+		t.Fatalf("empty keep should remove nothing, removed=%d", removed)
+	}
 }
 
 func TestSettingsUSDPerCNY(t *testing.T) {

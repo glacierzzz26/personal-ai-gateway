@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"personal-ai-gateway/internal/domain"
 )
@@ -102,6 +103,31 @@ func (s *Store) DeleteOfficialPrice(id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// DeleteOfficialPricesNotIn 删除该厂商「来源为 sourceURL 且模型名不在 keep 中」的官方价行,
+// 返回删除条数。抓取对账用:页面已不再列出的模型视为下架,清掉陈旧行,避免解析器修正后
+// 旧错误行(如曾被误并入通义千问的第三方模型)永远留在库里。keep 为空时不删(防御:宁留不误删)。
+// 只按 model_name 过滤 — 模型名不会在厂商间碰撞;已应用到 offer 的价与来源留证不受影响。
+func (s *Store) DeleteOfficialPricesNotIn(p domain.Provider, sourceURL string, keep []string) (int64, error) {
+	if len(keep) == 0 {
+		return 0, nil
+	}
+	ph := make([]string, len(keep))
+	args := make([]any, 0, len(keep)+2)
+	args = append(args, string(p), sourceURL)
+	for i, name := range keep {
+		ph[i] = "?"
+		args = append(args, name)
+	}
+	q := `DELETE FROM official_prices WHERE provider=? AND source_url=? AND model_name NOT IN (` +
+		strings.Join(ph, ",") + `)`
+	res, err := s.db.Exec(q, args...)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile official prices: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 // ApplyOfficialPrice 把官方价应用到某 offer:写三价 + 来源留证四字段。

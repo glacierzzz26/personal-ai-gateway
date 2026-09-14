@@ -98,6 +98,19 @@ func TestParseQwenOfficialSample(t *testing.T) {
 	if mx.Detail["effectiveDefault"] != "first-tier" {
 		t.Errorf("effectiveDefault = %v, want first-tier", mx.Detail["effectiveDefault"])
 	}
+	// 第三方转售小节必须剔除:百炼同页转售 glm/deepseek/kimi/minimax 等,模型名与
+	// 通义无关、价格也是阿里转售价 —— 并入会把「glm-4.5」错记成通义千问官方价。
+	for _, foreign := range []string{"glm-4.5", "glm-4.6", "deepseek-v3", "kimi-k2.5", "MiniMax-M2.1", "ZHIPU/GLM-5"} {
+		if _, leaked := byName[foreign]; leaked {
+			t.Errorf("第三方模型 %q 不应出现在通义千问官方价里", foreign)
+		}
+	}
+	// 通义自家(含 farui/gui 等)必须保留,不能因过滤误伤。
+	for _, own := range []string{"qwen3.8-max", "qwen-max"} {
+		if _, ok := byName[own]; !ok {
+			t.Errorf("通义自家模型 %q 被误删", own)
+		}
+	}
 }
 
 // 页面改版(结构变化)必须解析失败,绝不能静默给出错误值。
