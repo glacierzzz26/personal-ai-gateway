@@ -81,15 +81,16 @@ func TestFetchPricingManualOnlyProvider(t *testing.T) {
 	}
 }
 
-// TestFetchPricingUnsupportedProvider OpenAI 无受支持官方单价来源 → 400。
+// TestFetchPricingUnsupportedProvider 聚合中转不是厂商,无官方单价来源 → 400。
+// (S4 后 OpenAI/Anthropic 已放开为「仅手工录入」,不再是 unsupported。)
 func TestFetchPricingUnsupportedProvider(t *testing.T) {
 	srv, c, _ := newTestServer(t)
 	base := srv.URL
 	bootstrap(t, c, base)
-	oid := mkChannelOf(t, c, base, "openai", domain.ProviderOpenAI)
+	oid := mkChannelOf(t, c, base, "agg", domain.ProviderOpenRouter)
 
 	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels/"+itoa(oid)+"/fetch-pricing", nil)
-	mustStatus(t, code, http.StatusBadRequest, "openai fetch pricing")
+	mustStatus(t, code, http.StatusBadRequest, "agg fetch pricing")
 	if !strings.Contains(string(body), "无受支持的官方单价页面") {
 		t.Fatalf("unexpected body: %s", body)
 	}
@@ -387,9 +388,9 @@ func TestVendorFetchOfficialPrices(t *testing.T) {
 		t.Fatalf("type = %q, body %s", e.Error.Type, body)
 	}
 
-	// 无官方来源的厂商 → 400 unsupported。
+	// 无官方来源的厂商(聚合中转不是厂商)→ 400 unsupported。
 	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch",
-		map[string]any{"provider": string(domain.ProviderOpenAI)})
+		map[string]any{"provider": string(domain.ProviderOpenRouter)})
 	mustStatus(t, code, http.StatusBadRequest, "vendor fetch unsupported")
 	if !strings.Contains(string(body), "无受支持的官方单价页面") {
 		t.Fatalf("unexpected body: %s", body)
@@ -397,6 +398,8 @@ func TestVendorFetchOfficialPrices(t *testing.T) {
 }
 
 // TestOfficialVendorsEndpoint 厂商清单:3 个厂商,仅智谱标「仅手工」,来源 URL 非空。
+// TestOfficialVendorsEndpoint 厂商清单:可抓(DeepSeek/通义)+ 仅手工(智谱/Anthropic/OpenAI/Moonshot/Azure),
+// 来源 URL 非空;仅手工厂商带默认原币。
 func TestOfficialVendorsEndpoint(t *testing.T) {
 	srv, c, _ := newTestServer(t)
 	base := srv.URL
@@ -405,22 +408,32 @@ func TestOfficialVendorsEndpoint(t *testing.T) {
 	code, body := doJSON(t, c, http.MethodGet, base+"/api/v1/official-prices/vendors", nil)
 	mustStatus(t, code, http.StatusOK, "list vendors")
 	vs := decode[[]map[string]any](t, body)
-	if len(vs) != 3 {
+	if len(vs) != 7 {
 		t.Fatalf("vendors len = %d: %s", len(vs), body)
 	}
 	manual := map[string]bool{}
+	cur := map[string]string{}
 	for _, v := range vs {
 		p := v["provider"].(string)
 		if v["sourceUrl"].(string) == "" {
 			t.Errorf("%s: source url empty", p)
 		}
 		manual[p] = v["manualOnly"].(bool)
+		if s, ok := v["manualCurrency"].(string); ok {
+			cur[p] = s
+		}
 	}
-	if !manual[string(domain.ProviderZhipu)] {
-		t.Error("智谱 should be manual-only")
+	for _, p := range []domain.Provider{domain.ProviderZhipu, domain.ProviderAnthropic, domain.ProviderOpenAI} {
+		if !manual[string(p)] {
+			t.Errorf("%s should be manual-only", p)
+		}
 	}
 	if manual[string(domain.ProviderDeepSeek)] || manual[string(domain.ProviderQwen)] {
 		t.Error("DeepSeek/通义千问 should be fetchable")
+	}
+	// 手工录入默认原币:Anthropic 是美元(否则官方价会按 ¥ 错算)。
+	if cur[string(domain.ProviderAnthropic)] != "USD" {
+		t.Errorf("Anthropic manualCurrency = %q, want USD", cur[string(domain.ProviderAnthropic)])
 	}
 }
 

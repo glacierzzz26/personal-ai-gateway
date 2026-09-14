@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { App, Form, Input, InputNumber, Modal, Select, Space } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/services/api';
@@ -37,14 +37,28 @@ export default function ManualPriceModal({
     [providerOptions, vendors],
   );
 
+  const provider = Form.useWatch('provider', form);
+  // 默认原币随厂商:Anthropic/OpenAI/Azure 官网标美元,国内厂商标人民币。
+  // 用户一旦手动选过币种就不再覆盖(避免改厂商时抹掉手动选择)。
+  const curTouched = useRef(false);
+  useEffect(() => {
+    const info = vendors.find(v => v.provider === provider);
+    if (!curTouched.current && info?.manualCurrency) {
+      form.setFieldValue('currency', info.manualCurrency);
+    }
+  }, [provider, vendors, form]);
+
   // 每次打开按上下文预填(不保留上次残留)。
   useEffect(() => {
     if (!open) return;
+    curTouched.current = false;
+    const p = defaultProvider ?? options[0];
+    const info = vendors.find(v => v.provider === p);
     form.resetFields();
     form.setFieldsValue({
-      provider: defaultProvider ?? options[0],
+      provider: p,
       modelName: defaultModelName ?? '',
-      currency: 'CNY',
+      currency: info?.manualCurrency ?? 'CNY',
       inputPrice: 0,
       outputPrice: 0,
       cacheReadPrice: 0,
@@ -100,7 +114,8 @@ export default function ManualPriceModal({
           <Input className="gw-mono" placeholder="https://bigmodel.cn/pricing" />
         </Form.Item>
         <Form.Item name="currency" label="币种" rules={[{ required: true, message: '必填' }]}>
-          <Select options={[{ value: 'CNY', label: '人民币 CNY' }, { value: 'USD', label: '美元 USD' }]} />
+          <Select onChange={() => { curTouched.current = true; }}
+            options={[{ value: 'CNY', label: '人民币 CNY' }, { value: 'USD', label: '美元 USD' }]} />
         </Form.Item>
         <Space size={12} style={{ display: 'flex' }}>
           <Form.Item name="inputPrice" label="输入价(每百万 tokens)" rules={[{ required: true, message: '必填' }]} style={{ flex: 1 }}>

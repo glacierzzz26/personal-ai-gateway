@@ -160,6 +160,8 @@ export interface OfficialVendorInfo {
   sourceUrl: string;
   /** true=官方页动态渲染,只能手工录入 */
   manualOnly: boolean;
+  /** 手工录入时的默认原币种(CNY/USD);仅 manualOnly 厂商有值 */
+  manualCurrency?: PriceCurrency;
 }
 
 export interface GatewayToken {

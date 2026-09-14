@@ -19,6 +19,10 @@ var vendorTokens = []struct {
 	{"glm", domain.ProviderZhipu},
 	{"tongyi", domain.ProviderQwen},
 	{"qwen", domain.ProviderQwen},
+	// S4:聚合中转渠道常直接沿用厂商模型名(claude-sonnet-5 / gpt-4o),放开厂商白名单后
+	// 也纳入推断,使这类模型能自动命中厂商官方价(否则得逐个手工绑定)。
+	{"claude", domain.ProviderAnthropic},
+	{"gpt", domain.ProviderOpenAI},
 }
 
 // InferVendor 从模型名保守推断厂商,供聚合中转等「provider 非厂商」的渠道匹配厂商官方价。
@@ -55,14 +59,35 @@ type VendorInfo struct {
 	Provider   domain.Provider `json:"provider"`
 	SourceURL  string          `json:"sourceUrl"`
 	ManualOnly bool            `json:"manualOnly"`
+	// ManualCurrency 手工录入的默认原币种(CNY/USD)。仅 ManualOnly 有意义。
+	ManualCurrency domain.Currency `json:"manualCurrency,omitempty"`
 }
 
 // Vendors 全部有官方来源的厂商(provider 字典序稳定输出)。
 func Vendors() []VendorInfo {
 	out := make([]VendorInfo, 0, len(scrapers))
 	for p, s := range scrapers {
-		out = append(out, VendorInfo{Provider: p, SourceURL: s.URL, ManualOnly: s.ManualOnly})
+		cur := s.ManualCurrency
+		if s.ManualOnly && cur == "" {
+			cur = domain.CurrencyCNY // 未显式标注的仅手工厂商按国内站默认人民币
+		}
+		out = append(out, VendorInfo{
+			Provider: p, SourceURL: s.URL, ManualOnly: s.ManualOnly, ManualCurrency: cur,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
 	return out
+}
+
+// ManualDefaultCurrency 手工录入某厂商官方价时的默认原币种(CNY/USD)。
+// 非仅手工厂商返回空 —— 它们的币种由抓取解析结果决定。
+func ManualDefaultCurrency(p domain.Provider) domain.Currency {
+	s, ok := scrapers[p]
+	if !ok || !s.ManualOnly {
+		return ""
+	}
+	if s.ManualCurrency == "" {
+		return domain.CurrencyCNY
+	}
+	return s.ManualCurrency
 }
