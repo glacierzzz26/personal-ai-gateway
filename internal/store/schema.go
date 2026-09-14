@@ -20,7 +20,42 @@ var migrations = []string{
 	m0005OfferUpstreamModel,
 	// v6:模型级官方价绑定(厂商官方价行 ↔ 目录模型,供聚合渠道显示厂商官方价)
 	m0006ModelOfficialBinding,
+	// v7:中转站改造(用户级钱包 + 售价记账 + 日志归属作用域)
+	m0007RelayWallet,
 }
+
+// m0007RelayWallet 把网关从「个人自用」推向「中转站」的存储基础(见 PLAN.md §3):
+//
+//	admins.balance_usd    用户钱包余额(仅 role=user 扣减;admin 即站主自己,不扣)
+//	admins.rate_override  该用户的售价倍率;NULL = 用全局 settings.price_multiplier
+//	balance_logs          账变流水(钱包不能只有当前值,充值/扣费都要可审计)
+//	request_logs.charge_usd  该笔「售价」(客户付你);与 cost(你付上游)分离,差额即毛利
+//	request_logs.owner_id    归属冗余,免 JOIN 即可按 owner 作用域查询;存量行由 tokens 回填
+//
+// 金额口径同既有 offers.*_price_usd / logs.cost:字段名带 _usd 是历史命名,装的其实是
+// settings.displayCurrency 币种金额(本站为人民币)。
+const m0007RelayWallet = `
+ALTER TABLE admins ADD COLUMN balance_usd   REAL NOT NULL DEFAULT 0;
+ALTER TABLE admins ADD COLUMN rate_override REAL;
+
+CREATE TABLE IF NOT EXISTS balance_logs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id      INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+  delta         REAL    NOT NULL,              -- 正=充值,负=扣费
+  balance_after REAL    NOT NULL,
+  reason        TEXT    NOT NULL,              -- charge | topup | adjust
+  log_id        INTEGER NOT NULL DEFAULT 0,    -- 关联 request_logs.id(charge 时)
+  note          TEXT    NOT NULL DEFAULT '',
+  created_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_balance_logs_admin ON balance_logs (admin_id, id);
+
+ALTER TABLE request_logs ADD COLUMN charge_usd REAL    NOT NULL DEFAULT 0;
+ALTER TABLE request_logs ADD COLUMN owner_id   INTEGER NOT NULL DEFAULT 0;
+UPDATE request_logs SET owner_id = COALESCE(
+	(SELECT t.owner_id FROM tokens t WHERE t.id = request_logs.token_id), 0);
+CREATE INDEX IF NOT EXISTS idx_logs_owner ON request_logs (owner_id, ts);
+`
 
 // m0006ModelOfficialBinding 模型级「官方参考价来源」绑定:
 // 聚合中转渠道的 provider 不是厂商(多为 OpenAI),模型名(如 deepseek/deepseek-v4.1-flash)

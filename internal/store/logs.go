@@ -21,25 +21,16 @@ type LogFilter struct {
 	Token   string // 精确 token_name
 	Status  string // ok|error|""
 	Keyword string // LIKE 命中 model/channel/token/ip/err
+	OwnerID int64  // >0 时限该归属(用户面 /me/logs 用;0 = 不过滤)
 	From    *time.Time
 	To      *time.Time
 	Limit   int
 	Offset  int
 }
 
-// InsertLog 落一条请求日志(记账最终态)。
+// InsertLog 落一条请求日志(记账最终态;不扣钱包,供无钱包语义的失败/中断路径用)。
 func (s *Store) InsertLog(l domain.LogRow) error {
-	_, err := s.db.Exec(`INSERT INTO request_logs (
-		ts, model, channel_id, channel_name, token_id, token_name,
-		client_tool, protocol, stream, status,
-		prompt_tokens, completion_tokens, cache_read_tokens, cost,
-		first_token_ms, total_ms, ip, err
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		formatRFC3339(l.TS), l.Model, l.ChannelID, l.ChannelName, l.TokenID, l.TokenName,
-		l.ClientTool, l.Protocol, b2i(l.Stream), l.Status,
-		l.PromptTokens, l.Completion, l.CacheRead, l.CostUsd,
-		l.FirstTokenMs, l.TotalMs, l.IP, l.Err)
-	return err
+	return s.SettleRequest(l, false)
 }
 
 // ListLogs 分页返回日志(新→旧)与总数,用于 Logs 页列表与筛选。
@@ -59,7 +50,7 @@ func (s *Store) ListLogs(f LogFilter, tzOffMin int) ([]domain.LogItem, int, erro
 	}
 
 	sqlStr := `SELECT id, ts, model, channel_name, token_name,
-		prompt_tokens, completion_tokens, cache_read_tokens, cost,
+		prompt_tokens, completion_tokens, cache_read_tokens, cost, charge_usd,
 		first_token_ms, total_ms, status, ip, err
 		FROM request_logs` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
@@ -96,6 +87,10 @@ func logWhere(f LogFilter) (string, []any) {
 		conds = append(conds, "token_name = ?")
 		args = append(args, f.Token)
 	}
+	if f.OwnerID > 0 {
+		conds = append(conds, "owner_id = ?")
+		args = append(args, f.OwnerID)
+	}
 	switch f.Status {
 	case "ok":
 		conds = append(conds, "status BETWEEN 100 AND 399")
@@ -129,7 +124,7 @@ func scanLog(row scanner, off time.Duration) (domain.LogItem, error) {
 	var it domain.LogItem
 	var ts, errText sql.NullString
 	if err := row.Scan(&it.ID, &ts, &it.Model, &it.ChannelName, &it.TokenName,
-		&it.InTokens, &it.OutTokens, &it.CacheRead, &it.CostUsd,
+		&it.InTokens, &it.OutTokens, &it.CacheRead, &it.CostUsd, &it.ChargeUsd,
 		&it.FirstTokenMs, &it.TotalMs, &it.StatusCode, &it.IP, &errText); err != nil {
 		return domain.LogItem{}, err
 	}
@@ -184,18 +179,28 @@ func MetricBucket(bucket string) int {
 	}
 }
 
-// QuerySeries 时间桶聚合(hour/day),桶内 request/error/cost。
+// QuerySeries 时间桶聚合(hour/day),桶内 request/error/cost(全站)。
 // fromUTC/toUTC 已换算好;tzOff 只影响桶归属。
 func (s *Store) QuerySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin int) ([]domain.MetricPoint, error) {
+	return s.querySeries(bucket, fromUTC, toUTC, tzOffMin, 0)
+}
+
+// QuerySeriesOwner 同上,仅统计某归属账号的请求(用户面 /me 用)。
+func (s *Store) QuerySeriesOwner(bucket string, fromUTC, toUTC time.Time, tzOffMin int, ownerID int64) ([]domain.MetricPoint, error) {
+	return s.querySeries(bucket, fromUTC, toUTC, tzOffMin, ownerID)
+}
+
+func (s *Store) querySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin int, ownerID int64) ([]domain.MetricPoint, error) {
 	n := MetricBucket(bucket)
+	cond, args := ownerCond(ownerID)
 	rows, err := s.db.Query(`SELECT substr(datetime(ts, ?), 1, ?) AS bkt,
 			COUNT(*),
 			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
 			COALESCE(SUM(cost), 0)
 		FROM request_logs
-		WHERE ts >= ? AND ts < ?
+		WHERE ts >= ? AND ts < ?`+cond+`
 		GROUP BY bkt ORDER BY bkt ASC`,
-		tzMod(tzOffMin), n, formatRFC3339(fromUTC), formatRFC3339(toUTC))
+		append([]any{tzMod(tzOffMin), n, formatRFC3339(fromUTC), formatRFC3339(toUTC)}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +218,14 @@ func (s *Store) QuerySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin in
 	return out, rows.Err()
 }
 
+// ownerCond 生成归属过滤片段(ownerID<=0 = 不过滤,全站)。
+func ownerCond(ownerID int64) (string, []any) {
+	if ownerID > 0 {
+		return " AND owner_id = ?", []any{ownerID}
+	}
+	return "", nil
+}
+
 // dimWhitelist 维度 → 实际列(防注入)。
 func dimCol(dim string) string {
 	switch dim {
@@ -226,12 +239,22 @@ func dimCol(dim string) string {
 	return ""
 }
 
-// QueryDimSummary 按 模型/渠道/令牌 维度聚合窗口内的用量行。
+// QueryDimSummary 按 模型/渠道/令牌 维度聚合窗口内的用量行(全站)。
 func (s *Store) QueryDimSummary(dim string, fromUTC, toUTC time.Time, limit int) ([]domain.UsageRow, error) {
+	return s.queryDimSummary(dim, fromUTC, toUTC, limit, 0)
+}
+
+// QueryDimSummaryOwner 同上,仅统计某归属账号(用户面 /me 用)。
+func (s *Store) QueryDimSummaryOwner(dim string, fromUTC, toUTC time.Time, limit int, ownerID int64) ([]domain.UsageRow, error) {
+	return s.queryDimSummary(dim, fromUTC, toUTC, limit, ownerID)
+}
+
+func (s *Store) queryDimSummary(dim string, fromUTC, toUTC time.Time, limit int, ownerID int64) ([]domain.UsageRow, error) {
 	col := dimCol(dim)
 	if col == "" {
 		return nil, fmt.Errorf("invalid dim: %q", dim)
 	}
+	cond, cargs := ownerCond(ownerID)
 	sqlStr := `SELECT ` + col + ` AS g,
 			COUNT(*),
 			COALESCE(SUM(prompt_tokens),0),
@@ -239,12 +262,13 @@ func (s *Store) QueryDimSummary(dim string, fromUTC, toUTC time.Time, limit int)
 			COALESCE(SUM(cost),0),
 			SUM(CASE WHEN ` + errCond + ` THEN 1 ELSE 0 END)
 		FROM request_logs
-		WHERE ts >= ? AND ts < ?
+		WHERE ts >= ? AND ts < ?` + cond + `
 		GROUP BY g ORDER BY COUNT(*) DESC`
 	if limit > 0 {
 		sqlStr += fmt.Sprintf(" LIMIT %d", limit)
 	}
-	rows, err := s.db.Query(sqlStr, formatRFC3339(fromUTC), formatRFC3339(toUTC))
+	args := append([]any{formatRFC3339(fromUTC), formatRFC3339(toUTC)}, cargs...)
+	rows, err := s.db.Query(sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}

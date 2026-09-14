@@ -54,6 +54,14 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	if in.USDPerCNY < 0 {
 		in.USDPerCNY = 0
 	}
+	// 售价倍率:<=0 = 未设,回落 1.0(不加价)。上界防手滑填成大数(1000 倍已远超合理范围)。
+	if in.PriceMultiplier <= 0 {
+		in.PriceMultiplier = 1.0
+	}
+	if in.PriceMultiplier > 1000 {
+		apiErr(w, http.StatusBadRequest, "validation", "priceMultiplier out of range (0, 1000]")
+		return
+	}
 	// 对外基址:规范化(去空白与尾斜杠);留空=按访问地址推断。
 	in.PublicBaseURL = strings.TrimRight(strings.TrimSpace(in.PublicBaseURL), "/")
 	if err := s.st.SaveSettings(in); err != nil {

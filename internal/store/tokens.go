@@ -82,16 +82,22 @@ func (s *Store) TokenKeyCipher(id int64) (string, error) {
 	return cipher, err
 }
 
-// LookupTokenBySHA256 模型面鉴权用:按密钥哈希精确查。
+// LookupTokenBySHA256 模型面鉴权用:按密钥哈希精确查,并顺带带出归属账号的钱包
+// (角色/余额/倍率覆盖)——数据面每请求都要判断余额门禁与算售价,避免再查一次。
 func (s *Store) LookupTokenBySHA256(sha string) (domain.TokenRow, error) {
 	var tk domain.TokenRow
 	var allowed string
-	var expires, lastUsed sql.NullString
+	var expires, lastUsed, ownerID sql.NullString
+	var rateOverride sql.NullFloat64
+	var ownerRole string
 	var created, updated string
-	err := s.db.QueryRow(`SELECT id,name,sha256,key_masked,allowed_models,quota_usd,used_usd,
-		rpm_limit,expires_at,status,last_used_at FROM tokens WHERE sha256=?`, sha).
+	err := s.db.QueryRow(`SELECT t.id,t.name,t.sha256,t.key_masked,t.allowed_models,t.quota_usd,t.used_usd,
+		t.rpm_limit,t.expires_at,t.status,t.last_used_at,t.owner_id,
+		COALESCE(a.role,''), COALESCE(a.balance_usd,0), a.rate_override
+		FROM tokens t LEFT JOIN admins a ON a.id = t.owner_id WHERE t.sha256=?`, sha).
 		Scan(&tk.ID, &tk.Name, &tk.SHA256, &tk.KeyMasked, &allowed, &tk.QuotaUsd, &tk.UsedUsd,
-			&tk.RpmLimit, &expires, &tk.Status, &lastUsed)
+			&tk.RpmLimit, &expires, &tk.Status, &lastUsed, &ownerID,
+			&ownerRole, &tk.OwnerBalance, &rateOverride)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.TokenRow{}, ErrNotFound
 	}
@@ -99,6 +105,12 @@ func (s *Store) LookupTokenBySHA256(sha string) (domain.TokenRow, error) {
 		return domain.TokenRow{}, err
 	}
 	tk.AllowedModels = decodeStringList(allowed)
+	tk.OwnerID = nullInt64Ptr(ownerID)
+	tk.OwnerRole = domain.Role(ownerRole)
+	if rateOverride.Valid {
+		v := rateOverride.Float64
+		tk.OwnerRateOverride = &v
+	}
 	if expires.Valid {
 		v := expires.String
 		tk.ExpiresAt = &v

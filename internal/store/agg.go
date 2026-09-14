@@ -9,10 +9,20 @@ import (
 
 // AvgFirstTokenMsSince 窗口内成功请求首 token 延迟均值(无样本返回 0)。
 func (s *Store) AvgFirstTokenMsSince(sinceUTC time.Time) (float64, error) {
+	return s.avgFirstTokenMsSince(sinceUTC, 0)
+}
+
+// AvgFirstTokenMsSinceOwner 同上,仅统计某归属账号。
+func (s *Store) AvgFirstTokenMsSinceOwner(sinceUTC time.Time, ownerID int64) (float64, error) {
+	return s.avgFirstTokenMsSince(sinceUTC, ownerID)
+}
+
+func (s *Store) avgFirstTokenMsSince(sinceUTC time.Time, ownerID int64) (float64, error) {
+	cond, args := ownerCond(ownerID)
 	var avg sql.NullFloat64
 	err := s.db.QueryRow(`SELECT AVG(first_token_ms) FROM request_logs
-		WHERE ts >= ? AND status BETWEEN 100 AND 399 AND first_token_ms > 0`,
-		formatRFC3339(sinceUTC)).Scan(&avg)
+		WHERE ts >= ? AND status BETWEEN 100 AND 399 AND first_token_ms > 0`+cond,
+		append([]any{formatRFC3339(sinceUTC)}, args...)...).Scan(&avg)
 	if err != nil {
 		return 0, err
 	}

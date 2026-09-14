@@ -520,6 +520,11 @@ type TokenRow struct {
 	LastUsedAt    *string
 	Status        TokenStatus
 	OwnerID       *int64
+	// 归属账号的钱包视图(随鉴权一次查出,免数据面每请求再查一次):
+	// 全局 key(OwnerID=nil)时 OwnerRole 为空、余额为 0。
+	OwnerRole         Role
+	OwnerBalance      float64
+	OwnerRateOverride *float64 // nil = 用全局 settings.price_multiplier
 }
 
 // ---------- 管理员 / 用户与会话 ----------
@@ -553,6 +558,32 @@ type UserRead struct {
 	Role      Role      `json:"role"`
 	KeyCount  int       `json:"keyCount"`
 	CreatedAt time.Time `json:"createdAt"`
+	// BalanceUsd 钱包余额(计价币种金额);RateOverride 非空 = 该用户的售价倍率覆盖全局。
+	BalanceUsd   float64  `json:"balanceUsd"`
+	RateOverride *float64 `json:"rateOverride,omitempty"`
+}
+
+// BalanceLogItem GET /users/{id}/balance-logs 与 /me/balance 流水行。
+type BalanceLogItem struct {
+	ID           int64     `json:"id"`
+	Delta        float64   `json:"delta"`
+	BalanceAfter float64   `json:"balanceAfter"`
+	Reason       string    `json:"reason"` // charge | topup | adjust
+	LogID        int64     `json:"logId,omitempty"`
+	Note         string    `json:"note,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// TopupReq POST /users/{id}/topup 请求体:充值金额(正=充值,负=扣减调整)。
+type TopupReq struct {
+	Amount float64 `json:"amount"`
+	Note   string  `json:"note,omitempty"`
+}
+
+// BalanceResp GET /me/balance:余额 + 近期流水(用户自助视角)。
+type BalanceResp struct {
+	BalanceUsd float64          `json:"balanceUsd"`
+	Logs       []BalanceLogItem `json:"logs"`
 }
 
 // UserCreateReq POST /users 请求体(管理员建号,设初始密码)。
@@ -585,7 +616,8 @@ type LogItem struct {
 	InTokens     int     `json:"inTokens"`
 	OutTokens    int     `json:"outTokens"`
 	CacheRead    int     `json:"cacheReadTokens,omitempty"`
-	CostUsd      float64 `json:"costUsd"`
+	CostUsd      float64 `json:"costUsd"`   // 成本(你付上游)
+	ChargeUsd    float64 `json:"chargeUsd"` // 售价(客户付你);admin 视角下差额即毛利
 	FirstTokenMs int     `json:"firstTokenMs"`
 	TotalMs      int     `json:"totalMs"`
 	StatusCode   int     `json:"statusCode"`
@@ -601,6 +633,7 @@ type LogRow struct {
 	ChannelName  string
 	TokenID      int64
 	TokenName    string
+	OwnerID      int64 // 归属账号(0 = 无归属/全局 key)
 	ClientTool   string
 	Protocol     string
 	Stream       bool
@@ -609,6 +642,7 @@ type LogRow struct {
 	Completion   int
 	CacheRead    int
 	CostUsd      float64
+	ChargeUsd    float64
 	FirstTokenMs int
 	TotalMs      int
 	IP           string
@@ -683,6 +717,9 @@ type Settings struct {
 	// 仅当官方价原币种与 DisplayCurrency 不一致时用于折算;0 = 未设置(此时拒绝折算,不臆造汇率)。
 	// 汇率非厂商官方数据,故不自动抓取。
 	USDPerCNY float64 `json:"usdPerCny"`
+	// PriceMultiplier 全局售价倍率:本站卖给客户的价格 = 成本价 × 该倍率(见 PLAN.md §2)。
+	// 用户级 rate_override 非空时覆盖它。默认 1.0(= 不加价)。<=0 视为 1.0。
+	PriceMultiplier float64 `json:"priceMultiplier"`
 	// PublicBaseURL 生成 Claude 配置时对外可见的网关基址(如 https://ai-gateway.lan)。
 	// 留空则按请求的 scheme+host 推断(X-Forwarded-Proto/Host 优先)。
 	PublicBaseURL string `json:"publicBaseUrl,omitempty"`
@@ -697,6 +734,7 @@ func (s *Settings) Defaults() {
 	s.SampleRatePct = 100
 	s.TZOffsetMin = 480
 	s.DisplayCurrency = CurrencyCNY
+	s.PriceMultiplier = 1.0
 }
 
 // ---------- 其他小类型 ----------

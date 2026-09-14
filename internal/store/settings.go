@@ -20,12 +20,13 @@ const (
 	keyPublicBaseURL   = "public_base_url"
 	keyUSDPerCNY       = "usd_per_cny"
 	keyDisplayCurrency = "display_currency"
+	keyPriceMultiplier = "price_multiplier"
 )
 
 var settingsKeys = []string{
 	keyRequestTimeout, keyMaxRetries, keyDegradeOnError, keyHTTPProxy, keySkipTLSVerify,
 	keyLogRetention, keyRecordBody, keySampleRate, keyTZOffsetMin, keyPublicBaseURL,
-	keyUSDPerCNY, keyDisplayCurrency,
+	keyUSDPerCNY, keyDisplayCurrency, keyPriceMultiplier,
 }
 
 // GetSettings 读取全部设置;表为空返回默认值(不落库)。
@@ -60,6 +61,7 @@ func (s *Store) GetSettings() (domain.Settings, error) {
 	cfg.TZOffsetMin = intOr(cfg.TZOffsetMin, raw[keyTZOffsetMin])
 	cfg.PublicBaseURL = strOr(raw[keyPublicBaseURL])
 	cfg.USDPerCNY = floatOr(cfg.USDPerCNY, raw[keyUSDPerCNY])
+	cfg.PriceMultiplier = floatOr(cfg.PriceMultiplier, raw[keyPriceMultiplier])
 	// 计价币种:键缺失/空串时保留默认(CNY),不把空值写进语义。
 	if v := raw[keyDisplayCurrency]; v != "" {
 		cfg.DisplayCurrency = domain.Currency(v)
@@ -82,6 +84,7 @@ func (s *Store) SaveSettings(cfg domain.Settings) error {
 		keyPublicBaseURL:   cfg.PublicBaseURL,
 		keyUSDPerCNY:       strconv.FormatFloat(cfg.USDPerCNY, 'f', -1, 64),
 		keyDisplayCurrency: string(cfg.DisplayCurrency),
+		keyPriceMultiplier: strconv.FormatFloat(cfg.PriceMultiplier, 'f', -1, 64),
 	}
 	tx, err := s.db.Begin()
 	if err != nil {

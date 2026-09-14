@@ -209,6 +209,66 @@ func firstText(data []byte) string {
 }
 
 // TestE2EOpenAIIdentity openai 入站 → openai 渠道直通。
+// TestE2EWalletChargeAndGate 归属客户(user)的令牌:按售价扣钱包、记 charge 流水;
+// 余额耗尽后下一笔在入口被 402(insufficient_balance)挡住。
+func TestE2EWalletChargeAndGate(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	e.addModelOffer("m-w", chID, 1)
+
+	u, err := e.st.CreateAdmin("cust", "h", domain.RoleUser)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	// 倍率 2.0:售价 = 成本 × 2。
+	rate := 2.0
+	if err := e.st.SetRateOverride(u.ID, &rate); err != nil {
+		t.Fatalf("set rate: %v", err)
+	}
+	// 先只给一点点余额,让一笔就扣穿。
+	if _, err := e.st.TopupBalance(u.ID, 0.00002, "seed"); err != nil {
+		t.Fatalf("topup: %v", err)
+	}
+	plain, hashed, _ := auth.NewModelKey()
+	if _, err := e.st.CreateToken("cust-key", &u.ID, "", []string{"*"}, 0, 1000, nil, hashed, domain.MaskKey(plain)); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	code, body := e.post("/v1/chat/completions", plain, false, fmt.Sprintf(chatBody, "m-w"))
+	if code != http.StatusOK {
+		t.Fatalf("first request should succeed, got %d %s", code, body)
+	}
+	bal, err := e.st.GetBalance(u.ID)
+	if err != nil {
+		t.Fatalf("balance: %v", err)
+	}
+	if bal >= 0.00002 {
+		t.Fatalf("balance should have decreased, got %v", bal)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 || logs[0].ChargeUsd <= 0 {
+		t.Fatalf("charge not recorded: %+v", logs)
+	}
+	// 售价应为成本的 2 倍。
+	if d := logs[0].ChargeUsd - 2*logs[0].CostUsd; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge %v should be 2x cost %v", logs[0].ChargeUsd, logs[0].CostUsd)
+	}
+	recs, err := e.st.ListBalanceLogs(u.ID, 10)
+	if err != nil || len(recs) == 0 {
+		t.Fatalf("balance logs: %v (%d)", err, len(recs))
+	}
+	if recs[0].Reason != "charge" {
+		t.Fatalf("latest balance log reason = %s, want charge", recs[0].Reason)
+	}
+
+	// 余额已扣成负数 → 下一笔 402。
+	code, body = e.post("/v1/chat/completions", plain, false, fmt.Sprintf(chatBody, "m-w"))
+	if code != http.StatusPaymentRequired {
+		t.Fatalf("second request should be 402, got %d %s", code, body)
+	}
+}
+
 func TestE2EOpenAIIdentity(t *testing.T) {
 	e := newE2E(t)
 	up := openaiUpstream(t, "pong-openai", http.StatusOK)
