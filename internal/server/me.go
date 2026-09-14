@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"time"
 
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/store"
@@ -41,7 +40,7 @@ func (s *Server) handleMeBalance(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleMeUsage 我的用量:按维度聚合行 + 日曲线(dim=model|token,days 默认 7)。
+// handleMeUsage 我的用量:按维度聚合行 + 日曲线(dim=model|token,窗口同 /overview)。
 func (s *Server) handleMeUsage(w http.ResponseWriter, r *http.Request) {
 	me := s.currentAdmin(r)
 	dim := queryStr(r, "dim")
@@ -54,26 +53,27 @@ func (s *Server) handleMeUsage(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, "validation", "dim must be model|token")
 		return
 	}
-	days := queryInt(r, "days", 7)
-	if days < 1 {
-		days = 1
-	}
-	if days > 90 {
-		days = 90
-	}
 	settings, err := s.st.GetSettings()
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
-	now := time.Now().UTC()
-	from := now.AddDate(0, 0, -days)
-	rows, err := s.st.QueryDimSummaryOwner(dim, from, now, 50, me.ID)
+	rng, err := parseStatRange(r, settings.TZOffsetMin)
+	if err != nil {
+		apiErr(w, http.StatusBadRequest, "validation", err.Error())
+		return
+	}
+	rows, err := s.st.QueryDimSummaryOwner(dim, rng.from, rng.to, 50, me.ID)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
-	series, err := s.st.QuerySeriesOwner("day", from, now, settings.TZOffsetMin, me.ID)
+	// 桶粒度同 /overview:≤3 天按小时,否则按日 —— 1 天窗口只有一个柱子没意义。
+	bucket := "day"
+	if rng.days <= 3 {
+		bucket = "hour"
+	}
+	series, err := s.st.QuerySeriesOwner(bucket, rng.from, rng.to, settings.TZOffsetMin, me.ID)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -82,8 +82,9 @@ func (s *Server) handleMeUsage(w http.ResponseWriter, r *http.Request) {
 		rows = []domain.UsageRow{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"rows": rows,
-		"days": fillSeries(series, seriesBuckets("day", settings.TZOffsetMin, now, days)),
+		"rows":   rows,
+		"days":   fillSeries(series, seriesBuckets(bucket, settings.TZOffsetMin, rng.to, bucketCount(rng, bucket))),
+		"bucket": bucket,
 	})
 }
 

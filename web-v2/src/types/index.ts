@@ -281,13 +281,32 @@ export interface UsageRow {
 
 export type UsageDim = 'model' | 'channel' | 'token';
 
+/**
+ * 统计窗口查询参数。二选一:
+ *  - 预设 `{ days }`:最近 N 个自然日(含今天);
+ *  - 自定义 `{ from, to }`:YYYY-MM-DD,含首尾,跨度 ≤90 天。
+ * 后端统一解析(见 internal/server/statrange.go),日志只留 90 天。
+ */
+export interface StatRangeQuery {
+  days?: number;
+  from?: string;
+  to?: string;
+}
+
+/** 请求日志保留上限(天),前端日期选择器据此钳制可选范围。 */
+export const STAT_MAX_DAYS = 90;
+
 export interface OverviewData {
-  hours: MetricPoint[];
-  days: MetricPoint[];
+  /** 窗口内曲线:≤3 天按小时,>3 天按日;桶由服务端补零成连续序列 */
+  points: MetricPoint[];
   totalRequests: number;
   totalErrors: number;
   totalCostUsd: number;
   avgFirstTokenMs: number;
+  /** 窗口自然日数(服务端回填) */
+  days: number;
+  /** 曲线桶粒度:hour | day */
+  bucket: 'hour' | 'day';
 }
 
 export interface ModelUsageData {

@@ -706,14 +706,16 @@ type UsageRow struct {
 	ErrorRate float64 `json:"errorRate"`
 }
 
-// OverviewResp Dashboard 首屏。hours 近24小时、days 近7天。
+// OverviewResp Dashboard 首屏。窗口由前端筛选器决定(1/7/30 天或自定义区间):
+// Points 为窗口内曲线(≤3 天按小时,>3 天按天),汇总同窗口。
 type OverviewResp struct {
-	Hours           []MetricPoint `json:"hours"`
-	Days            []MetricPoint `json:"days"`
+	Points          []MetricPoint `json:"points"`
 	TotalRequests   int           `json:"totalRequests"`
 	TotalErrors     int           `json:"totalErrors"`
 	TotalCostUsd    float64       `json:"totalCostUsd"`
 	AvgFirstTokenMs int64         `json:"avgFirstTokenMs"`
+	Days            int           `json:"days"`
+	Bucket          string        `json:"bucket"`
 }
 
 // ModelUsageResp 模型抽屉「用量」Tab。

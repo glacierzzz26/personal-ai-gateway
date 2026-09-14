@@ -220,39 +220,52 @@ func fillSeries(points []domain.MetricPoint, buckets []string) []domain.MetricPo
 	return out
 }
 
-// overview 组装 Dashboard 首屏(近24h 小时曲线 + 近7d 日曲线 + 汇总)。
-func (s *Server) overview() (domain.OverviewResp, error) {
+// overview 组装 Dashboard 首屏。窗口由 rng 决定:起止都落在窗口内的按日曲线 + 同窗口汇总。
+// 桶粒度随窗口伸缩:≤3 天按小时,>3 天按日 —— 一天 1 个点太粗,30 天 720 个点太密。
+func (s *Server) overview(rng statRange) (domain.OverviewResp, error) {
 	settings, err := s.st.GetSettings()
 	if err != nil {
 		return domain.OverviewResp{}, err
 	}
-	now := time.Now().UTC()
 	tz := settings.TZOffsetMin
-	hourFrom := now.Add(-24 * time.Hour)
-	dayFrom := now.Add(-7 * 24 * time.Hour)
 
 	var resp domain.OverviewResp
-	hp, err := s.st.QuerySeries("hour", hourFrom, now, tz)
+	bucket := "day"
+	if rng.days <= 3 {
+		bucket = "hour"
+	}
+	pts, err := s.st.QuerySeries(bucket, rng.from, rng.to, tz)
 	if err != nil {
 		return resp, err
 	}
-	dp, err := s.st.QuerySeries("day", dayFrom, now, tz)
-	if err != nil {
-		return resp, err
-	}
-	resp.Hours = fillSeries(hp, seriesBuckets("hour", tz, now, 24))
-	resp.Days = fillSeries(dp, seriesBuckets("day", tz, now, 7))
+	resp.Points = fillSeries(pts, seriesBuckets(bucket, tz, rng.to, bucketCount(rng, bucket)))
 
-	// 汇总口径:近 7 天(与 Days 一致)。
-	reqs, errs, cost, err := s.st.WindowTotals(dayFrom, now)
+	// 汇总口径与曲线窗口一致。
+	reqs, errs, cost, err := s.st.WindowTotals(rng.from, rng.to)
 	if err != nil {
 		return resp, err
 	}
 	resp.TotalRequests, resp.TotalErrors, resp.TotalCostUsd = reqs, errs, cost
-	avg, err := s.st.AvgFirstTokenMsSince(dayFrom)
+	avg, err := s.st.AvgFirstTokenMsSince(rng.from)
 	if err != nil {
 		return resp, err
 	}
 	resp.AvgFirstTokenMs = int64(avg)
 	return resp, nil
+}
+
+// bucketCount 曲线应补多少个桶。hour 桶取窗口小时数(24 的倍数),day 桶取自然日数。
+func bucketCount(rng statRange, bucket string) int {
+	if bucket == "hour" {
+		n := int(rng.to.Sub(rng.from).Hours() + 0.5)
+		if n < 1 {
+			n = 1
+		}
+		return n
+	}
+	n := int(rng.to.Sub(rng.from).Hours()/24 + 0.5)
+	if n < 1 {
+		n = 1
+	}
+	return n
 }

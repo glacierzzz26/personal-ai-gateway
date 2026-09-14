@@ -362,22 +362,34 @@ body {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+  /* 内嵌在窄区块里(如 Dashboard 左栏),1366 笔记本下横向空间就 700px 上下;
+     单元格一律 nowrap 且列多,左右各 20px 内边距会把表撑出滚动条。 */
+  table-layout: auto;
 }
 .gw-table th {
   text-align: left;
   font-weight: 500;
   font-size: 13px;
   color: var(--gw-text-3);
-  padding: 10px 20px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--gw-border);
   white-space: nowrap;
   background: var(--gw-card);
 }
 .gw-table td {
-  padding: 12px 20px;
+  padding: 12px 12px;
   border-bottom: 1px solid var(--gw-border);
   color: var(--gw-text-2);
   white-space: nowrap;
+}
+/* 首列(渠道名)左缘与区块内其他内容对齐,末列(金额)右缘贴齐卡片边距 */
+.gw-table th:first-child,
+.gw-table td:first-child {
+  padding-left: 0;
+}
+.gw-table th:last-child,
+.gw-table td:last-child {
+  padding-right: 0;
 }
 .gw-table tbody tr:last-child td {
   border-bottom: 0;

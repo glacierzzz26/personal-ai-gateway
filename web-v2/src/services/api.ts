@@ -9,7 +9,8 @@ import type {
   AdminMe, BalanceLogItem, BalanceResp, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
-  OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
+  OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, StatRangeQuery, SyncResult,
+  TokenCreateResult,
   TokenDraft, TokenProbeResp, UsageDim, UsageRow, UserAccount, UserModelItem,
 } from '@/types';
 import { http } from './http';
@@ -72,9 +73,9 @@ export const api = {
   myBalance(limit = 50): Promise<BalanceResp> {
     return http.get(`/me/balance${qs({ limit })}`);
   },
-  /** 我的用量:dim=model|token(用户侧不暴露渠道) */
-  getMyUsage(dim: 'model' | 'token', days = 7): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
-    return http.get(`/me/usage${qs({ dim, days })}`);
+  /** 我的用量:dim=model|token(用户侧不暴露渠道);range 决定统计窗口 */
+  getMyUsage(dim: 'model' | 'token', range: StatRangeQuery = { days: 7 }): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
+    return http.get(`/me/usage${qs({ dim, ...range })}`);
   },
   /** 我的请求日志(自动限定为本人名下令牌) */
   getMyLogs(filters: LogFilters = {}, page = 1, size = 20): Promise<LogPage> {
@@ -88,7 +89,9 @@ export const api = {
   getMyModels(): Promise<UserModelItem[]> { return http.get('/models'); },
 
   /* —— 概览 —— */
-  getOverview(): Promise<OverviewData> { return http.get('/overview'); },
+  getOverview(range: StatRangeQuery = { days: 7 }): Promise<OverviewData> {
+    return http.get(`/overview${qs({ ...range })}`);
+  },
 
   /* —— 渠道 —— */
   async getChannels(): Promise<Channel[]> {
@@ -254,8 +257,8 @@ export const api = {
   clearLogs(): Promise<unknown> { return http.del('/logs'); },
 
   /* —— 用量 —— */
-  getUsage(dim: UsageDim, days: number): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
-    return http.get(`/usage${qs({ dim, days })}`);
+  getUsage(dim: UsageDim, range: StatRangeQuery = { days: 7 }): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
+    return http.get(`/usage${qs({ dim, ...range })}`);
   },
 
   /* —— 设置 —— */

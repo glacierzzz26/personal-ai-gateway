@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Card, Col, Empty, Row, Segmented, Select, Space, Table } from 'antd';
+import { Card, Col, Empty, Row, Segmented, Space, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
+import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
 import RequestLogDrawer from '@/components/RequestLogDrawer';
 import { Block as BlockCard, Blocks, BlockHead, MetricBlock } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
@@ -29,8 +30,8 @@ const REASON: Record<string, { t: string; tone: string }> = {
   adjust: { t: '调整', tone: 'warn' },
 };
 
-/** "2026-09-03" → "09-03" */
-const dayLabel = (ts: string) => ts.slice(5);
+/** "2026-09-03" → "09-03";小时桶 "2026-09-03 20" → "20:00" */
+const dayLabel = (ts: string) => (ts.length > 10 ? `${ts.slice(11)}:00` : ts.slice(5));
 
 /** 余额水位提示文案（≤0 无法调用，<10 提示尽快充值）。 */
 function balanceTip(balance: number): string {
@@ -62,15 +63,18 @@ export default function Me() {
   const c = useChartColors();
   const setCurrency = useCurrency(s => s.setCurrency);
   const [dim, setDim] = useState<'model' | 'token'>('model');
-  const [days, setDays] = useState(7);
+  /** 统计窗口:预设 1/7/30 天或自定义区间;改动即重取用量与曲线 */
+  const [range, setRange] = useState(defaultRange);
+  const rq = useMemo(() => toQuery(range), [range]);
+  const rl = rangeLabel(range);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
   const [detail, setDetail] = useState<RequestLogItem | null>(null);
 
   const balanceQ = useQuery({ queryKey: ['me', 'balance'], queryFn: () => api.myBalance(30) });
   const usageQ = useQuery({
-    queryKey: ['me', 'usage', dim, days],
-    queryFn: () => api.getMyUsage(dim, days),
+    queryKey: ['me', 'usage', dim, rq],
+    queryFn: () => api.getMyUsage(dim, rq),
   });
   const logsQ = useQuery({
     queryKey: ['me', 'logs', page, size],
@@ -138,7 +142,7 @@ export default function Me() {
     xAxis: {
       type: 'category', data: series.map(d => dayLabel(d.ts)),
       axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
-      axisLabel: { color: c.text, fontSize: 11, interval: 'auto' },
+      axisLabel: { color: c.text, fontSize: 11, interval: 'auto', rotate: 0, hideOverlap: true },
     },
     yAxis: [
       { type: 'value', splitLine: { lineStyle: { color: c.line } }, axisLabel: { color: c.text, fontSize: 11 } },
@@ -184,25 +188,39 @@ export default function Me() {
     { title: '花费', dataIndex: 'chargeUsd', align: 'right', width: 92, render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
+  /*
+   * 账变流水挤在右栏(xl 下约 322px 可用),列宽必须压到总宽之内,否则 antd 会挂横向滚动条。
+   * 时间用两行 MM-DD / HH:mm,既省横向空间又不丢信息;备注吃掉剩余宽度并省略。
+   */
   const ledgerColumns: ColumnsType<BalanceLogItem> = [
     {
-      title: '时间', dataIndex: 'createdAt', width: 168,
-      render: v => <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{fmt.dt(v)}</span>,
+      title: '时间', dataIndex: 'createdAt', width: 76,
+      render: (v: string) => (
+        <span className="gw-num" style={{ color: 'var(--gw-text-3)', lineHeight: 1.35, display: 'inline-block' }}>
+          {fmt.dt(v).slice(5, 10)}<br />{fmt.dt(v).slice(11)}
+        </span>
+      ),
     },
     {
-      title: '类型', dataIndex: 'reason', width: 88,
+      title: '类型', dataIndex: 'reason', width: 52,
       render: (v: string) => <span className="gw-badge">{REASON[v]?.t ?? v}</span>,
     },
     {
-      title: '金额', dataIndex: 'delta', align: 'right', width: 120,
+      title: '金额', dataIndex: 'delta', align: 'right', width: 82,
       render: (v: number) => (
         <span className="gw-num" style={{ color: v < 0 ? TOKENS.err : TOKENS.ok }}>
           {v > 0 ? '+' : ''}{fmt.usd(v)}
         </span>
       ),
     },
-    { title: '余额', dataIndex: 'balanceAfter', align: 'right', width: 120, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
-    { title: '备注', dataIndex: 'note', ellipsis: true, render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span> },
+    {
+      title: '余额', dataIndex: 'balanceAfter', align: 'right', width: 82,
+      render: v => <span className="gw-num">{fmt.usd(v)}</span>,
+    },
+    {
+      title: '备注', dataIndex: 'note', ellipsis: true,
+      render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span>,
+    },
   ];
 
   const modelColumns: ColumnsType<UserModelItem> = [
@@ -231,6 +249,7 @@ export default function Me() {
       <PageHeader
         title="我的账户"
         desc={`${me?.username ?? ''} 的余额、用量与请求明细`}
+        extra={<RangePicker value={range} onChange={setRange} />}
       />
 
       {alert && (
@@ -262,17 +281,17 @@ export default function Me() {
           />
         </Col>
         <Col xs={24} sm={12} xl={6}>
-          <MetricBlock label={`近 ${days} 天请求`} value={fmt.n(totals.requests)} note="仅统计你名下令牌" />
+          <MetricBlock label={`${rl}请求`} value={fmt.n(totals.requests)} note="仅统计你名下令牌" />
         </Col>
         <Col xs={24} sm={12} xl={6}>
           <MetricBlock
-            label={`近 ${days} 天 Token`}
+            label={`${rl}Token`}
             value={fmt.k(totals.inTokens + totals.outTokens)}
             note={`入 ${fmt.k(totals.inTokens)} / 出 ${fmt.k(totals.outTokens)}`}
           />
         </Col>
         <Col xs={24} sm={12} xl={6}>
-          <MetricBlock label={`近 ${days} 天花费`} value={fmt.usd(totals.cost)} note="按本站售价累计" />
+          <MetricBlock label={`${rl}花费`} value={fmt.usd(totals.cost)} note="按本站售价累计" />
         </Col>
       </Row>
 
@@ -314,15 +333,10 @@ export default function Me() {
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
           <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
-            按 {dim === 'model' ? '模型' : '令牌'} × 近 {days} 天聚合请求与花费
+            按 {dim === 'model' ? '模型' : '令牌'} × {rl} 聚合请求与花费
           </div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <Select
-            style={{ width: 130 }} value={days}
-            onChange={v => setDays(v)}
-            options={[{ value: 7, label: '近 7 天' }, { value: 30, label: '近 30 天' }]}
-          />
           <Segmented
             value={dim} onChange={v => setDim(v as 'model' | 'token')}
             options={[{ value: 'model', label: '按模型' }, { value: 'token', label: '按令牌' }]}
@@ -332,7 +346,7 @@ export default function Me() {
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={24} xl={16}>
-          <Card title={`每日请求与花费(近 ${days} 天)`}>
+          <Card title={`每日请求与花费(${rl})`}>
             <Chart option={barOption} height={280} />
           </Card>
         </Col>
