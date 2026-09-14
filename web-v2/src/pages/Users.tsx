@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { App, Button, Form, Input, Modal, Select, Space, Table } from 'antd';
+import { App, Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
@@ -8,6 +8,7 @@ import PageHeader from '@/components/PageHeader';
 import { EmptyState, ErrorState } from '@/components/States';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
+import { fmt } from '@/utils/format';
 import type { Role, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
@@ -124,14 +125,128 @@ function ResetPasswordModal(props: {
   );
 }
 
+/** 充值/扣减弹窗(正数充值,负数扣减调整)。 */
+function TopupModal(props: {
+  user: UserAccount | null;
+  onCancel: () => void;
+  onSubmit: (id: number, amount: number, note?: string) => Promise<void>;
+}) {
+  const { user, onCancel, onSubmit } = props;
+  const { message } = App.useApp();
+  const [form] = Form.useForm<{ amount: number; note?: string }>();
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const v = await form.validateFields();
+    if (!user) return;
+    setSaving(true);
+    try {
+      await onSubmit(user.id, v.amount, v.note?.trim() || undefined);
+      form.resetFields();
+    } catch (e) {
+      message.error(`充值失败:${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={user ? `调整「${user.username}」的余额` : '调整余额'}
+      open={!!user}
+      onCancel={onCancel}
+      onOk={submit}
+      confirmLoading={saving}
+      okText="提交"
+      cancelText="取消"
+      destroyOnHidden
+      width={440}
+    >
+      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ amount: 100 }}>
+        {user && (
+          <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
+            当前余额:<b className="gw-num" style={{ color: 'var(--gw-text)' }}>{fmt.usd(user.balanceUsd)}</b>
+          </div>
+        )}
+        <Form.Item
+          name="amount" label="金额(正=充值,负=扣减)"
+          rules={[{ required: true, message: '请输入金额' }]}
+        >
+          <InputNumber style={{ width: '100%' }} precision={2} step={100} placeholder="例如 100 或 -50" />
+        </Form.Item>
+        <Form.Item name="note" label="备注(可选)">
+          <Input placeholder="例如:微信转账 / 试用额度" maxLength={120} />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+/** 售价倍率弹窗:留空 = 回落全局倍率。 */
+function RateModal(props: {
+  user: UserAccount | null;
+  globalRate: number;
+  onCancel: () => void;
+  onSubmit: (id: number, rate: number | null) => Promise<void>;
+}) {
+  const { user, globalRate, onCancel, onSubmit } = props;
+  const { message } = App.useApp();
+  const [form] = Form.useForm<{ rate: number | null }>();
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const v = await form.validateFields();
+    if (!user) return;
+    setSaving(true);
+    try {
+      await onSubmit(user.id, v.rate ?? null);
+      form.resetFields();
+    } catch (e) {
+      message.error(`保存失败:${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={user ? `设置「${user.username}」的售价倍率` : '售价倍率'}
+      open={!!user}
+      onCancel={onCancel}
+      onOk={submit}
+      confirmLoading={saving}
+      okText="保存"
+      cancelText="取消"
+      destroyOnHidden
+      width={440}
+    >
+      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ rate: user?.rateOverride ?? null }}>
+        <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
+          本站价 = 成本 × 倍率。留空则跟随全局倍率(当前 <b className="gw-num" style={{ color: 'var(--gw-text)' }}>×{globalRate}</b>)。
+        </div>
+        <Form.Item
+          name="rate" label="倍率覆盖"
+          rules={[{ type: 'number', min: 0.01, message: '需为正数' }]}
+        >
+          <InputNumber style={{ width: '100%' }} precision={2} step={0.1} min={0.01} placeholder="留空=用全局倍率" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
 export default function Users() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const me = useSession(s => s.admin);
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserAccount | null>(null);
+  const [topupUser, setTopupUser] = useState<UserAccount | null>(null);
+  const [rateUser, setRateUser] = useState<UserAccount | null>(null);
 
   const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const globalRate = settings?.priceMultiplier && settings.priceMultiplier > 0 ? settings.priceMultiplier : 1;
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] });
 
   const adminCount = users.filter(u => u.role === 'admin').length;
@@ -147,6 +262,20 @@ export default function Users() {
     await api.resetUserPassword(id, newPassword);
     message.success('密码已重置');
     setResetting(null);
+  };
+
+  const topup = async (id: number, amount: number, note?: string) => {
+    await api.topupUser(id, amount, note);
+    message.success(amount >= 0 ? '已充值' : '已扣减');
+    setTopupUser(null);
+    refresh();
+  };
+
+  const saveRate = async (id: number, rate: number | null) => {
+    await api.setUserRate(id, rate);
+    message.success('倍率已保存');
+    setRateUser(null);
+    refresh();
   };
 
   const remove = useMutation({
@@ -167,23 +296,55 @@ export default function Users() {
   };
 
   const columns: ColumnsType<UserAccount> = [
-    { title: '用户名', dataIndex: 'username', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
-    { title: '角色', dataIndex: 'role', width: 140, render: v => <RoleBadge role={v} /> },
-    { title: 'Key 数量', dataIndex: 'keyCount', width: 110, align: 'right', render: v => <span className="gw-num">{v}</span> },
+    { title: '用户名', dataIndex: 'username', width: 160, render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
+    { title: '角色', dataIndex: 'role', width: 120, render: v => <RoleBadge role={v} /> },
     {
-      title: '创建时间', dataIndex: 'createdAt', width: 200,
+      title: '余额', dataIndex: 'balanceUsd', width: 130, align: 'right',
+      render: (v: number, r) =>
+        r.role !== 'user' ? (
+          <span style={{ color: 'var(--gw-text-3)' }}>—</span>
+        ) : (
+          <span className="gw-num" style={{ color: v <= 0 ? 'var(--gw-err)' : undefined }}>{fmt.usd(v)}</span>
+        ),
+    },
+    {
+      title: '售价倍率', key: 'rate', width: 110, align: 'right',
+      render: (_, r) => {
+        if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
+        const own = r.rateOverride != null;
+        return (
+          <Tooltip title={own ? `覆盖全局倍率(全局 ×${globalRate})` : '跟随全局倍率'}>
+            <span className="gw-num" style={{ color: own ? 'var(--gw-text)' : 'var(--gw-text-3)' }}>
+              ×{own ? r.rateOverride : globalRate}{own ? '' : '(全局)'}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
+    { title: 'Key 数量', dataIndex: 'keyCount', width: 100, align: 'right', render: v => <span className="gw-num">{v}</span> },
+    {
+      title: '创建时间', dataIndex: 'createdAt', width: 170,
       render: v => {
         const d = dayjs(v);
         return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
     {
-      title: '操作', align: 'right', width: 200,
+      title: '操作', align: 'right', width: 300,
       render: (_, r) => {
         const isSelf = r.id === me?.id;
         const isLastAdmin = r.role === 'admin' && adminCount <= 1;
+        const isUser = r.role === 'user';
         return (
           <Space size={4}>
+            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无钱包'}
+              onClick={() => setTopupUser(r)}>
+              充值
+            </Button>
+            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无售价倍率'}
+              onClick={() => setRateUser(r)}>
+              倍率
+            </Button>
             <Button size="small" disabled={isSelf} title={isSelf ? '不能重置自己的密码，请用右上角菜单' : undefined}
               onClick={() => setResetting(r)}>
               重置密码
@@ -245,6 +406,8 @@ export default function Users() {
 
       <CreateUserModal open={creating} onCancel={() => setCreating(false)} onSubmit={create} />
       <ResetPasswordModal user={resetting} onCancel={() => setResetting(null)} onSubmit={resetPw} />
+      <TopupModal user={topupUser} onCancel={() => setTopupUser(null)} onSubmit={topup} />
+      <RateModal user={rateUser} globalRate={globalRate} onCancel={() => setRateUser(null)} onSubmit={saveRate} />
     </div>
   );
 }

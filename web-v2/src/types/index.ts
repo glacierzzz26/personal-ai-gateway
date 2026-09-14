@@ -156,6 +156,8 @@ export interface GatewayToken {
   ownerName?: string;
   /** key_cipher 非空才可回显/生成配置(本特性前建的旧 key 为 false) */
   keyRetrievable: boolean;
+  /** 钱包扣费后的实收金额(计价币种,= 成本 × 归属用户倍率);0 = 未结算 */
+  chargeUsd: number;
 }
 
 /** 令牌创建/编辑入参(expiresAt 传 null 表示永不过期;ownerId 仅创建时生效,admin 可指定) */
@@ -210,6 +212,8 @@ export interface RequestLogItem {
   outTokens: number;
   cacheReadTokens?: number;
   costUsd: number;
+  /** 实际向归属用户钱包扣的金额(= 成本 × 倍率);0 = 未结算(失败请求 / 管理员键) */
+  chargeUsd?: number;
   firstTokenMs: number;
   totalMs: number;
   statusCode: number;
@@ -280,6 +284,8 @@ export interface Settings {
   /** 人民币→美元换算率(手工维护,如 1 元 = 0.139 美元)。仅当官方价原币种与计价币种
    *  不一致时才用于折算;0=未设,此时拒绝折算(不臆造汇率)。 */
   usdPerCny?: number;
+  /** 全局售价倍率:本站价 = 成本 × 倍率(用户级 rateOverride 优先)。<=0/缺省 = 1.0 不加价。 */
+  priceMultiplier?: number;
 }
 
 /* —— 官方定价(厂商官网) —— */
@@ -363,6 +369,28 @@ export interface UserAccount {
   role: Role;
   keyCount: number;
   createdAt: string;
+  /** 钱包余额(计价币种);仅普通用户有钱包,管理员恒为 0 */
+  balanceUsd: number;
+  /** 售价倍率覆盖(空 = 用全局 settings.priceMultiplier) */
+  rateOverride?: number | null;
+}
+
+/** 账变流水行(GET /me/balance 与 GET /users/{id}/balance-logs) */
+export interface BalanceLogItem {
+  id: number;
+  delta: number;
+  balanceAfter: number;
+  /** charge 扣费 | topup 充值 | adjust 调整 */
+  reason: string;
+  logId?: number;
+  note?: string;
+  createdAt: string;
+}
+
+/** GET /me/balance:余额 + 近期流水 */
+export interface BalanceResp {
+  balanceUsd: number;
+  logs: BalanceLogItem[];
 }
 
 /** GET /tokens/{id}/claude-config 返回 */

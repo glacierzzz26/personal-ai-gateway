@@ -185,6 +185,15 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("POST /api/v1/users", adm(s.handleUsersCreate))
 	m.HandleFunc("PATCH /api/v1/users/{id}/password", adm(s.handleUserResetPassword))
 	m.HandleFunc("DELETE /api/v1/users/{id}", adm(s.handleUserDelete))
+	// 钱包管理:管理员给客户充值 / 调倍率 / 查流水
+	m.HandleFunc("POST /api/v1/users/{id}/topup", adm(s.handleUserTopup))
+	m.HandleFunc("PATCH /api/v1/users/{id}/rate", adm(s.handleUserRateOverride))
+	m.HandleFunc("GET /api/v1/users/{id}/balance-logs", adm(s.handleUserBalanceLogs))
+
+	// 用户自助面:登录态即可,作用域锁死本人(见 me.go)
+	m.HandleFunc("GET /api/v1/me/balance", s.handleMeBalance)
+	m.HandleFunc("GET /api/v1/me/usage", s.handleMeUsage)
+	m.HandleFunc("GET /api/v1/me/logs", s.handleMeLogs)
 
 	return m
 }

@@ -129,3 +129,11 @@ export const IconPricing = (p: IconProps) => (
     <path d="M16 8h.01" />
   </Svg>
 );
+
+export const IconWallet = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="6" width="18" height="13" rx="2.5" />
+    <path d="M3 10h18" />
+    <path d="M16.5 14.5h1.5" />
+  </Svg>
+);

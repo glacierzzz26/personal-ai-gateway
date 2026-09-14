@@ -19,6 +19,7 @@ const Tokens = lazy(() => import('@/pages/Tokens'));
 const Logs = lazy(() => import('@/pages/Logs'));
 const Settings = lazy(() => import('@/pages/Settings'));
 const Users = lazy(() => import('@/pages/Users'));
+const Me = lazy(() => import('@/pages/Me'));
 
 /** 仅管理员可达；普通用户重定向到访问令牌页。 */
 function AdminOnly({ children }: { children: React.ReactNode }) {
@@ -27,10 +28,17 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** 首页按角色分流：管理员到运行总览，普通用户到访问令牌。 */
+/** 仅普通用户可达；管理员重定向到运行总览。 */
+function UserOnly({ children }: { children: React.ReactNode }) {
+  const admin = useSession(s => s.admin);
+  if (admin?.role === 'admin') return <Navigate to="/dashboard" replace />;
+  return <>{children}</>;
+}
+
+/** 首页按角色分流：管理员到运行总览，普通用户到「我的账户」。 */
 function Home() {
   const admin = useSession(s => s.admin);
-  return <Navigate to={admin?.role === 'admin' ? '/dashboard' : '/tokens'} replace />;
+  return <Navigate to={admin?.role === 'admin' ? '/dashboard' : '/me'} replace />;
 }
 
 /** 路由级加载态：与各页区块的骨架同款，避免跳页时白屏。 */
@@ -133,6 +141,7 @@ export default function App() {
           <Route path="pricing" element={wrap(<OfficialPricing />)} />
           <Route path="channels" element={wrap(<Channels />)} />
           <Route path="routing" element={wrap(<Routing />)} />
+          <Route path="me" element={<UserOnly><Suspense fallback={<PageLoading />}><Me /></Suspense></UserOnly>} />
           <Route path="tokens" element={<Suspense fallback={<PageLoading />}><Tokens /></Suspense>} />
           <Route path="logs" element={wrap(<Logs />)} />
           <Route path="settings" element={wrap(<Settings />)} />

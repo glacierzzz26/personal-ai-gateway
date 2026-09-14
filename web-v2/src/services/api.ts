@@ -6,7 +6,7 @@
  * 这里统一除以 100 还原为 0..1 小数供 UI(fmt.pct)使用;errorRate 本身即小数。
  */
 import type {
-  AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
+  AdminMe, BalanceLogItem, BalanceResp, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
   OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
@@ -51,6 +51,35 @@ export const api = {
     return http.patch(`/users/${id}/password`, { newPassword });
   },
   deleteUser(id: number): Promise<unknown> { return http.del(`/users/${id}`); },
+  /** 给客户充值(正=充值,负=扣减调整);仅普通用户有钱包 */
+  topupUser(id: number, amount: number, note?: string): Promise<BalanceLogItem> {
+    return http.post(`/users/${id}/topup`, { amount, note });
+  },
+  /** 设/清客户的售价倍率覆盖(rate=null 表示回落全局倍率) */
+  setUserRate(id: number, rate: number | null): Promise<unknown> {
+    return http.patch(`/users/${id}/rate`, { rate });
+  },
+  /** 某客户的账变流水(管理员审计) */
+  userBalanceLogs(id: number, limit = 50): Promise<BalanceLogItem[]> {
+    return http.get(`/users/${id}/balance-logs${qs({ limit })}`);
+  },
+
+  /* —— 用户自助面(登录态即可,作用域锁本人) —— */
+  myBalance(limit = 50): Promise<BalanceResp> {
+    return http.get(`/me/balance${qs({ limit })}`);
+  },
+  /** 我的用量:dim=model|token(用户侧不暴露渠道) */
+  getMyUsage(dim: 'model' | 'token', days = 7): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
+    return http.get(`/me/usage${qs({ dim, days })}`);
+  },
+  /** 我的请求日志(自动限定为本人名下令牌) */
+  getMyLogs(filters: LogFilters = {}, page = 1, size = 20): Promise<LogPage> {
+    const p = {
+      model: filters.model, token: filters.token, status: filters.status, kw: filters.kw,
+      page, size,
+    };
+    return http.get(`/me/logs${qs(p)}`);
+  },
 
   /* —— 概览 —— */
   getOverview(): Promise<OverviewData> { return http.get('/overview'); },

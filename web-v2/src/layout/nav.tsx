@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import {
   IconChannels, IconDashboard, IconLogs, IconModels, IconPricing, IconRouting, IconSettings, IconTokens, IconUsers,
+  IconWallet,
 } from '@/components/icons';
 
 export interface NavItem {
@@ -10,6 +11,8 @@ export interface NavItem {
   icon: ReactNode;
   /** 仅管理员可见 */
   adminOnly: boolean;
+  /** 仅普通用户可见(管理员看的是全站视角,不需要「我的账户」) */
+  userOnly?: boolean;
 }
 
 /**
@@ -22,6 +25,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: '/models', label: '模型广场', group: '资源', icon: <IconModels />, adminOnly: true },
   { key: '/pricing', label: '官方定价', group: '资源', icon: <IconPricing />, adminOnly: true },
   { key: '/routing', label: '路由规则', group: '资源', icon: <IconRouting />, adminOnly: true },
+  { key: '/me', label: '我的账户', group: '账户', icon: <IconWallet />, adminOnly: false, userOnly: true },
   { key: '/tokens', label: '访问令牌', group: '访问', icon: <IconTokens />, adminOnly: false },
   { key: '/logs', label: '请求日志', group: '观测', icon: <IconLogs />, adminOnly: true },
   { key: '/users', label: '用户管理', group: '系统', icon: <IconUsers />, adminOnly: true },
@@ -29,10 +33,10 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 /** 侧栏分组顺序 */
-export const NAV_GROUPS = ['概览', '资源', '访问', '观测', '系统'] as const;
+export const NAV_GROUPS = ['概览', '资源', '账户', '访问', '观测', '系统'] as const;
 
 export const visibleNav = (isAdmin: boolean): NavItem[] =>
-  NAV_ITEMS.filter(it => isAdmin || !it.adminOnly);
+  NAV_ITEMS.filter(it => (it.userOnly ? !isAdmin : isAdmin || !it.adminOnly));
 
 /** 路径 → 面包屑两段；未命中时回退到原路径 */
 export function crumbOf(pathname: string, isAdmin: boolean): { group: string; label: string } {

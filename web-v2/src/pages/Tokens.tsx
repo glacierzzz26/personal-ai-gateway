@@ -285,6 +285,8 @@ export default function Tokens() {
   const { data: tokens = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
   const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, enabled: isAdmin });
+  // 普通用户的钱包余额:令牌额度只是子预算,真正卡住调用的是余额(见 /me/balance)。
+  const { data: wallet } = useQuery({ queryKey: ['me', 'balance'], queryFn: () => api.myBalance(1), enabled: !isAdmin });
 
   // 管理员可按归属过滤(数据量小,客户端过滤即可)
   const view = useMemo(
@@ -466,6 +468,24 @@ export default function Tokens() {
       />
 
       <Blocks>
+        {!isAdmin && wallet && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+              fontSize: 13.5, color: 'var(--gw-text-2)',
+            }}
+          >
+            <span style={{ color: 'var(--gw-text-3)' }}>账户余额</span>
+            <b className="gw-num" style={{ color: wallet.balanceUsd <= 0 ? TOKENS.err : 'var(--gw-text)' }}>
+              {fmt.usd(wallet.balanceUsd)}
+            </b>
+            <span style={{ color: 'var(--gw-text-3)' }}>
+              {wallet.balanceUsd <= 0
+                ? '余额不足，调用已被拒绝，请联系管理员充值'
+                : '每次调用按本站售价从余额扣除；令牌额度为单令牌上限'}
+            </span>
+          </div>
+        )}
         <BlockCard>
           <Table<GatewayToken>
             rowKey="id"
