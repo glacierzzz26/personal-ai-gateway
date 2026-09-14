@@ -442,6 +442,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 // finish 落账+回写:非流成功路径。
 func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq, latencyMs int64, status int, outBody []byte, ch domain.ChannelRow, offer domain.OfferRead, tok translate.Usage, start time.Time) {
 	cost := costUsd(offer, tok)
+	// 结算只累加、不拒(额度已在 parseInbound 的 tokenGateErr 预检查过);见 store.ChargeToken。
 	_ = g.st.ChargeToken(in.token.ID, cost)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

@@ -162,22 +162,25 @@ func (s *Store) DeleteToken(id int64) error {
 	return nil
 }
 
-// ChargeToken 请求结束扣减额度并刷新 last_used_at。quota_usd<=0 视为不限。
-// 原子条件更新,避免并发超扣;超出返回 ErrQuotaExceeded。
+// ChargeToken 请求结束累加用量并刷新 last_used_at。quota_usd<=0 视为不限。
+//
+// 只累加、不设上限:额度是否够由入口预检查(tokenGateErr)判定,结算一律落账。
+// 若这里也带上限条件,当「剩余额度 < 一笔成本」时 UPDATE 会命中 0 行 —— 而调用方无法
+// 把它转成真正的拒绝(响应已发出),只会让 used_usd 永远不前进,变成无限白跑。故此处
+// 允许 used_usd 越过 quota_usd(透支至多一笔),由入口在下一笔请求上稳定返回 402。
 func (s *Store) ChargeToken(id int64, costUsd float64) error {
 	if costUsd < 0 {
 		return nil
 	}
 	now := formatRFC3339(s.nowUTC())
 	res, err := s.db.Exec(`UPDATE tokens SET used_usd = used_usd + ?, last_used_at = ?, updated_at = ?
-		WHERE id=? AND status='active'
-		  AND (quota_usd <= 0 OR used_usd + ? <= quota_usd + 0.0000001)`,
-		costUsd, now, now, id, costUsd)
+		WHERE id=? AND status='active'`,
+		costUsd, now, now, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrQuotaExceeded
+		return ErrNotFound
 	}
 	return nil
 }

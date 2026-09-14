@@ -411,8 +411,36 @@ func TestE2EQuotaAndAllowed(t *testing.T) {
 	}
 }
 
-// TestE2ERetryRepeatsCandidates 配置的 retry 轮数应真的重跑候选(此前 Plan.Retry 算了没人读)。
-// 单渠道、上游前两次 500、第三次 200,默认 maxRetries=2 → 序列 [ch,ch,ch],第三次成功。
+// TestE2EQuotaOverrunChargesAndRejects 额度不足以覆盖一笔成本时的终态:
+// 该笔照常成功并记账(used 越过 quota),下一笔在入口稳定 402 —— 不再无限白跑。
+// 回归点:ChargeToken 若带「不超上限」条件 + 调用方吞错,used 永不前进 → 每笔都 200。
+func TestE2EQuotaOverrunChargesAndRejects(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	e.addModelOffer("m-ok", chID, 1)
+	// 每笔成本 ≈ 2.0*12/1e6 + 4.0*8/1e6 = 0.000056;额度设 0.00001(不足一笔)。
+	key := e.addToken("cli", []string{"m-ok"}, 0.00001)
+
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, "m-ok"))
+	if code != http.StatusOK {
+		t.Fatalf("first request should succeed (quota not yet exhausted), got %d %s", code, body)
+	}
+	tk, err := e.st.ListTokens(nil)
+	if err != nil || len(tk) != 1 {
+		t.Fatalf("list tokens: %v (%d)", err, len(tk))
+	}
+	if tk[0].UsedUsd <= tk[0].QuotaUsd {
+		t.Fatalf("used=%v should exceed quota=%v after settle", tk[0].UsedUsd, tk[0].QuotaUsd)
+	}
+
+	code, body = e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, "m-ok"))
+	if code != http.StatusPaymentRequired {
+		t.Fatalf("second request should be 402, got %d %s", code, body)
+	}
+}
+
+// TestE2ERetryRepeatsCandidates 配置的 retry 轮数应真的重跑候选(此前 Plan.Retry 算了没人读)。// 单渠道、上游前两次 500、第三次 200,默认 maxRetries=2 → 序列 [ch,ch,ch],第三次成功。
 func TestE2ERetryRepeatsCandidates(t *testing.T) {
 	e := newE2E(t)
 	var hits int32
