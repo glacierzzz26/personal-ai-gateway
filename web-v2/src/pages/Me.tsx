@@ -3,6 +3,7 @@ import { Card, Col, Empty, Row, Segmented, Space, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
+import LedgerDrawer from '@/components/LedgerDrawer';
 import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
 import RequestLogDrawer from '@/components/RequestLogDrawer';
 import { Block as BlockCard, Blocks, BlockHead, MetricBlock } from '@/components/Block';
@@ -17,12 +18,15 @@ import { CAP_LABEL, FAIL_LABEL, STATUS_CLIENT_CLOSED, TONE_COLOR, classifyError,
 import type { Tone } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
 import type { EChartsOption } from 'echarts';
-import type { BalanceLogItem, RequestLogItem, UsageRow, UserModelItem, UserPrice } from '@/types';
+import type { RequestLogItem, UsageRow, UserModelItem, UserPrice } from '@/types';
 
 const okCode = (code: number) => code >= 100 && code < 400;
 
 /** 令牌额度告警阈值,与管理员 Dashboard 同口径(≥85% 视为告警)。 */
 const QUOTA_ALERT = 0.85;
+
+/** 账变流水卡片内联展示的条数;更多走 Drawer。 */
+const LEDGER_PREVIEW = 4;
 
 const REASON: Record<string, { t: string; tone: string }> = {
   topup: { t: '充值', tone: 'ok' },
@@ -70,6 +74,7 @@ export default function Me() {
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(20);
   const [detail, setDetail] = useState<RequestLogItem | null>(null);
+  const [ledgerOpen, setLedgerOpen] = useState(false);
 
   const balanceQ = useQuery({ queryKey: ['me', 'balance'], queryFn: () => api.myBalance(30) });
   const usageQ = useQuery({
@@ -97,6 +102,7 @@ export default function Me() {
   const logs = logsQ.data?.items ?? [];
   const total = logsQ.data?.total ?? 0;
   const models = modelsQ.data ?? [];
+  const ledger = balanceQ.data?.logs ?? [];
 
   // 阈值提醒:余额耗尽/偏低 + 令牌额度逼近(与管理员 Dashboard 同一套阈值)。
   // 用户此前只能等某次请求撞上 402/429 才知道(issue #8 P2)。
@@ -189,40 +195,10 @@ export default function Me() {
   ];
 
   /*
-   * 账变流水挤在右栏(xl 下约 322px 可用),列宽必须压到总宽之内,否则 antd 会挂横向滚动条。
-   * 时间用两行 MM-DD / HH:mm,既省横向空间又不丢信息;备注吃掉剩余宽度并省略。
+   * 账变流水:卡片内只做「近期摘要」,完整列表进 LedgerDrawer。
+   * 右栏 xl 下仅约 322px,横向摆不下有效列宽(时间/类型/金额/余额合计 ≈292px+),
+   * 故不再把表格塞进窄栏。
    */
-  const ledgerColumns: ColumnsType<BalanceLogItem> = [
-    {
-      title: '时间', dataIndex: 'createdAt', width: 76,
-      render: (v: string) => (
-        <span className="gw-num" style={{ color: 'var(--gw-text-3)', lineHeight: 1.35, display: 'inline-block' }}>
-          {fmt.dt(v).slice(5, 10)}<br />{fmt.dt(v).slice(11)}
-        </span>
-      ),
-    },
-    {
-      title: '类型', dataIndex: 'reason', width: 52,
-      render: (v: string) => <span className="gw-badge">{REASON[v]?.t ?? v}</span>,
-    },
-    {
-      title: '金额', dataIndex: 'delta', align: 'right', width: 82,
-      render: (v: number) => (
-        <span className="gw-num" style={{ color: v < 0 ? TOKENS.err : TOKENS.ok }}>
-          {v > 0 ? '+' : ''}{fmt.usd(v)}
-        </span>
-      ),
-    },
-    {
-      title: '余额', dataIndex: 'balanceAfter', align: 'right', width: 82,
-      render: v => <span className="gw-num">{fmt.usd(v)}</span>,
-    },
-    {
-      title: '备注', dataIndex: 'note', ellipsis: true,
-      render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span>,
-    },
-  ];
-
   const modelColumns: ColumnsType<UserModelItem> = [
     { title: '模型', dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
     { title: '上下文', dataIndex: 'contextWindow', width: 100, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
@@ -351,21 +327,44 @@ export default function Me() {
           </Card>
         </Col>
         <Col xs={24} xl={8}>
-          <Card title="账变流水" styles={{ body: { padding: 0 } }}>
+          <Card
+            title="账变流水"
+            styles={{ body: { padding: 0 } }}
+            extra={
+              ledger.length > LEDGER_PREVIEW && (
+                <button type="button" className="gw-link" onClick={() => setLedgerOpen(true)}>
+                  全部 {ledger.length} 条 →
+                </button>
+              )
+            }
+          >
             {balanceQ.isLoading ? (
               <div style={{ padding: 20 }}><SkBlock /></div>
-            ) : (balanceQ.data?.logs?.length ?? 0) === 0 ? (
+            ) : ledger.length === 0 ? (
               <Empty description="暂无账变记录" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
             ) : (
-              <Table<BalanceLogItem>
-                rowKey="id"
-                size="small"
-                dataSource={balanceQ.data?.logs ?? []}
-                columns={ledgerColumns}
-                pagination={false}
-                showHeader={false}
-                scroll={{ y: 236 }}
-              />
+              /*
+               * 右栏窄(1366 下约 322px),不放可滚动表格 —— 固定高度 + 内层滚动条既丑又不完整。
+               * 这里只列最近几条做摘要,完整流水(含备注)点右上角进 Drawer 看。
+               */
+              <div className="gw-list">
+                {ledger.slice(0, LEDGER_PREVIEW).map(log => (
+                  <div className="gw-li" key={log.id} style={{ padding: '12px 20px', gap: 4 }}>
+                    <div className="r1">
+                      <span className="gw-badge">{REASON[log.reason]?.t ?? log.reason}</span>
+                      <span className="v" style={{ color: log.delta < 0 ? TOKENS.err : TOKENS.ok }}>
+                        {log.delta > 0 ? '+' : ''}{fmt.usd(log.delta)}
+                      </span>
+                    </div>
+                    <div className="r2" style={{ display: 'flex', gap: 8 }}>
+                      <span className="gw-num">{fmt.dt(log.createdAt)}</span>
+                      <span style={{ marginLeft: 'auto' }} className="gw-num">
+                        余额 {fmt.usd(log.balanceAfter)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </Card>
         </Col>
@@ -431,6 +430,7 @@ export default function Me() {
       </Space>
 
       <RequestLogDrawer detail={detail} onClose={() => setDetail(null)} />
+      <LedgerDrawer open={ledgerOpen} logs={ledger} onClose={() => setLedgerOpen(false)} />
     </div>
   );
 }
