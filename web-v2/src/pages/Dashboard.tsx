@@ -127,6 +127,8 @@ export default function Dashboard() {
     return [...rows].sort((a, b) => b.costUsd - a.costUsd).slice(0, 5);
   }, [todayUsage]);
   const topCostTotal = topCost.reduce((s, r) => s + r.costUsd, 0);
+  /* 排行条按分类色板逐条取色 —— 模型间一眼可分,而不是同一根靛蓝条长短不一 */
+  const costHues = [TOKENS.c1, TOKENS.c2, TOKENS.c3, TOKENS.c4, TOKENS.c5];
 
   /* ---------- 额度逼近 ---------- */
   const nearQuota = useMemo(
@@ -438,7 +440,7 @@ export default function Dashboard() {
               </BlockBody>
             ) : (
               <div className="gw-list">
-                {topCost.map(r => (
+                {topCost.map((r, i) => (
                   <div className="gw-li" key={r.name}>
                     <div className="r1">
                       <span className="k gw-mono" style={{ fontSize: 13.5 }}>{r.name}</span>
@@ -446,7 +448,7 @@ export default function Dashboard() {
                       <span className="v">{fmt.usd(r.costUsd)}</span>
                     </div>
                     <div className="gw-bar" role="img" aria-label={`${r.name} 花费占比 ${fmt.pct(r.costUsd / (topCostTotal || 1), 0)}`}>
-                      <i style={{ width: `${(r.costUsd / (topCostTotal || 1)) * 100}%`, background: TOKENS.c1 }} />
+                      <i style={{ width: `${(r.costUsd / (topCostTotal || 1)) * 100}%`, background: costHues[i % costHues.length] }} />
                     </div>
                   </div>
                 ))}

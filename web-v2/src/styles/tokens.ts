@@ -3,23 +3,30 @@ import { theme, type ThemeConfig } from 'antd';
 /**
  * 设计令牌 —— 唯一色值来源。
  *
- * 规范外 hex 一律禁止；需要更浅/更透的层次时只用 rgba() 从主色派生。
- * 圆角四档：卡片 8 / 按钮 6 / 徽章 4 / 弹层 12。禁止深色模式。
+ * 主色:靛蓝 Indigo(线性/Stripe 一派的现代 SaaS 观感),鲜亮而不刺眼。
+ * 规范外 hex 一律禁止;需要更浅/更透的层次时只用 rgba() 从主色派生。
+ * 圆角四档:卡片 8 / 按钮 6 / 徽章 4 / 弹层 12。禁止深色模式。
  */
 export const TOKENS = {
   bg: '#F8FAFC',
   card: '#FFFFFF',
   border: '#E2E8F0',
 
-  primary: '#0E7490',
-  primaryHover: '#155E75',
-  primary50: '#ECFEFF',
-  primary100: '#CFFAFE',
+  primary: '#4F46E5',
+  primaryHover: '#4338CA',
+  primary50: '#EEF2FF',
+  primary100: '#C7D2FE',
+  /* 主色浅一档 —— 同一指标的两系列对比(输入价/输出价)用同色相深浅,不同指标才换色相 */
+  primarySoft: '#A5B4FC',
 
-  /* 图表四段同色相 */
-  c1: '#0891B2',
-  c2: '#22D3EE',
-  c3: '#A5F3FC',
+  /* 图表分类色板 —— 多色相,系列间一眼可分(靛蓝/青/紫/琥珀/玫红/翠绿)。
+     语义线(错误=err、花费=warn)仍走语义色,不占色板位。 */
+  c1: '#4F46E5',
+  c2: '#06B6D4',
+  c3: '#8B5CF6',
+  c4: '#F59E0B',
+  c5: '#EC4899',
+  c6: '#10B981',
 
   title: '#0F172A',
   text: '#475569',
@@ -66,7 +73,7 @@ const components: NonNullable<ThemeConfig['components']> = {
   },
   Input: {
     borderRadius: TOKENS.rBtn,
-    activeShadow: '0 0 0 3px rgba(14,116,144,0.10)',
+    activeShadow: '0 0 0 3px rgba(79,70,229,0.12)',
     hoverBorderColor: TOKENS.aux,
     activeBorderColor: TOKENS.primary,
   },
