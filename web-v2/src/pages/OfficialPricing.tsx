@@ -86,16 +86,19 @@ export default function OfficialPricing() {
     onSuccess: r => {
       qc.invalidateQueries({ queryKey: ['official-prices'] });
       const failed = r.failed?.length ?? 0;
+      const removed = r.removed ?? 0;
       message.success({
         content: (
           <>
             已抓取 {r.upserted} 个模型
             {failed > 0 && `,${failed} 个失败`}
+            {/* 对账删除:官方页已下架的行被清掉,提示一下免得管理员以为数据丢了 */}
+            {removed > 0 && `,清理陈旧行 ${removed} 条`}
             {' · '}
             <a href={r.sourceUrl} target="_blank" rel="noreferrer">官方来源 ↗</a>
           </>
         ),
-        duration: 6,
+        duration: removed > 0 ? 8 : 6,
       });
     },
     onError: (e: Error) => message.error(e.message || '获取失败'),

@@ -9,9 +9,11 @@ import { setUnauthorizedHandler } from '@/services/http';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { useCurrency } from '@/stores/currency';
+import { queryClient } from '@/main';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const Models = lazy(() => import('@/pages/Models'));
+const ModelsPlaza = lazy(() => import('@/pages/ModelsPlaza'));
 const OfficialPricing = lazy(() => import('@/pages/OfficialPricing'));
 const Channels = lazy(() => import('@/pages/Channels'));
 const Routing = lazy(() => import('@/pages/Routing'));
@@ -40,6 +42,15 @@ function UserOnly({ children }: { children: React.ReactNode }) {
 function Home() {
   const admin = useSession(s => s.admin);
   return <Navigate to={admin?.role === 'admin' ? '/dashboard' : '/me'} replace />;
+}
+
+/**
+ * 模型广场：同一 URL 按角色分流 —— 管理员进可编辑目录(Models)，普通用户进只读售价视图。
+ * 后端 GET /models 本就分角色返回不同形状(见 server/admin_models.go)，这里对齐前端入口。
+ */
+function ModelsRoute() {
+  const role = useSession(s => s.admin?.role);
+  return <Suspense fallback={<PageLoading />}>{role === 'admin' ? <Models /> : <ModelsPlaza />}</Suspense>;
 }
 
 /** 路由级加载态：与各页区块的骨架同款，避免跳页时白屏。 */
@@ -106,7 +117,12 @@ export default function App() {
   useCurrency(s => s.currency);
 
   useEffect(() => {
-    setUnauthorizedHandler(() => setAdmin(null)); // 任一请求 401 → 回到登录态
+    setUnauthorizedHandler(() => {
+      // 会话失效 → 回登录态。顺带清缓存:部分响应按角色收敛(如 /models),
+      // 不清会被下一个登录的账号在 staleTime 内直接读到上一个账号的内容。
+      queryClient.clear();
+      setAdmin(null);
+    });
     let live = true;
     api
       .me()
@@ -126,6 +142,13 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 会话身份变化(登录/登出/切号)时清一次缓存,避免把上一个会话的角色收敛结果带给下一个。
+  // 首次挂载 uid 从 null→id 也会触发;此时除本次 /auth/me 外尚无缓存,无副作用。
+  const uid = admin?.id ?? null;
+  useEffect(() => {
+    queryClient.clear();
+  }, [uid]);
+
   if (booting) return <Boot />;
   if (!admin) return <Login />;
 
@@ -138,7 +161,7 @@ export default function App() {
         <Route path="/" element={<AppLayout />}>
           <Route index element={<Home />} />
           <Route path="dashboard" element={wrap(<Dashboard />)} />
-          <Route path="models" element={wrap(<Models />)} />
+          <Route path="models" element={<ModelsRoute />} />
           <Route path="pricing" element={wrap(<OfficialPricing />)} />
           <Route path="channels" element={wrap(<Channels />)} />
           <Route path="routing" element={wrap(<Routing />)} />

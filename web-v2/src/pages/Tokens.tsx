@@ -17,7 +17,7 @@ import { useSession } from '@/stores/session';
 import { copyText } from '@/utils/clipboard';
 import { fmt } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
-import type { GatewayToken, ModelCatalogItem, ProbeCheck, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
+import type { GatewayToken, ProbeCheck, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
 
@@ -39,11 +39,16 @@ interface TokenFormValues {
   ownerId?: number;
 }
 
-/** 新建/编辑令牌弹窗。允许模型走「允许全部 / 指定名单」二选一;管理员可指定归属用户。 */
+/**
+ * 新建/编辑令牌弹窗。允许模型走「允许全部 / 指定名单」二选一;管理员可指定归属用户。
+ *
+ * models 只用到名字:同一端点 /models 对管理员返回全量、对普通用户返回收敛清单,
+ * 两者取 name 的写法一致,故这里收窄为 { name } 而不是 ModelCatalogItem。
+ */
 function TokenModal(props: {
   open: boolean;
   initial: GatewayToken | null;
-  models: ModelCatalogItem[];
+  models: { name: string }[];
   isAdmin: boolean;
   users: UserAccount[];
   /** 普通用户建令牌的额度/RPM 上限(0 = 不限);由 /me/balance 带回 */
@@ -296,7 +301,7 @@ function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => v
 }
 
 /** 「自检」弹窗:不产生真实调用地回答「这个 key 现在能不能用某模型」。 */
-function ProbeModal(props: { token: GatewayToken | null; models: ModelCatalogItem[]; onClose: () => void }) {
+function ProbeModal(props: { token: GatewayToken | null; models: { name: string }[]; onClose: () => void }) {
   const { token, models, onClose } = props;
   const [model, setModel] = useState('');
   const { data, isFetching, isError, error, refetch } = useQuery({
@@ -390,7 +395,16 @@ export default function Tokens() {
   const [ownerFilter, setOwnerFilter] = useState<number | 'all'>('all');
 
   const { data: tokens = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
-  const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
+  /*
+   * 令牌的「允许模型」候选:按角色选端点。
+   * /models 两种形状 —— 管理员是全量(含 offers),普通用户是收敛清单。
+   * api.getModels() 会把返回值按 ModelCatalogItem 归一(reading offers),普通用户调用会抛。
+   * 本页只用到模型名,故按角色各取各的;queryKey 区分,避免同键存两种形状互相覆盖。
+   */
+  const { data: models = [] } = useQuery({
+    queryKey: isAdmin ? ['models'] : ['models', 'user'],
+    queryFn: isAdmin ? api.getModels : api.getMyModels,
+  });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, enabled: isAdmin });
   // 普通用户的钱包余额:令牌额度只是子预算,真正卡住调用的是余额(见 /me/balance)。
   const { data: wallet } = useQuery({ queryKey: ['me', 'balance'], queryFn: () => api.myBalance(1), enabled: !isAdmin });

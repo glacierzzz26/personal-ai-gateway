@@ -22,7 +22,8 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { key: '/dashboard', label: '运行总览', group: '概览', icon: <IconDashboard />, adminOnly: true },
   { key: '/channels', label: '渠道管理', group: '资源', icon: <IconChannels />, adminOnly: true },
-  { key: '/models', label: '模型广场', group: '资源', icon: <IconModels />, adminOnly: true },
+  // 模型广场两侧都可见:管理员进可编辑的目录,普通用户进只读的售价视图(App.tsx 按角色分流)。
+  { key: '/models', label: '模型广场', group: '资源', icon: <IconModels />, adminOnly: false },
   { key: '/pricing', label: '官方定价', group: '资源', icon: <IconPricing />, adminOnly: true },
   { key: '/routing', label: '路由规则', group: '资源', icon: <IconRouting />, adminOnly: true },
   { key: '/me', label: '我的账户', group: '账户', icon: <IconWallet />, adminOnly: false, userOnly: true },

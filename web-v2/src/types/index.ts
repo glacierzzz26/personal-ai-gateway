@@ -389,6 +389,8 @@ export interface FetchPricingResult {
   models: string[];
   failed?: string[];
   contentSha256?: string;
+  /** 对账删掉的陈旧行数(官方页已不再列出的模型) */
+  removed?: number;
 }
 
 /** 手工录入官方参考价(智谱等页面不可抓的厂商) */

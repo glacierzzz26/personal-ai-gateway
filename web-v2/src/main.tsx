@@ -8,7 +8,7 @@ import App from './App';
 import { lightTheme } from './styles/tokens';
 import './styles/global.css';
 
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 0, refetchOnWindowFocus: false, staleTime: 10_000 },
   },
