@@ -51,6 +51,31 @@ func (s *Server) loadManageableToken(w http.ResponseWriter, r *http.Request, par
 	return tr, true
 }
 
+// checkTokenCeiling 校验普通用户自助建/改令牌时不超过管理员设定的上限。
+// 上限 0 = 不限。管理员不受限(自己就是站主)。超限返回 false 并已写响应。
+// 语义:上限是「允许客户自己授权的最大值」,客户只能往小里设 —— 否则分闸形同虚设。
+func (s *Server) checkTokenCeiling(w http.ResponseWriter, owner domain.AdminUser, quotaUsd float64, rpm int) bool {
+	if owner.Role != domain.RoleUser {
+		return true
+	}
+	qCeil, rpmCeil, err := s.st.TokenCeiling(owner.ID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return false
+	}
+	if qCeil > 0 && (quotaUsd <= 0 || quotaUsd > qCeil) {
+		apiErr(w, http.StatusBadRequest, "validation",
+			"令牌额度不得超过管理员设定的上限(0=不限额同样受上限约束)")
+		return false
+	}
+	if rpmCeil > 0 && (rpm <= 0 || rpm > rpmCeil) {
+		apiErr(w, http.StatusBadRequest, "validation",
+			"令牌限速不得超过管理员设定的上限(0=不限速同样受上限约束)")
+		return false
+	}
+	return true
+}
+
 // handleTokensCreate 新建令牌:明文 key 仅此响应出现一次,后续只剩掩码。
 func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 	var in domain.TokenInput
@@ -84,6 +109,10 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ownerID = in.OwnerID
+	}
+	// 天窗:普通用户不得把子预算设得比管理员给的上限还大(admin 建令牌不受限)。
+	if !s.checkTokenCeiling(w, me, in.QuotaUsd, in.RpmLimit) {
+		return
 	}
 	plain, hashed, err := auth.NewModelKey()
 	if err != nil {
@@ -124,6 +153,10 @@ func (s *Server) handleTokensUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ExpiresAt = ne
+	// 编辑同样受上限约束:否则客户可以先建小额度令牌、再改成不限,绕过天窗。
+	if !s.checkTokenCeiling(w, s.currentAdmin(r), in.QuotaUsd, in.RpmLimit) {
+		return
+	}
 	tr, err := s.st.UpdateToken(id, in)
 	if err != nil {
 		writeStoreErr(w, err)

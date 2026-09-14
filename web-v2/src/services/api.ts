@@ -10,7 +10,7 @@ import type {
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
   OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
-  TokenDraft, UsageDim, UsageRow, UserAccount,
+  TokenDraft, UsageDim, UsageRow, UserAccount, UserModelItem,
 } from '@/types';
 import { http } from './http';
 
@@ -59,6 +59,10 @@ export const api = {
   setUserRate(id: number, rate: number | null): Promise<unknown> {
     return http.patch(`/users/${id}/rate`, { rate });
   },
+  /** 设客户名下令牌的额度/RPM 上限(0 = 不限);用户自助建令牌不得超过此值 */
+  setUserCeiling(id: number, quotaUsd: number, rpmLimit: number): Promise<unknown> {
+    return http.patch(`/users/${id}/ceiling`, { quotaUsd, rpmLimit });
+  },
   /** 某客户的账变流水(管理员审计) */
   userBalanceLogs(id: number, limit = 50): Promise<BalanceLogItem[]> {
     return http.get(`/users/${id}/balance-logs${qs({ limit })}`);
@@ -80,6 +84,8 @@ export const api = {
     };
     return http.get(`/me/logs${qs(p)}`);
   },
+  /** 我能用的模型与价格(role=user 时 /models 返回收敛清单:无渠道/上游/来源/成本) */
+  getMyModels(): Promise<UserModelItem[]> { return http.get('/models'); },
 
   /* —— 概览 —— */
   getOverview(): Promise<OverviewData> { return http.get('/overview'); },

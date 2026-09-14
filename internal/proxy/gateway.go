@@ -19,6 +19,7 @@ import (
 	"personal-ai-gateway/internal/auth"
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/engine"
+	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/proxy/translate"
 	"personal-ai-gateway/internal/store"
 )
@@ -422,7 +423,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			// 只在成功且翻译通过时记,供下一轮 a2o 回填 reasoning_content。
 			g.reason.Put(in.token.ID, cap)
 		}
-		g.finish(w, r, in, res.latencyMs, res.status, outBody, ch, at.Offer, tok, settings, start)
+		g.finish(w, r, in, res.latencyMs, res.status, outBody, ch, at.Offer, plan, tok, settings, start)
 		return
 	}
 	// 全候选失败:回错误前也落一条失败账(供用量/错误率/渠道健康统计)。
@@ -445,8 +446,8 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 }
 
 // finish 落账+回写:非流成功路径。
-func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq, latencyMs int64, status int, outBody []byte, ch domain.ChannelRow, offer domain.OfferRead, tok translate.Usage, settings domain.Settings, start time.Time) {
-	charge, wallet := g.chargeUsd(in, costUsd(offer, tok), settings)
+func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq, latencyMs int64, status int, outBody []byte, ch domain.ChannelRow, offer domain.OfferRead, plan *engine.Plan, tok translate.Usage, settings domain.Settings, start time.Time) {
+	charge, wallet := g.chargeUsd(in, plan, offer, tok, settings)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(outBody)
@@ -499,7 +500,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 		}
 		// 200:开始向客户端回推;中途失败无法再换渠道。
 		g.eng.RecordSuccess(ch.ID, res.firstTTFB.Milliseconds())
-		g.streamFrom(w, r, in, res, ch, at.Offer, inProto, outProto, settings, start)
+		g.streamFrom(w, r, in, res, ch, at.Offer, plan, inProto, outProto, settings, start)
 		return
 	}
 	total := time.Since(start).Milliseconds()
@@ -529,7 +530,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 //
 // 中断时拿不到权威 usage,但上游已生成并计费了这部分 token,故用本地估算兜底落账
 // (只对已观测到的部分计费),否则网关账面上的成本会系统性偏低。
-func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inboundReq, res *streamOutcome, ch domain.ChannelRow, offer domain.OfferRead, inProto, outProto string, settings domain.Settings, start time.Time) {
+func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inboundReq, res *streamOutcome, ch domain.ChannelRow, offer domain.OfferRead, plan *engine.Plan, inProto, outProto string, settings domain.Settings, start time.Time) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	hw := &headWriter{ResponseWriter: w}
@@ -564,7 +565,7 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 	total := time.Since(start).Milliseconds()
 
 	if streamErr == nil {
-		charge, wallet := g.chargeUsd(in, costUsd(offer, tok), settings)
+		charge, wallet := g.chargeUsd(in, plan, offer, tok, settings)
 		g.reason.Put(in.token.ID, cap) // 只在流正常收尾时记,半截流出错不污染下一轮
 		g.settle(in, ch, offer, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil, charge, wallet)
 		return
@@ -638,12 +639,20 @@ func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 	return pm(offer.InputPriceUsd, tok.Prompt) + pm(offer.OutputPriceUsd, tok.Completion) + pm(offer.CacheReadPriceUsd, tok.CacheRead)
 }
 
-// chargeUsd 售价比 = 成本 × 倍率。倍率取归属用户的 rate_override,缺省用全局(默认 1.0,
-// 即无归属/站主自己的 key 按成本记,行为与改造前一致)。
+// chargeUsd 算这一笔向客户收的钱(本站价)。
+//
+// 定价模型(PLAN.md §2):本站价 = 官方价 × 倍率 —— 官方价是厂商官网挂牌价,
+// 不是 model_offers 里的成本(成本是你付上游的钱,两者是两回事)。
+// 倍率取归属用户的 rate_override,缺省用全局 settings.PriceMultiplier(<=0 → 1.0)。
+//
+// 官方价按模型级绑定 (vendor, model) 取(见 engine.Plan)。取不到时 —— 模型未绑定官方价、
+// 官方价未录入、或官方币种与计价币种不一致又没设汇率 —— 回落「成本 × 倍率」:
+// 没有官方锚的模型照常能计费,行为与改造前一致,不因缺官方价而漏收。
 //
 // 第二个返回值 wallet 表示是否要向归属客户扣钱包:只有 role=user 的归属才扣;
 // 站主自己(admin)与无归属 key 只记 charge 不扣钱 —— 它们天然免疫余额门禁。
-func (g *Gateway) chargeUsd(in *inboundReq, cost float64, settings domain.Settings) (charge float64, wallet bool) {
+func (g *Gateway) chargeUsd(in *inboundReq, plan *engine.Plan, offer domain.OfferRead, tok translate.Usage, settings domain.Settings) (charge float64, wallet bool) {
+	wallet = in.token.OwnerRole == domain.RoleUser
 	rate := settings.PriceMultiplier
 	if in.token.OwnerRateOverride != nil {
 		rate = *in.token.OwnerRateOverride
@@ -651,7 +660,26 @@ func (g *Gateway) chargeUsd(in *inboundReq, cost float64, settings domain.Settin
 	if rate <= 0 {
 		rate = 1.0
 	}
-	return cost * rate, in.token.OwnerRole == domain.RoleUser
+	if official, ok := g.officialFor(plan); ok {
+		inPrice, outPrice, cachePrice, err := pricing.RetailPrice(official, settings.DisplayCurrency, settings.USDPerCNY, rate)
+		if err == nil {
+			pm := func(price float64, n int) float64 { return price * float64(n) / 1e6 }
+			return pm(inPrice, tok.Prompt) + pm(outPrice, tok.Completion) + pm(cachePrice, tok.CacheRead), wallet
+		}
+	}
+	return costUsd(offer, tok) * rate, wallet
+}
+
+// officialFor 取该模型绑定的官方价一行;未绑定或查不到时 ok=false(调用方回落成本口径)。
+func (g *Gateway) officialFor(plan *engine.Plan) (domain.OfficialPriceRow, bool) {
+	if plan == nil || plan.OfficialVendor == "" || plan.OfficialModelName == "" {
+		return domain.OfficialPriceRow{}, false
+	}
+	q, err := g.st.GetOfficialPriceByName(plan.OfficialVendor, plan.OfficialModelName)
+	if err != nil {
+		return domain.OfficialPriceRow{}, false
+	}
+	return q, true
 }
 
 // settle 结算并落账:成本/售价 + 令牌累加 + 扣钱包,单事务(见 store.SettleRequest)。

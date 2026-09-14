@@ -76,9 +76,15 @@ CREATE INDEX idx_logs_owner ON request_logs (owner_id, ts);
 ```
 cost   = costUsd(offer, tok)                          // 你付上游(不变)
 rate   = owner.rate_override ?? settings.price_multiplier
-charge = cost × rate                                   // 客户付你
-→ 单事务 SettleRequest{ InsertLog(charge_usd,owner_id) + ChargeToken(charge) + 扣钱包 + 写 balance_logs }
+charge = 官方价 × rate                                 // 客户付你(与 cost 脱钩)
 ```
+
+> **定价口径(已与站主确认)**:客户实付 = **官方价 × 倍率**,不是成本 × 倍率 —— 你赚的是
+> `官方价×倍率 − 成本` 的差价,随上游议价空间浮动。模型未绑官方价、或官方币种与计价币种
+> 不一致又没设汇率时,**回落 `成本 × rate`**(宁可少赚也不漏收,见 `TestE2ENoOfficialFallsBackToCost`)。
+> 转换统一走 `internal/pricing`(与展示面同源,避免两处漂移)。
+
+`charge` 落 `request_logs.charge_usd`,与 `cost` 分离;单事务 `SettleRequest` 一并写 log + 令牌累加 + 扣钱包 + 账变。
 
 - **事务化**:现在 log 与 charge 是两笔独立写,失败会账实不符。改为 store 层单个 `SettleRequest`,单事务落 log + 扣余额 + 令牌累加 + 账变。
 - **谁扣**:`owner` 是 `user` → 扣钱包;`owner` 是 `admin` 或 NULL(历史全局 key)→ **只记账不扣钱**(「你自己」天然免疫)。

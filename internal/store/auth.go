@@ -66,7 +66,7 @@ func (s *Store) AdminByID(id int64) (admin domain.AdminUser, passwordBcrypt stri
 func (s *Store) ListUsers() ([]domain.UserRead, error) {
 	rows, err := s.db.Query(`SELECT a.id, a.username, a.role, a.created_at,
 		(SELECT COUNT(*) FROM tokens t WHERE t.owner_id = a.id),
-		a.balance_usd, a.rate_override
+		a.balance_usd, a.rate_override, a.token_quota_ceiling, a.token_rpm_ceiling
 		FROM admins a ORDER BY a.id DESC`)
 	if err != nil {
 		return nil, err
@@ -77,7 +77,8 @@ func (s *Store) ListUsers() ([]domain.UserRead, error) {
 		var u domain.UserRead
 		var role, created string
 		var rate sql.NullFloat64
-		if err := rows.Scan(&u.ID, &u.Username, &role, &created, &u.KeyCount, &u.BalanceUsd, &rate); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &role, &created, &u.KeyCount,
+			&u.BalanceUsd, &rate, &u.TokenQuotaCeiling, &u.TokenRpmCeiling); err != nil {
 			return nil, err
 		}
 		if rate.Valid {

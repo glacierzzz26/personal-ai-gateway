@@ -22,7 +22,21 @@ var migrations = []string{
 	m0006ModelOfficialBinding,
 	// v7:中转站改造(用户级钱包 + 售价记账 + 日志归属作用域)
 	m0007RelayWallet,
+	// v8:用户令牌上限(普通用户自助建令牌时不得超过管理员设的天花板)
+	m0008UserTokenCeiling,
 }
+
+// m0008UserTokenCeiling 给「用户自助建令牌」加天窗,避免客户绕过额度约束:
+// 令牌额度只是子预算,但用户自己可以把它设成 0(不限)或极大值,分闸形同虚设。
+//
+//	admins.token_quota_ceiling  该用户名下令牌的额度上限(0 = 不限;仅约束 role=user)
+//	admins.token_rpm_ceiling    该用户名下令牌的 RPM 上限(0 = 不限)
+//
+// 管理员不受限(管理员建令牌走 admin 分支,不校验此值)。纯附加、默认 0,存量库行为不变。
+const m0008UserTokenCeiling = `
+ALTER TABLE admins ADD COLUMN token_quota_ceiling REAL    NOT NULL DEFAULT 0;
+ALTER TABLE admins ADD COLUMN token_rpm_ceiling   INTEGER NOT NULL DEFAULT 0;
+`
 
 // m0007RelayWallet 把网关从「个人自用」推向「中转站」的存储基础(见 PLAN.md §3):
 //

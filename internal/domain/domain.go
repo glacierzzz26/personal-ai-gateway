@@ -561,6 +561,17 @@ type UserRead struct {
 	// BalanceUsd 钱包余额(计价币种金额);RateOverride 非空 = 该用户的售价倍率覆盖全局。
 	BalanceUsd   float64  `json:"balanceUsd"`
 	RateOverride *float64 `json:"rateOverride,omitempty"`
+	// TokenQuotaCeiling 该用户名下令牌的额度上限(0 = 不限);TokenRpmCeiling 同理。
+	// 只约束 role=user 的自助建令牌,管理员不受限。
+	TokenQuotaCeiling float64 `json:"tokenQuotaCeiling"`
+	TokenRpmCeiling   int     `json:"tokenRpmCeiling"`
+}
+
+// CeilingInput PATCH /users/{id}/ceiling 请求体:该用户名下令牌的额度/RPM 上限。
+// 两者 0 = 不限。普通用户建/改令牌时不得超过此值。
+type CeilingInput struct {
+	QuotaUsd float64 `json:"quotaUsd"`
+	RpmLimit int     `json:"rpmLimit"`
 }
 
 // BalanceLogItem GET /users/{id}/balance-logs 与 /me/balance 流水行。
@@ -584,6 +595,12 @@ type TopupReq struct {
 type BalanceResp struct {
 	BalanceUsd float64          `json:"balanceUsd"`
 	Logs       []BalanceLogItem `json:"logs"`
+	// Currency 计价币种。用户读不到 /settings,前端据此决定余额符号(¥/$)。
+	Currency Currency `json:"currency"`
+	// TokenQuotaCeiling 该账号名下令牌的额度上限(0 = 不限);TokenRpmCeiling 同理。
+	// 供用户建令牌时前端预校验,避免提交后才被拒。
+	TokenQuotaCeiling float64 `json:"tokenQuotaCeiling"`
+	TokenRpmCeiling   int     `json:"tokenRpmCeiling"`
 }
 
 // UserCreateReq POST /users 请求体(管理员建号,设初始密码)。
@@ -655,6 +672,8 @@ type MetricPoint struct {
 	Requests int     `json:"requests"`
 	Errors   int     `json:"errors"`
 	CostUsd  float64 `json:"costUsd"`
+	// ChargeUsd 该桶实际向客户收的钱(售价口径,用户面曲线用);全站口径下为全部请求的售价合计。
+	ChargeUsd float64 `json:"chargeUsd"`
 }
 
 // UsageRow 按模型/渠道/令牌维度聚合的一行。
@@ -664,6 +683,9 @@ type UsageRow struct {
 	InTokens  int     `json:"inTokens"`
 	OutTokens int     `json:"outTokens"`
 	CostUsd   float64 `json:"costUsd"`
+	// ChargeUsd 该维度实际向客户收的钱(= 售价口径,用户面上的「花费」)。
+	// 与 CostUsd(你付上游的成本)不是一回事:定价模型见 PLAN.md §2。
+	ChargeUsd float64 `json:"chargeUsd"`
 	ErrorRate float64 `json:"errorRate"`
 }
 

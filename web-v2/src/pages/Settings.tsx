@@ -199,7 +199,7 @@ export default function Settings() {
         },
         {
           key: 'priceMultiplier', t: '全局售价倍率',
-          d: '本站价 = 成本 × 倍率,是展示给用户的售价口径(成本仅管理员可见)。留空或 0 = 1.0 不加价;单个用户可在「用户管理」页单独覆盖',
+          d: '本站价 = 官方价 × 倍率,是展示给用户的售价口径(成本仅管理员可见)。留空或 0 = 1.0 不加价;单个用户可在「用户管理」页单独覆盖',
           render: (f, s) => (
             <InputNumber
               style={{ width: 200 }} min={0.01} max={1000} step={0.1} precision={2}

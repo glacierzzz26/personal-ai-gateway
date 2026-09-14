@@ -196,7 +196,8 @@ func (s *Store) querySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin in
 	rows, err := s.db.Query(`SELECT substr(datetime(ts, ?), 1, ?) AS bkt,
 			COUNT(*),
 			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
-			COALESCE(SUM(cost), 0)
+			COALESCE(SUM(cost), 0),
+			COALESCE(SUM(charge_usd), 0)
 		FROM request_logs
 		WHERE ts >= ? AND ts < ?`+cond+`
 		GROUP BY bkt ORDER BY bkt ASC`,
@@ -209,7 +210,7 @@ func (s *Store) querySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin in
 	for rows.Next() {
 		var p domain.MetricPoint
 		var errs sql.NullInt64
-		if err := rows.Scan(&p.TS, &p.Requests, &errs, &p.CostUsd); err != nil {
+		if err := rows.Scan(&p.TS, &p.Requests, &errs, &p.CostUsd, &p.ChargeUsd); err != nil {
 			return nil, err
 		}
 		p.Errors = int(errs.Int64)
@@ -260,6 +261,7 @@ func (s *Store) queryDimSummary(dim string, fromUTC, toUTC time.Time, limit int,
 			COALESCE(SUM(prompt_tokens),0),
 			COALESCE(SUM(completion_tokens),0),
 			COALESCE(SUM(cost),0),
+			COALESCE(SUM(charge_usd),0),
 			SUM(CASE WHEN ` + errCond + ` THEN 1 ELSE 0 END)
 		FROM request_logs
 		WHERE ts >= ? AND ts < ?` + cond + `
@@ -277,7 +279,7 @@ func (s *Store) queryDimSummary(dim string, fromUTC, toUTC time.Time, limit int,
 	for rows.Next() {
 		var u domain.UsageRow
 		var errs sql.NullInt64
-		if err := rows.Scan(&u.Name, &u.Requests, &u.InTokens, &u.OutTokens, &u.CostUsd, &errs); err != nil {
+		if err := rows.Scan(&u.Name, &u.Requests, &u.InTokens, &u.OutTokens, &u.CostUsd, &u.ChargeUsd, &errs); err != nil {
 			return nil, err
 		}
 		u.ErrorRate = pctErrors(errs.Int64, u.Requests)

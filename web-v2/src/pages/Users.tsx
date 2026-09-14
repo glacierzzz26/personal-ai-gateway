@@ -222,13 +222,74 @@ function RateModal(props: {
     >
       <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ rate: user?.rateOverride ?? null }}>
         <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
-          本站价 = 成本 × 倍率。留空则跟随全局倍率(当前 <b className="gw-num" style={{ color: 'var(--gw-text)' }}>×{globalRate}</b>)。
+          本站价 = 官方价 × 倍率。留空则跟随全局倍率(当前 <b className="gw-num" style={{ color: 'var(--gw-text)' }}>×{globalRate}</b>)。
         </div>
         <Form.Item
           name="rate" label="倍率覆盖"
           rules={[{ type: 'number', min: 0.01, message: '需为正数' }]}
         >
           <InputNumber style={{ width: '100%' }} precision={2} step={0.1} min={0.01} placeholder="留空=用全局倍率" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+/** 令牌上限弹窗:限制该客户自建令牌能授权的额度/RPM 上限(0 = 不限)。 */
+function CeilingModal(props: {
+  user: UserAccount | null;
+  onCancel: () => void;
+  onSubmit: (id: number, quotaUsd: number, rpmLimit: number) => Promise<void>;
+}) {
+  const { user, onCancel, onSubmit } = props;
+  const { message } = App.useApp();
+  const [form] = Form.useForm<{ quotaUsd: number; rpmLimit: number }>();
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const v = await form.validateFields();
+    if (!user) return;
+    setSaving(true);
+    try {
+      await onSubmit(user.id, v.quotaUsd ?? 0, v.rpmLimit ?? 0);
+      form.resetFields();
+    } catch (e) {
+      message.error(`保存失败:${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={user ? `设置「${user.username}」的令牌上限` : '令牌上限'}
+      open={!!user}
+      onCancel={onCancel}
+      onOk={submit}
+      confirmLoading={saving}
+      okText="保存"
+      cancelText="取消"
+      destroyOnHidden
+      width={440}
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark={false}
+        preserve={false}
+        initialValues={{ quotaUsd: 0, rpmLimit: 0 }}
+      >
+        <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
+          该客户自助创建的令牌不得超过此上限(0 = 不限)。真正常住闸门是余额,这里是令牌子预算的天花板。
+        </div>
+        <Form.Item
+          name="quotaUsd" label="令牌额度上限"
+          extra="单位同计价币种;0 = 不限"
+        >
+          <InputNumber min={0} precision={2} step={10} style={{ width: '100%' }} placeholder="0 = 不限" />
+        </Form.Item>
+        <Form.Item name="rpmLimit" label="令牌 RPM 上限" extra="0 = 不限">
+          <InputNumber min={0} max={100000} style={{ width: '100%' }} placeholder="0 = 不限" />
         </Form.Item>
       </Form>
     </Modal>
@@ -243,6 +304,7 @@ export default function Users() {
   const [resetting, setResetting] = useState<UserAccount | null>(null);
   const [topupUser, setTopupUser] = useState<UserAccount | null>(null);
   const [rateUser, setRateUser] = useState<UserAccount | null>(null);
+  const [ceilingUser, setCeilingUser] = useState<UserAccount | null>(null);
 
   const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
@@ -275,6 +337,13 @@ export default function Users() {
     await api.setUserRate(id, rate);
     message.success('倍率已保存');
     setRateUser(null);
+    refresh();
+  };
+
+  const saveCeiling = async (id: number, quotaUsd: number, rpmLimit: number) => {
+    await api.setUserCeiling(id, quotaUsd, rpmLimit);
+    message.success('令牌上限已保存');
+    setCeilingUser(null);
     refresh();
   };
 
@@ -321,6 +390,22 @@ export default function Users() {
         );
       },
     },
+    {
+      title: '令牌上限', key: 'ceiling', width: 130, align: 'right',
+      render: (_, r) => {
+        if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
+        if (r.tokenQuotaCeiling <= 0 && r.tokenRpmCeiling <= 0) {
+          return <span style={{ color: 'var(--gw-text-3)' }}>不限</span>;
+        }
+        return (
+          <Tooltip title={`RPM 上限 ${r.tokenRpmCeiling > 0 ? r.tokenRpmCeiling : '不限'}`}>
+            <span className="gw-num">
+              {r.tokenQuotaCeiling > 0 ? fmt.usd(r.tokenQuotaCeiling) : 'RPM 限'}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
     { title: 'Key 数量', dataIndex: 'keyCount', width: 100, align: 'right', render: v => <span className="gw-num">{v}</span> },
     {
       title: '创建时间', dataIndex: 'createdAt', width: 170,
@@ -344,6 +429,10 @@ export default function Users() {
             <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无售价倍率'}
               onClick={() => setRateUser(r)}>
               倍率
+            </Button>
+            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员建令牌不受限'}
+              onClick={() => setCeilingUser(r)}>
+              令牌上限
             </Button>
             <Button size="small" disabled={isSelf} title={isSelf ? '不能重置自己的密码，请用右上角菜单' : undefined}
               onClick={() => setResetting(r)}>
@@ -408,6 +497,7 @@ export default function Users() {
       <ResetPasswordModal user={resetting} onCancel={() => setResetting(null)} onSubmit={resetPw} />
       <TopupModal user={topupUser} onCancel={() => setTopupUser(null)} onSubmit={topup} />
       <RateModal user={rateUser} globalRate={globalRate} onCancel={() => setRateUser(null)} onSubmit={saveRate} />
+      <CeilingModal user={ceilingUser} onCancel={() => setCeilingUser(null)} onSubmit={saveCeiling} />
     </div>
   );
 }

@@ -11,7 +11,19 @@ import (
 )
 
 // handleModelsList 模型目录(模型 + 供给源 + 今日用量)。
+//
+// 分角色(PLAN.md §5):管理员拿全量(含渠道名/上游真实名/官方价来源/全站用量);
+// 普通用户拿收敛后的清单(仅启用 ∩ 模型可及性,只留对外名/上下文/能力/官方价+本站价)。
 func (s *Server) handleModelsList(w http.ResponseWriter, r *http.Request) {
+	if s.currentAdmin(r).Role != domain.RoleAdmin {
+		views, err := s.userModelsList(s.currentAdmin(r), nil)
+		if err != nil {
+			writeStoreErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, views)
+		return
+	}
 	models, err := s.modelsListRead()
 	if err != nil {
 		writeStoreErr(w, err)

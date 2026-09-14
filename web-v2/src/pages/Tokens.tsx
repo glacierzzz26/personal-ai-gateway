@@ -44,10 +44,12 @@ function TokenModal(props: {
   models: ModelCatalogItem[];
   isAdmin: boolean;
   users: UserAccount[];
+  /** 普通用户建令牌的额度/RPM 上限(0 = 不限);由 /me/balance 带回 */
+  ceiling: { quotaUsd: number; rpmLimit: number };
   onCancel: () => void;
   onSubmit: (draft: TokenDraft, id?: number) => Promise<void>;
 }) {
-  const { open, initial, models, isAdmin, users, onCancel, onSubmit } = props;
+  const { open, initial, models, isAdmin, users, ceiling, onCancel, onSubmit } = props;
   const { message } = App.useApp();
   const [form] = Form.useForm<TokenFormValues>();
   const [saving, setSaving] = useState(false);
@@ -174,18 +176,36 @@ function TokenModal(props: {
 
         <Space size={16} style={{ display: 'flex' }} align="start">
           <Form.Item
-            name="quotaUsd" label="额度上限(USD)"
-            extra="0 表示不限额；达到上限后网关将拒绝请求(HTTP 402)"
+            name="quotaUsd"
+            label="额度上限"
+            extra={
+              !isAdmin && ceiling.quotaUsd > 0
+                ? `管理员限制你最高可设 ${fmt.usd(ceiling.quotaUsd)}(必须填正数)`
+                : '0 表示不限额；达到上限后网关将拒绝请求(HTTP 402)'
+            }
             style={{ flex: 1 }}
           >
-            <InputNumber min={0} step={0.1} precision={2} style={{ width: '100%' }} placeholder="0 = 不限额" />
+            <InputNumber
+              min={!isAdmin && ceiling.quotaUsd > 0 ? 0.01 : 0}
+              step={0.1} precision={2} style={{ width: '100%' }} placeholder="0 = 不限额"
+              max={!isAdmin && ceiling.quotaUsd > 0 ? ceiling.quotaUsd : undefined}
+            />
           </Form.Item>
           <Form.Item
-            name="rpmLimit" label="限速(RPM)"
-            extra="每分钟请求上限，0 表示不限速"
+            name="rpmLimit"
+            label="限速(RPM)"
+            extra={
+              !isAdmin && ceiling.rpmLimit > 0
+                ? `管理员限制你最高可设 ${ceiling.rpmLimit}(必须填正数)`
+                : '每分钟请求上限，0 表示不限速'
+            }
             style={{ flex: 1 }}
           >
-            <InputNumber min={0} max={100000} style={{ width: '100%' }} placeholder="默认 60" />
+            <InputNumber
+              min={!isAdmin && ceiling.rpmLimit > 0 ? 1 : 0}
+              max={!isAdmin && ceiling.rpmLimit > 0 ? ceiling.rpmLimit : 100000}
+              style={{ width: '100%' }} placeholder="默认 60"
+            />
           </Form.Item>
         </Space>
 
@@ -506,6 +526,7 @@ export default function Tokens() {
         models={models}
         isAdmin={isAdmin}
         users={users}
+        ceiling={{ quotaUsd: wallet?.tokenQuotaCeiling ?? 0, rpmLimit: wallet?.tokenRpmCeiling ?? 0 }}
         onCancel={() => setEditor({ open: false, initial: null })}
         onSubmit={saveToken}
       />

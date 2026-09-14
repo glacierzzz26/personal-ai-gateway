@@ -132,6 +132,28 @@ export interface ModelDraft {
   officialModelName?: string;
 }
 
+/** 用户面模型清单一行(GET /models,role=user)。
+ *  刻意不含渠道名 / 上游真实名 / 官方价来源 URL / 成本 / 全站用量。 */
+export interface UserModelItem {
+  name: string;
+  contextWindow: number;
+  capabilities: Capability[];
+  /** 官方价锚(划线原价,计价币种,每百万 token);未录官方价时缺省 */
+  official?: UserPrice;
+  /** 本站价 = 官方价 × 倍率(客户实付口径);无官方价时缺省 */
+  retail?: UserPrice;
+  /** 价格不可用时的说明(未录官方价 / 未设汇率) */
+  priceNote?: string;
+}
+
+/** 用户面每百万 token 的三价(计价币种) */
+export interface UserPrice {
+  input: number;
+  output: number;
+  cacheRead: number;
+  currency: string;
+}
+
 /** 可抓取/可手工录入官方价的厂商(GET /official-prices/vendors) */
 export interface OfficialVendorInfo {
   provider: Provider;
@@ -156,7 +178,7 @@ export interface GatewayToken {
   ownerName?: string;
   /** key_cipher 非空才可回显/生成配置(本特性前建的旧 key 为 false) */
   keyRetrievable: boolean;
-  /** 钱包扣费后的实收金额(计价币种,= 成本 × 归属用户倍率);0 = 未结算 */
+  /** 实际向归属用户钱包扣的金额(计价币种,= 官方价 × 归属用户倍率;无官方价时回落成本 × 倍率);0 = 未结算 */
   chargeUsd: number;
 }
 
@@ -212,7 +234,7 @@ export interface RequestLogItem {
   outTokens: number;
   cacheReadTokens?: number;
   costUsd: number;
-  /** 实际向归属用户钱包扣的金额(= 成本 × 倍率);0 = 未结算(失败请求 / 管理员键) */
+  /** 实际向归属用户钱包扣的金额(计价币种,= 官方价 × 归属用户倍率;无官方价时回落成本 × 倍率);0 = 未结算(失败请求 / 管理员键) */
   chargeUsd?: number;
   firstTokenMs: number;
   totalMs: number;
@@ -240,6 +262,8 @@ export interface MetricPoint {
   requests: number;
   errors: number;
   costUsd: number;
+  /** 该桶向客户收的钱(售价口径);用户面曲线用这个,不是成本 */
+  chargeUsd?: number;
 }
 
 export interface UsageRow {
@@ -248,6 +272,8 @@ export interface UsageRow {
   inTokens: number;
   outTokens: number;
   costUsd: number;
+  /** 该维度向客户收的钱(售价口径);用户面「花费」用这个 */
+  chargeUsd?: number;
   errorRate: number;
 }
 
@@ -284,7 +310,7 @@ export interface Settings {
   /** 人民币→美元换算率(手工维护,如 1 元 = 0.139 美元)。仅当官方价原币种与计价币种
    *  不一致时才用于折算;0=未设,此时拒绝折算(不臆造汇率)。 */
   usdPerCny?: number;
-  /** 全局售价倍率:本站价 = 成本 × 倍率(用户级 rateOverride 优先)。<=0/缺省 = 1.0 不加价。 */
+  /** 全局售价倍率:本站价 = 官方价 × 倍率(用户级 rateOverride 优先;模型未绑官方价时回落成本 × 倍率)。<=0/缺省 = 1.0 不加价。 */
   priceMultiplier?: number;
 }
 
@@ -373,6 +399,10 @@ export interface UserAccount {
   balanceUsd: number;
   /** 售价倍率覆盖(空 = 用全局 settings.priceMultiplier) */
   rateOverride?: number | null;
+  /** 该用户名下令牌的额度上限(0 = 不限);只约束普通用户自助建令牌 */
+  tokenQuotaCeiling: number;
+  /** 该用户名下令牌的 RPM 上限(0 = 不限) */
+  tokenRpmCeiling: number;
 }
 
 /** 账变流水行(GET /me/balance 与 GET /users/{id}/balance-logs) */
@@ -391,6 +421,12 @@ export interface BalanceLogItem {
 export interface BalanceResp {
   balanceUsd: number;
   logs: BalanceLogItem[];
+  /** 计价币种(用户读不到 /settings,靠这里决定余额符号) */
+  currency?: PriceCurrency;
+  /** 该账号名下令牌的额度上限(0 = 不限);用户建令牌时前端预校验 */
+  tokenQuotaCeiling: number;
+  /** 该账号名下令牌的 RPM 上限(0 = 不限) */
+  tokenRpmCeiling: number;
 }
 
 /** GET /tokens/{id}/claude-config 返回 */

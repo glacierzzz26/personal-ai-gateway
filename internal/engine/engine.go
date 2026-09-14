@@ -60,11 +60,15 @@ type Plan struct {
 	// 出站转发与日志归因分别用这两个名字。
 	PublicName string
 	OriginName string
-	Attempts   []Attempt
-	Retry      int   // 追加的重试轮数(候选失败后在剩余候选里重来)
-	TimeoutMs  int   // 单候选超时
-	MatchedID  int64 // 命中的规则 id(0=无)
-	FallbackID int64
+	// OfficialVendor/OfficialModelName 模型级官方价绑定(空 = 未绑定)。计费按官方零售价
+	// 而非上游成本时,由 proxy 据此取 official_prices 的一行。
+	OfficialVendor    domain.Provider
+	OfficialModelName string
+	Attempts          []Attempt
+	Retry             int   // 追加的重试轮数(候选失败后在剩余候选里重来)
+	TimeoutMs         int   // 单候选超时
+	MatchedID         int64 // 命中的规则 id(0=无)
+	FallbackID        int64
 }
 
 // Evaluate 按给定模型名产出有序候选。model 可为渠道侧真实名或网关统一名(display_name)。
@@ -153,6 +157,7 @@ func (e *Engine) Evaluate(model string) (*Plan, error) {
 	}
 
 	p := &Plan{ModelID: m.ID, PublicName: publicName, OriginName: m.Name,
+		OfficialVendor: m.OfficialVendor, OfficialModelName: m.OfficialModelName,
 		Attempts: attempts, Retry: retry, TimeoutMs: timeout}
 	if matched != nil {
 		p.MatchedID = matched.ID

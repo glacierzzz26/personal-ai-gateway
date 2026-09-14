@@ -157,3 +157,42 @@ func (s *Store) SetRateOverride(adminID int64, rate *float64) error {
 	}
 	return nil
 }
+
+// GetRateOverride 读某账号的售价倍率覆盖;NULL 表示「未设,回落全局」(nil, nil)。
+func (s *Store) GetRateOverride(adminID int64) (*float64, error) {
+	var r sql.NullFloat64
+	err := s.db.QueryRow(`SELECT rate_override FROM admins WHERE id=?`, adminID).Scan(&r)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !r.Valid {
+		return nil, nil
+	}
+	return &r.Float64, nil
+}
+
+// SetTokenCeiling 设某账号名下令牌的额度/RPM 上限(0 = 不限)。
+func (s *Store) SetTokenCeiling(adminID int64, quotaUsd float64, rpm int) error {
+	res, err := s.db.Exec(`UPDATE admins SET token_quota_ceiling=?, token_rpm_ceiling=? WHERE id=?`,
+		quotaUsd, rpm, adminID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// TokenCeiling 读某账号名下令牌的额度/RPM 上限(0,0 = 不限)。
+func (s *Store) TokenCeiling(adminID int64) (quotaUsd float64, rpm int, err error) {
+	err = s.db.QueryRow(`SELECT token_quota_ceiling, token_rpm_ceiling FROM admins WHERE id=?`, adminID).
+		Scan(&quotaUsd, &rpm)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrNotFound
+	}
+	return quotaUsd, rpm, err
+}

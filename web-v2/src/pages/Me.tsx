@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card, Col, Empty, Row, Segmented, Select, Space, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
@@ -11,10 +11,11 @@ import { EmptyState, ErrorState, SkBlock } from '@/components/States';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
-import { FAIL_LABEL, STATUS_CLIENT_CLOSED, classifyError, fmt } from '@/utils/format';
+import { useCurrency } from '@/stores/currency';
+import { CAP_LABEL, FAIL_LABEL, STATUS_CLIENT_CLOSED, classifyError, fmt } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
 import type { EChartsOption } from 'echarts';
-import type { BalanceLogItem, RequestLogItem, UsageRow } from '@/types';
+import type { BalanceLogItem, RequestLogItem, UsageRow, UserModelItem, UserPrice } from '@/types';
 
 const okCode = (code: number) => code >= 100 && code < 400;
 
@@ -34,10 +35,28 @@ function balanceTip(balance: number): string {
   return '本页所有金额为本站售价口径';
 }
 
+/** 每百万 token 双行价：官方价(划线原价) + 本站价(实付)。缺失时退化为说明文字。 */
+function PricePair({ official, retail }: { official?: UserPrice; retail?: UserPrice }) {
+  if (!official || !retail) {
+    return <span style={{ color: 'var(--gw-text-3)', fontSize: 12 }}>价格待定</span>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <span style={{ color: 'var(--gw-text-3)', fontSize: 12, textDecoration: 'line-through' }}>
+        {fmt.price(official.input)} / {fmt.price(official.output)}
+      </span>
+      <span className="gw-num" style={{ fontWeight: 600 }}>
+        {fmt.price(retail.input)} / {fmt.price(retail.output)}
+      </span>
+    </div>
+  );
+}
+
 /** 我的账户 —— 普通用户自助面：余额、用量、请求日志（作用域锁本人）。 */
 export default function Me() {
   const me = useSession(s => s.admin);
   const c = useChartColors();
+  const setCurrency = useCurrency(s => s.setCurrency);
   const [dim, setDim] = useState<'model' | 'token'>('model');
   const [days, setDays] = useState(7);
   const [page, setPage] = useState(1);
@@ -53,12 +72,21 @@ export default function Me() {
     queryKey: ['me', 'logs', page, size],
     queryFn: () => api.getMyLogs({}, page, size),
   });
+  const modelsQ = useQuery({ queryKey: ['me', 'models'], queryFn: api.getMyModels });
+
+  // 普通用户读不到 /settings(admin-only),计价币种只能从 /me/balance 带回并水合,
+  // 否则管理员配了 USD 时用户侧仍按默认 CNY 渲染(issue #8 P2)。
+  const cur = balanceQ.data?.currency;
+  useEffect(() => {
+    if (cur) setCurrency(cur);
+  }, [cur, setCurrency]);
 
   const balance = balanceQ.data?.balanceUsd ?? 0;
   const rows = usageQ.data?.rows ?? [];
   const series = usageQ.data?.days ?? [];
   const logs = logsQ.data?.items ?? [];
   const total = logsQ.data?.total ?? 0;
+  const models = modelsQ.data ?? [];
 
   const totals = useMemo(() => {
     let requests = 0, inTokens = 0, outTokens = 0, cost = 0;
@@ -66,7 +94,7 @@ export default function Me() {
       requests += r.requests;
       inTokens += r.inTokens;
       outTokens += r.outTokens;
-      cost += r.costUsd;
+      cost += r.chargeUsd ?? 0; // 售价比花费,不是成本
     }
     return { requests, inTokens, outTokens, cost };
   }, [rows]);
@@ -94,7 +122,7 @@ export default function Me() {
     series: [
       { name: '请求数', type: 'bar', data: series.map(d => d.requests), itemStyle: { color: c.primary, borderRadius: 3 }, barWidth: '45%' },
       {
-        name: '花费', type: 'line', yAxisIndex: 1, data: series.map(d => Number(d.costUsd.toFixed(4))),
+        name: '花费', type: 'line', yAxisIndex: 1, data: series.map(d => Number((d.chargeUsd ?? 0).toFixed(4))),
         showSymbol: false, lineStyle: { width: 1.8, color: c.warn }, itemStyle: { color: c.warn },
       },
     ],
@@ -105,7 +133,7 @@ export default function Me() {
     { title: '请求数', dataIndex: 'requests', align: 'right', render: v => <span className="gw-num">{fmt.n(v)}</span> },
     { title: '输入 Token', dataIndex: 'inTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
     { title: '输出 Token', dataIndex: 'outTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', render: v => <span className="gw-num">{fmt.usd(v)}</span> },
+    { title: '花费', dataIndex: 'chargeUsd', align: 'right', render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
   const logColumns: ColumnsType<RequestLogItem> = [
@@ -128,7 +156,7 @@ export default function Me() {
     { title: '输入', dataIndex: 'inTokens', align: 'right', width: 96, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     { title: '输出', dataIndex: 'outTokens', align: 'right', width: 96, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 96, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
+    { title: '花费', dataIndex: 'chargeUsd', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
   const ledgerColumns: ColumnsType<BalanceLogItem> = [
@@ -150,6 +178,27 @@ export default function Me() {
     },
     { title: '余额', dataIndex: 'balanceAfter', align: 'right', width: 130, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
     { title: '备注', dataIndex: 'note', ellipsis: true, render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span> },
+  ];
+
+  const modelColumns: ColumnsType<UserModelItem> = [
+    { title: '模型', dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
+    { title: '上下文', dataIndex: 'contextWindow', width: 100, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
+    {
+      title: '能力', dataIndex: 'capabilities', width: 200,
+      render: (caps: string[]) => caps.length === 0
+        ? <span style={{ color: 'var(--gw-text-3)' }}>—</span>
+        : (
+          <Space size={4} wrap>
+            {caps.map(cp => <span key={cp} className="gw-badge">{CAP_LABEL[cp] ?? cp}</span>)}
+          </Space>
+        ),
+    },
+    {
+      title: '价格 (每百万 Token)', key: 'price',
+      render: (_, r) => r.official && r.retail
+        ? <PricePair official={r.official} retail={r.retail} />
+        : <span style={{ color: 'var(--gw-text-3)', fontSize: 12 }}>{r.priceNote || '价格待定'}</span>,
+    },
   ];
 
   return (
@@ -191,6 +240,30 @@ export default function Me() {
           </BlockCard>
         </Blocks>
       )}
+
+      <Blocks style={{ marginTop: 16 }}>
+        <BlockCard>
+          <BlockHead
+            title="可用模型与价格"
+            sub="价格为每百万 Token；划线为官方原价，实价为本站售价"
+          />
+          <Table<UserModelItem>
+            rowKey="name"
+            size="middle"
+            loading={modelsQ.isFetching && models.length === 0}
+            dataSource={models}
+            columns={modelColumns}
+            pagination={false}
+            locale={{
+              emptyText: modelsQ.isError ? (
+                <ErrorState title="模型清单加载失败" desc="无法读取可用模型。" onRetry={() => void modelsQ.refetch()} />
+              ) : (
+                <EmptyState title="暂无可用的模型" desc="请联系站长开通模型后再使用。" />
+              ),
+            }}
+          />
+        </BlockCard>
+      </Blocks>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
         <div style={{ minWidth: 0 }}>

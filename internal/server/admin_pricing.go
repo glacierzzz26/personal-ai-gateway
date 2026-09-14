@@ -253,28 +253,21 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 }
 
 // convertPrice 官方原币价 → 计价币种金额(每百万 token)。
-// 原币种与计价币种一致时原样返回(不需要汇率);不一致时按 USDPerCNY 折算,汇率为 0 则拒绝
-// (不臆造汇率)。四舍五入到 6 位,避免浮点尾数进库。
-// USDPerCNY 语义 = 1 元人民币折合的美元数(如 0.139):CNY→USD 乘,USD→CNY 除。
+// 折算口径与计费链路共用 pricing.Convert,避免两处漂移。
 func convertPrice(q domain.OfficialPriceRow, target domain.Currency, usdPerCNY float64) (in, out, cache float64, err error) {
-	if !target.Valid() {
-		return 0, 0, 0, errors.New("计价币种未设置(应为 CNY 或 USD)")
+	in, err = pricing.Convert(q.InputPrice, q.Currency, target, usdPerCNY)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	if q.Currency == target {
-		return q.InputPrice, q.OutputPrice, q.CacheReadPrice, nil
+	out, err = pricing.Convert(q.OutputPrice, q.Currency, target, usdPerCNY)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	if usdPerCNY <= 0 {
-		return 0, 0, 0, fmt.Errorf(
-			"官方价为 %s、当前计价币种为 %s,请先在【系统设置】填写 USD/CNY 汇率后再应用", q.Currency, target)
+	cache, err = pricing.Convert(q.CacheReadPrice, q.Currency, target, usdPerCNY)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	switch {
-	case q.Currency == domain.CurrencyCNY && target == domain.CurrencyUSD:
-		return round6(q.InputPrice * usdPerCNY), round6(q.OutputPrice * usdPerCNY), round6(q.CacheReadPrice * usdPerCNY), nil
-	case q.Currency == domain.CurrencyUSD && target == domain.CurrencyCNY:
-		return round6(q.InputPrice / usdPerCNY), round6(q.OutputPrice / usdPerCNY), round6(q.CacheReadPrice / usdPerCNY), nil
-	default:
-		return 0, 0, 0, errors.New("未知币种: " + string(q.Currency))
-	}
+	return in, out, cache, nil
 }
 
 // officialPriceViews 批量组装读视图(换算 + 已应用 offer 标注)。
@@ -350,4 +343,4 @@ func normStamp(s string) string {
 }
 
 // round6 保留 6 位小数(与 pricing 包同口径)。
-func round6(v float64) float64 { return float64(int64(v*1e6+0.5)) / 1e6 }
+func round6(v float64) float64 { return pricing.Round6(v) }

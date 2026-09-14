@@ -566,3 +566,98 @@ func TestE2ETranslationErrorNotChannelFailure(t *testing.T) {
 		t.Fatalf("翻译失败被误记为渠道故障:渠道已熔断")
 	}
 }
+
+// bindOfficial 把模型绑定到一条官方价,并返回该官方价行。
+func (e *e2eEnv) bindOfficial(model string, p domain.Provider, officialName string, q domain.OfficialPriceRow) {
+	e.t.Helper()
+	q.Provider, q.ModelName = p, officialName
+	if _, err := e.st.UpsertOfficialPrice(q); err != nil {
+		e.t.Fatalf("upsert official price: %v", err)
+	}
+	vendor, name := string(p), officialName
+	m, err := e.st.GetModelByName(model)
+	if err != nil {
+		e.t.Fatalf("get model %s: %v", model, err)
+	}
+	if _, err := e.st.UpdateModel(m.ID, domain.ModelInput{OfficialVendor: &vendor, OfficialModelName: &name}); err != nil {
+		e.t.Fatalf("bind official: %v", err)
+	}
+}
+
+// TestE2ERetailPriceBilledFromOfficial 有官方价绑定时,客户付的是「官方价 × 倍率」,
+// 而不是成本 × 倍率 —— 定价模型的 A 口径(见 PLAN.md §2)。
+func TestE2ERetailPriceBilledFromOfficial(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	model := "claude-sonnet-5"
+	e.addModelOffer(model, chID, 1) // 成本固定 2.0 / 4.0 每百万
+
+	// 官方价 USD 3/15;计价币种 CNY,汇率 0.1 → ¥30/¥150 每百万。
+	e.bindOfficial(model, domain.ProviderAnthropic, "claude-sonnet-5-20250929", domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15,
+	})
+	settings, err := e.st.GetSettings()
+	if err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	settings.DisplayCurrency = domain.CurrencyCNY
+	settings.USDPerCNY = 0.1
+	settings.PriceMultiplier = 0.5
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 假上游固定 usage:prompt=12, completion=8。
+	// 官方价 ¥30/¥150 × 0.5 = ¥15/¥75 每百万 → 12×15/1e6 + 8×75/1e6 = 0.00078。
+	const wantCharge = 0.00078
+	if d := logs[0].ChargeUsd - wantCharge; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge = %v, want %v(官方价 × 倍率)", logs[0].ChargeUsd, wantCharge)
+	}
+	// 成本口径(prompt 12 × 2 + completion 8 × 4)/1e6 = 0.000056,与售价不同 ——
+	// 这正是「成本 ≠ 售价」的证明。
+	if d := logs[0].CostUsd - 0.000056; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want 0.000056", logs[0].CostUsd)
+	}
+}
+
+// TestE2ENoOfficialFallsBackToCost 未绑定官方价的模型照常按「成本 × 倍率」计费,不漏收。
+func TestE2ENoOfficialFallsBackToCost(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	model := "m-nopricing"
+	e.addModelOffer(model, chID, 1)
+
+	settings, _ := e.st.GetSettings()
+	settings.PriceMultiplier = 2.0
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 成本 (12×2 + 8×4)/1e6 = 0.000056 → ×2 = 0.000112。
+	const want = 0.000112
+	if d := logs[0].ChargeUsd - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge = %v, want %v(回落成本 × 倍率)", logs[0].ChargeUsd, want)
+	}
+}
