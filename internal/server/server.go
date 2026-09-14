@@ -80,6 +80,11 @@ func (s *Server) HandlerAdmin() http.Handler {
 }
 
 // static 托管管理台构建产物。distDir=<webDir>/dist;文件命中即吐,其余回退 index.html。
+//
+// 缓存策略:Vite 产物带内容哈希(assets/index-<hash>.js),可长缓存 immutable;
+// index.html 及无哈希文件必须 no-cache —— 否则重建后浏览器仍用旧 index.html,
+// 指向已删除的旧资源名(哈希变了),白屏。http.ServeFile 只写 Last-Modified,
+// 不会覆盖这里设的 Cache-Control。
 func (s *Server) static() http.Handler {
 	dist := s.distDir()
 	fileServer := http.FileServer(http.Dir(dist))
@@ -93,11 +98,18 @@ func (s *Server) static() http.Handler {
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p != "" {
 			if f, err := os.Stat(filepath.Join(dist, filepath.FromSlash(p))); err == nil && !f.IsDir() {
+				if strings.HasPrefix(p, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
 				fileServer.ServeHTTP(w, r)
 				return
 			}
 		}
 		if _, err := os.Stat(index); err == nil {
+			// SPA 入口:必须每次回源校验,否则前端发版后旧 index 会被长期命中。
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFile(w, r, index)
 			return
 		}
