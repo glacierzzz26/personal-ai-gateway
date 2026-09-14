@@ -159,8 +159,8 @@ export default function OfficialPricing() {
       ),
     },
     {
-      title: '模型名(官方页)', dataIndex: 'modelName',
-      render: v => <span className="gw-mono">{v}</span>,
+      title: '模型名(官方页)', dataIndex: 'modelName', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
     },
     {
       title: '原币价(每百万)', key: 'native', align: 'right', width: 176,
@@ -334,8 +334,8 @@ export default function OfficialPricing() {
                 size="middle"
                 dataSource={list}
                 columns={cols}
+                tableLayout="fixed"
                 pagination={list.length > 30 ? { pageSize: 30, showSizeChanger: false } : false}
-                scroll={{ x: 'max-content' }}
               />
             )}
           </div>

@@ -139,6 +139,20 @@ const (
 // Valid 是否为受支持的角色值。
 func (r Role) Valid() bool { return r == RoleAdmin || r == RoleUser }
 
+// AnnouncementLevel 公告级别(仅影响展示语义色,不改变可见范围)。
+type AnnouncementLevel string
+
+const (
+	LevelInfo   AnnouncementLevel = "info"   // 常规通知
+	LevelWarn   AnnouncementLevel = "warn"   // 注意(如短时降级)
+	LevelDanger AnnouncementLevel = "danger" // 重要(如停机维护)
+)
+
+// Valid 是否为受支持的级别值。
+func (l AnnouncementLevel) Valid() bool {
+	return l == LevelInfo || l == LevelWarn || l == LevelDanger
+}
+
 // ---------- 渠道 ----------
 
 // ChannelInput 创建/更新渠道的请求体。apiKey 留空表示不改/不设置。
@@ -828,6 +842,51 @@ func (s *Settings) Defaults() {
 	s.TZOffsetMin = 480
 	s.DisplayCurrency = CurrencyCNY
 	s.PriceMultiplier = 1.0
+}
+
+// ---------- 通知/公告 ----------
+
+// AnnouncementInput 创建/更新公告请求体。
+// PublishAt/ExpiresAt 为 RFC3339 字符串(RFC3339Nano);nil = 立即发布 / 永不过期。
+type AnnouncementInput struct {
+	Title     string            `json:"title"`
+	Body      string            `json:"body"`
+	Level     AnnouncementLevel `json:"level"`
+	Enabled   *bool             `json:"enabled"`
+	PublishAt *string           `json:"publishAt"`
+	ExpiresAt *string           `json:"expiresAt"`
+}
+
+func (a *AnnouncementInput) Defaults() {
+	enabled := true
+	if a.Enabled == nil {
+		a.Enabled = &enabled
+	}
+	if a.Level == "" {
+		a.Level = LevelInfo
+	}
+}
+
+// AnnouncementRow 公告存储结构(用户面弹窗直接渲染它)。
+// ReadCount/UserTotal 不在此结构:仅管理员列表现算,用户面不需要。
+type AnnouncementRow struct {
+	ID        int64             `json:"id"`
+	Title     string            `json:"title"`
+	Body      string            `json:"body"`
+	Level     AnnouncementLevel `json:"level"`
+	Enabled   bool              `json:"enabled"`
+	PublishAt *time.Time        `json:"publishAt"`
+	ExpiresAt *time.Time        `json:"expiresAt"`
+	CreatedAt time.Time         `json:"createdAt"`
+	UpdatedAt time.Time         `json:"updatedAt"`
+}
+
+// AnnouncementRead 管理员列表展示结构:公告 + 已读计数。
+// UserTotal = 站点普通用户总数;ReadCount = 已确认该公告的人数,供站主评估触达。
+type AnnouncementRead struct {
+	AnnouncementRow
+	ReadCount int `json:"readCount"`
+	UserTotal int `json:"userTotal"`
 }
 
 // ---------- 其他小类型 ----------

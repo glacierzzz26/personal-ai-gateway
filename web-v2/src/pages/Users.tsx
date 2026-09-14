@@ -303,7 +303,7 @@ export default function Users() {
   };
 
   const columns: ColumnsType<UserAccount> = [
-    { title: '用户名', dataIndex: 'username', width: 140, render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
+    { title: '用户名', dataIndex: 'username', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
     { title: '角色', dataIndex: 'role', width: 96, render: v => <RoleBadge role={v} /> },
     {
       title: '余额', dataIndex: 'balanceUsd', width: 116, align: 'right',
@@ -406,7 +406,7 @@ export default function Users() {
               dataSource={users}
               columns={columns}
               pagination={false}
-              scroll={{ x: 'max-content' }}
+              tableLayout="fixed"
               locale={{
                 emptyText: (
                   <EmptyState

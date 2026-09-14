@@ -209,6 +209,14 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("GET /api/v1/me/usage", s.handleMeUsage)
 	m.HandleFunc("GET /api/v1/me/logs", s.handleMeLogs)
 
+	// 公告:管理员发布;已登录用户拉取未读 + 确认已读(作用域锁本人,见 me_announcements.go)
+	m.HandleFunc("GET /api/v1/announcements", adm(s.handleAnnouncementsList))
+	m.HandleFunc("POST /api/v1/announcements", adm(s.handleAnnouncementsCreate))
+	m.HandleFunc("PATCH /api/v1/announcements/{id}", adm(s.handleAnnouncementsUpdate))
+	m.HandleFunc("DELETE /api/v1/announcements/{id}", adm(s.handleAnnouncementsDelete))
+	m.HandleFunc("GET /api/v1/me/announcement", s.handleMeAnnouncement)
+	m.HandleFunc("POST /api/v1/me/announcement/{id}/ack", s.handleMeAnnouncementAck)
+
 	return m
 }
 

@@ -617,8 +617,8 @@ export default function Models() {
                 size="middle"
                 dataSource={list}
                 columns={tableCols}
+                tableLayout="fixed"
                 pagination={list.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
-                scroll={{ x: 'max-content' }}
                 onRow={r => ({
                   onClick: () => setDrawerId(r.id),
                   onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrawerId(r.id); } },

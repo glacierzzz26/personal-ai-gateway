@@ -8,6 +8,7 @@
 import type {
   AdminMe, BalanceLogItem, BalanceResp, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
+  AnnouncementDraft, AnnouncementItem,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
   OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, StatRangeQuery, SyncResult,
   TokenCreateResult,
@@ -260,6 +261,21 @@ export const api = {
   /* —— 设置 —— */
   getSettings(): Promise<Settings> { return http.get('/settings'); },
   updateSettings(body: Settings): Promise<Settings> { return http.patch('/settings', body); },
+
+  /* —— 通知/公告 —— */
+  /** 管理员:全部公告(附已读计数) */
+  listAnnouncements(): Promise<AnnouncementItem[]> { return http.get('/announcements'); },
+  createAnnouncement(body: AnnouncementDraft): Promise<AnnouncementItem> { return http.post('/announcements', body); },
+  updateAnnouncement(id: number, body: AnnouncementDraft): Promise<AnnouncementItem> {
+    return http.patch(`/announcements/${id}`, body);
+  },
+  deleteAnnouncement(id: number): Promise<unknown> { return http.del(`/announcements/${id}`); },
+  /** 我最新一条未确认公告;无则 null */
+  myAnnouncement(): Promise<{ announcement: AnnouncementItem | null }> {
+    return http.get('/me/announcement');
+  },
+  /** 「我已知晓」:此后该公告不再对我弹出 */
+  ackAnnouncement(id: number): Promise<unknown> { return http.post(`/me/announcement/${id}/ack`); },
 };
 
 export type { MatchMode };

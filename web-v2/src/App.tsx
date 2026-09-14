@@ -19,6 +19,7 @@ const Tokens = lazy(() => import('@/pages/Tokens'));
 const Logs = lazy(() => import('@/pages/Logs'));
 const Settings = lazy(() => import('@/pages/Settings'));
 const Users = lazy(() => import('@/pages/Users'));
+const Announcements = lazy(() => import('@/pages/Announcements'));
 const Me = lazy(() => import('@/pages/Me'));
 
 /** 仅管理员可达；普通用户重定向到访问令牌页。 */
@@ -146,6 +147,7 @@ export default function App() {
           <Route path="logs" element={wrap(<Logs />)} />
           <Route path="settings" element={wrap(<Settings />)} />
           <Route path="users" element={wrap(<Users />)} />
+          <Route path="announcements" element={wrap(<Announcements />)} />
           <Route
             path="*"
             element={

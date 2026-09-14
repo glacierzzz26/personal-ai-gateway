@@ -26,7 +26,40 @@ var migrations = []string{
 	m0008UserTokenCeiling,
 	// v9:模型级售价倍率覆盖(定价从「按用户」改为「按模型」,全站同模型同价)
 	m0009ModelRateOverride,
+	// v10:通知/公告(管理员发布,全站可见,「我已知晓」后不再对本人显示)
+	m0010Announcements,
 }
+
+// m0010Announcements 增加「通知/公告」能力(见 issue #10):
+//
+//	announcements           公告正文 + 级别 + 启停 + 定时发布/过期
+//	announcement_dismissals 每个账号对每条公告的「已读」记录(「我已知晓」后的去重依据)
+//
+// publish_at 空 = 立即发布;expires_at 空 = 永不过期。二者存 UTC RFC3339Nano,
+// 生效判定与既有 tokens.expires_at 同口径(字典序即时间序)。
+// 已读记录随公告/账号删除级联清除(store.go 已开启 foreign_keys)。
+const m0010Announcements = `
+CREATE TABLE IF NOT EXISTS announcements (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT    NOT NULL,
+  body       TEXT    NOT NULL,
+  level      TEXT    NOT NULL DEFAULT 'info',  -- info|warn|danger
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  publish_at TEXT,                             -- NULL = 立即发布;否则到点才可见
+  expires_at TEXT,                             -- NULL = 永不过期
+  created_at TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS announcement_dismissals (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  admin_id        INTEGER NOT NULL REFERENCES admins(id)        ON DELETE CASCADE,
+  dismissed_at    TEXT    NOT NULL,
+  PRIMARY KEY (announcement_id, admin_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_announcements_live ON announcements(enabled, publish_at, expires_at);
+`
 
 // m0009ModelRateOverride 把售价倍率从「按用户」下沉到「按模型」(见 PLAN.md §2):
 //

@@ -510,3 +510,36 @@ export interface ProbeCheck {
   ok: boolean;
   detail?: string;
 }
+
+/* —— 通知/公告 —— */
+
+export type AnnouncementLevel = 'info' | 'warn' | 'danger';
+
+/** 公告(管理员列表带已读计数;用户面弹窗读同一结构但无计数)。 */
+export interface AnnouncementItem {
+  id: number;
+  title: string;
+  body: string;
+  level: AnnouncementLevel;
+  enabled: boolean;
+  /** 到点才可见;null = 立即发布 */
+  publishAt: string | null;
+  /** 到点即失效;null = 永不过期 */
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** 已确认人数(仅管理员列表) */
+  readCount?: number;
+  /** 站点普通用户总数(仅管理员列表) */
+  userTotal?: number;
+}
+
+/** 创建/更新公告的提交体。 */
+export interface AnnouncementDraft {
+  title: string;
+  body: string;
+  level: AnnouncementLevel;
+  enabled: boolean;
+  publishAt: string | null;
+  expiresAt: string | null;
+}

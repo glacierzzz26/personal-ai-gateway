@@ -359,9 +359,11 @@ body {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
-  /* 内嵌在窄区块里(如 Dashboard 左栏),1366 下横向空间约 700px;
-     单元格一律 nowrap,内边距稍大就会把表撑出滚动条。 */
-  table-layout: auto;
+  /* 内嵌在窄区块里(如 Dashboard 左栏),1366 下横向空间约 700px。
+     fixed 布局 + 单元格截断:列宽由表头首行的 width 决定,超长内容以省略号收尾
+     (悬浮 title 显示全文),故表格永不超过容器宽度,不产生横向滚动框。
+     通道名列吃 30%,其余 6 列均分剩余 70%。 */
+  table-layout: fixed;
 }
 .gw-table th {
   text-align: left;
@@ -370,7 +372,8 @@ body {
   color: var(--gw-text-3);
   padding: 10px 12px;
   border-bottom: 1px solid var(--gw-border);
-  white-space: nowrap;
+  /* 表头可折行 —— fixed 布局下列宽固定,nowrap 表头会溢出单元格 */
+  white-space: normal;
   background: var(--gw-card);
 }
 .gw-table td {
@@ -378,6 +381,12 @@ body {
   border-bottom: 1px solid var(--gw-border);
   color: var(--gw-text-2);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 首列(渠道名)最可能超长,分给更多宽度;宽度须落在表头首行才生效 */
+.gw-table th:first-child {
+  width: 30%;
 }
 /*
  * 首末列留白:区块 body 无 padding,首列若也贴边,文字会直接顶到卡片边框上。
@@ -585,7 +594,7 @@ body {
   word-break: break-all;
 }
 
-/* 代码块 */
+/* 代码块:长行折行显示,不出现横向滚动框 */
 .gw-pre {
   font-family: var(--gw-mono);
   font-size: 13px;
@@ -594,8 +603,8 @@ body {
   border: 1px solid var(--gw-border);
   border-radius: var(--gw-r-card);
   padding: 15px;
-  overflow-x: auto;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
   margin: 0;
   color: var(--gw-text);
 }
@@ -776,9 +785,8 @@ tr.gw-drop-after > td {
 .gw-palette input::placeholder {
   color: var(--gw-text-3);
 }
+/* 结果列表:页面数量有界(见 nav.tsx),让其自然撑开,不出现纵向滚动框 */
 .gw-p-list {
-  max-height: 340px;
-  overflow-y: auto;
   padding: 7px;
 }
 .gw-p-item {

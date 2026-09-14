@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Card, Col, Empty, Row, Segmented, Space, Table } from 'antd';
+import { Card, Col, Empty, Row, Segmented, Space, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
@@ -167,7 +167,10 @@ export default function Me() {
         );
       },
     },
-    { title: '模型', dataIndex: 'model', render: v => <span className="gw-mono">{v}</span> },
+    {
+      title: '模型', dataIndex: 'model', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
+    },
     { title: '令牌', dataIndex: 'tokenName', width: 116, ellipsis: true, render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span> },
     { title: '输入', dataIndex: 'inTokens', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     { title: '输出', dataIndex: 'outTokens', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.k(v)}</span> },
@@ -332,7 +335,6 @@ export default function Me() {
             loading={logsQ.isFetching && logs.length === 0}
             dataSource={logs}
             columns={logColumns}
-            scroll={{ x: 'max-content' }}
             locale={{
               emptyText: logsQ.isError ? (
                 <ErrorState title="日志加载失败" desc="无法读取请求日志。" onRetry={() => void logsQ.refetch()} />

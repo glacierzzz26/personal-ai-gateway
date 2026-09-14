@@ -436,8 +436,9 @@ export default function Routing() {
       render: (_, __, i) => <span {...handleProps(i ?? 0)} aria-label="拖动调整顺序">⋮⋮</span>,
     },
     {
-      // 顺序号并入名称列(拖动柄已表达先后,序号只是辅助)
-      title: '名称', dataIndex: 'name', width: 170,
+      // 顺序号并入名称列(拖动柄已表达先后,序号只是辅助)。
+      // 不设 width:弹性列吸收剩余宽度,表格在 tableLayout="fixed" 下不横向溢出。
+      title: '名称', dataIndex: 'name',
       render: (v, r, i) => (
         <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
           <span className="gw-num" style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>{i! + 1}</span>
@@ -573,7 +574,7 @@ export default function Routing() {
               dataSource={rules}
               columns={columns}
               pagination={false}
-              scroll={{ x: 'max-content' }}
+              tableLayout="fixed"
               onRow={onRow}
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无规则" /> }}
             />

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Empty, Table } from 'antd';
+import { Button, Empty, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
@@ -203,7 +203,10 @@ export default function Dashboard() {
 
   const logCols: ColumnsType<RequestLogItem> = [
     { title: '时间', dataIndex: 'ts', width: 92, render: v => <span className="gw-mono" style={{ fontSize: 13 }}>{String(v).slice(11, 19)}</span> },
-    { title: '模型', dataIndex: 'model', render: v => <span className="gw-mono" style={{ fontSize: 13.5 }}>{v}</span> },
+    {
+      title: '模型', dataIndex: 'model', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono" style={{ fontSize: 13.5 }}>{v}</span></Tooltip>,
+    },
     { title: '渠道', dataIndex: 'channelName', width: 128, ellipsis: true },
     { title: '令牌', dataIndex: 'tokenName', width: 116, ellipsis: true, render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v}</span> },
     {
@@ -375,7 +378,7 @@ export default function Dashboard() {
                 />
               </BlockBody>
             ) : (
-              <div style={{ overflowX: 'auto' }}>
+              <div>
                 <table className="gw-table">
                   <thead>
                     <tr>
@@ -389,7 +392,7 @@ export default function Dashboard() {
                       <tr key={ch.id} className="clickable" tabIndex={0}
                         onClick={() => navigate('/channels')}
                         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/channels'); } }}>
-                        <td className="name">{ch.name}</td>
+                        <td className="name" title={ch.name}>{ch.name}</td>
                         <td>{ch.provider}</td>
                         <td>
                           <StatusDot status={ch.status} />
@@ -537,7 +540,6 @@ export default function Dashboard() {
               loading={logLoading && recent.length === 0}
               dataSource={recent}
               columns={logCols}
-              scroll={{ x: 'max-content' }}
               pagination={false}
               locale={{
                 emptyText: logError ? (

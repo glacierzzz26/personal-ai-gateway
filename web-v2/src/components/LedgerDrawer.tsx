@@ -63,7 +63,6 @@ export default function LedgerDrawer({ open, logs, onClose }: {
           dataSource={logs}
           columns={columns}
           pagination={false}
-          scroll={{ x: 'max-content' }}
         />
       )}
     </Drawer>

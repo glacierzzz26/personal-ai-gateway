@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Input, Select, Table } from 'antd';
+import { Button, Input, Select, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import { Block as BlockCard, Blocks } from '@/components/Block';
@@ -73,7 +73,10 @@ export default function Logs() {
       render: v => <span className="gw-mono">{v}</span>,
     },
     { title: '状态', dataIndex: 'statusCode', width: 88, render: statusCell },
-    { title: '模型', dataIndex: 'model', render: v => <span className="gw-mono">{v}</span> },
+    {
+      title: '模型', dataIndex: 'model', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
+    },
     {
       title: '渠道', dataIndex: 'channelName', width: 98, ellipsis: true,
       render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span>,
@@ -170,7 +173,6 @@ export default function Logs() {
             loading={(isLoading || isFetching) && logs.length === 0}
             dataSource={logs}
             columns={columns}
-            scroll={{ x: 'max-content' }}
             locale={{
               emptyText: isError ? (
                 <ErrorState

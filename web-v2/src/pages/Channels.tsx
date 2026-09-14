@@ -342,8 +342,9 @@ export default function Channels() {
 
   const columns: ColumnsType<Channel> = [
     {
-      // 渠道名 / 供应商 / Base URL 三合一 —— 都是「这条渠道是什么」,同格堆叠
-      title: '渠道', dataIndex: 'name', width: 248,
+      // 渠道名 / 供应商 / Base URL 三合一 —— 都是「这条渠道是什么」,同格堆叠。
+      // 不设 width:弹性列吸收剩余宽度,表格在 tableLayout="fixed" 下不横向溢出。
+      title: '渠道', dataIndex: 'name',
       render: (v, r) => (
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</div>
@@ -505,7 +506,7 @@ export default function Channels() {
             loading={isLoading && channels.length === 0}
             dataSource={list}
             columns={columns}
-            scroll={{ x: 'max-content' }}
+            tableLayout="fixed"
             pagination={channels.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'default' } : false}
             locale={{ emptyText: emptyNode }}
           />
@@ -623,7 +624,7 @@ export default function Channels() {
               <span>本次新增 {syncRes.added}、已存在 {syncRes.updated}。新同步的模型默认停用，需到「模型广场」定价后启用。</span>
             </div>
             {syncRes.models.length > 0 ? (
-              <pre className="gw-pre" style={{ maxHeight: 320, overflow: 'auto' }}>
+              <pre className="gw-pre">
                 {syncRes.models.join('\n')}
               </pre>
             ) : (
@@ -672,7 +673,7 @@ export default function Channels() {
               </span>
             </div>
             {pricingRes.result.models.length > 0 && (
-              <pre className="gw-pre" style={{ maxHeight: 280, overflow: 'auto' }}>
+              <pre className="gw-pre">
                 {pricingRes.result.models.join('\n')}
               </pre>
             )}

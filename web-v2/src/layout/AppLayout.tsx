@@ -4,6 +4,7 @@ import { App, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
+import AnnouncementModal from '@/components/AnnouncementModal';
 import CmdK from '@/layout/CmdK';
 import { IconFold } from '@/components/icons';
 import { NAV_GROUPS, crumbOf, visibleNav } from '@/layout/nav';
@@ -367,6 +368,9 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* 全站公告:登录后自动拉取未读公告并弹窗(见 AnnouncementModal) */}
+      <AnnouncementModal />
 
       {/* 用户菜单：自己定位，避免 antd Dropdown 的默认阴影与圆角 */}
       {userMenuOpen && (

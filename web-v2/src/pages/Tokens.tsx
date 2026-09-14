@@ -279,7 +279,7 @@ function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => v
         把下面整段合并进 <span className="gw-mono">~/.claude/settings.json</span> 的顶层(已有 <span className="gw-mono">env</span> 则合并其键值),然后重启 Claude Code。
       </div>
       <div style={{ position: 'relative' }}>
-        <pre className="gw-pre" style={{ maxHeight: 360, overflow: 'auto' }}>
+        <pre className="gw-pre">
           {isLoading ? '生成中…' : (data?.settingsJson ?? '')}
         </pre>
         <Button
@@ -471,14 +471,17 @@ export default function Tokens() {
   const columns: ColumnsType<GatewayToken> = useMemo(() => [
     {
       // 名称 / 归属 / Key 三合一 —— 都是「这个令牌是谁的、长什么样」
-      title: '令牌', dataIndex: 'name', width: 200,
+      // 弹性列(不设 width),配合表格 tableLayout="fixed" 吸收剩余宽度,不横向溢出
+      title: '令牌', dataIndex: 'name',
       render: (v, r) => (
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b>
+        <div style={{ minWidth: 0, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Tooltip title={v}>
+              <b style={{ fontWeight: 500, color: 'var(--gw-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{v}</b>
+            </Tooltip>
             {isAdmin && (r.ownerId == null
-              ? <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>全局</span>
-              : <span className="gw-badge">{r.ownerName}</span>)}
+              ? <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5, flexShrink: 0 }}>全局</span>
+              : <span className="gw-badge" style={{ flexShrink: 0 }}>{r.ownerName}</span>)}
           </div>
           <div className="gw-mono" style={{ fontSize: 12, color: 'var(--gw-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {r.keyMasked}
@@ -527,7 +530,7 @@ export default function Tokens() {
     { title: '状态', dataIndex: 'status', width: 78, render: v => <StatusDot status={v} /> },
     {
       // 高频（生成配置/编辑）外露，低频（自检/删除）收进「更多」
-      title: '操作', align: 'right', width: 156,
+      title: '操作', align: 'right', width: 172,
       render: (_, r) => {
         const menu: MenuProps = {
           items: [
@@ -620,7 +623,7 @@ export default function Tokens() {
             loading={isLoading && tokens.length === 0}
             dataSource={view}
             columns={columns}
-            scroll={{ x: 'max-content' }}
+            tableLayout="fixed"
             pagination={false}
             locale={{ emptyText: emptyNode }}
           />

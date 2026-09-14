@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import {
-  IconChannels, IconDashboard, IconLogs, IconModels, IconPricing, IconRouting, IconSettings, IconTokens, IconUsers,
+  IconChannels, IconDashboard, IconLogs, IconMegaphone, IconModels, IconPricing, IconRouting, IconSettings, IconTokens, IconUsers,
   IconWallet,
 } from '@/components/icons';
 
@@ -29,6 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: '/tokens', label: '访问令牌', group: '访问', icon: <IconTokens />, adminOnly: false },
   { key: '/logs', label: '请求日志', group: '观测', icon: <IconLogs />, adminOnly: true },
   { key: '/users', label: '用户管理', group: '系统', icon: <IconUsers />, adminOnly: true },
+  { key: '/announcements', label: '公告管理', group: '系统', icon: <IconMegaphone />, adminOnly: true },
   { key: '/settings', label: '系统设置', group: '系统', icon: <IconSettings />, adminOnly: true },
 ];
 
