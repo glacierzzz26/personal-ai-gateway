@@ -168,6 +168,7 @@ func (s *Server) modelsListRead() ([]domain.ModelRead, error) {
 			Capabilities:  m.Capabilities, Enabled: m.Enabled, Offers: decorated,
 			OfficialVendor: m.OfficialVendor, OfficialModelName: m.OfficialModelName,
 			InferredVendor: pricing.InferVendor(m.Name),
+			RateOverride:   m.RateOverride,
 		}
 		if u, ok := today[m.PublicName()]; ok {
 			mr.TodayRequests = u.Requests

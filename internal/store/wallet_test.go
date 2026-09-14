@@ -66,8 +66,8 @@ func TestSettleRequestNoWallet(t *testing.T) {
 	}
 }
 
-// TestTopupAndRateOverride 充值与倍率覆盖的读写往返。
-func TestTopupAndRateOverride(t *testing.T) {
+// TestTopupBalance 充值/调整的读写往返(倍率已按模型存,不在账号上)。
+func TestTopupBalance(t *testing.T) {
 	st := newTestStore(t)
 	u, _ := st.CreateAdmin("u", "h", domain.RoleUser)
 	rec, err := st.TopupBalance(u.ID, 5, "first")
@@ -82,16 +82,9 @@ func TestTopupAndRateOverride(t *testing.T) {
 	if bal != 3 {
 		t.Fatalf("balance = %v, want 3", bal)
 	}
-	rate := 0.5
-	mustNoErr(t, st.SetRateOverride(u.ID, &rate), "set rate")
 	users, err := st.ListUsers()
 	mustNoErr(t, err, "list users")
-	if len(users) != 1 || users[0].RateOverride == nil || *users[0].RateOverride != 0.5 {
+	if len(users) != 1 || users[0].BalanceUsd != 3 {
 		t.Fatalf("users = %+v", users)
-	}
-	mustNoErr(t, st.SetRateOverride(u.ID, nil), "clear rate")
-	users, _ = st.ListUsers()
-	if users[0].RateOverride != nil {
-		t.Fatalf("rate override should be cleared: %+v", users[0])
 	}
 }

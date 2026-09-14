@@ -62,15 +62,12 @@ func TestMeEndpointsAndWallet(t *testing.T) {
 	code, _ = doJSON(t, cust, http.MethodGet, base+"/api/v1/overview", nil)
 	mustStatus(t, code, http.StatusForbidden, "cust → /overview")
 
-	// 给 admin 自己设倍率应被拒(只有客户账号有钱包/倍率)。
-	code, _ = doJSON(t, admin, http.MethodPatch, base+"/api/v1/users/1/rate",
-		map[string]any{"rate": 0.5})
-	mustStatus(t, code, http.StatusBadRequest, "rate on admin")
-
-	// admin 给客户设倍率成功,流水接口可见充值记录。
-	code, body = doJSON(t, admin, http.MethodPatch,
+	// 用户级倍率接口已随「倍率改按模型」移除(迁移 v9):旧路由应 404。
+	code, _ = doJSON(t, admin, http.MethodPatch,
 		base+"/api/v1/users/"+strconv.FormatInt(custID, 10)+"/rate", map[string]any{"rate": 2.0})
-	mustStatus(t, code, http.StatusOK, "rate on cust: "+string(body))
+	mustStatus(t, code, http.StatusNotFound, "removed user-rate route")
+
+	// 流水接口可见充值记录。
 	code, body = doJSON(t, admin, http.MethodGet,
 		base+"/api/v1/users/"+strconv.FormatInt(custID, 10)+"/balance-logs", nil)
 	mustStatus(t, code, http.StatusOK, "balance-logs: "+string(body))

@@ -183,59 +183,6 @@ function TopupModal(props: {
   );
 }
 
-/** 售价倍率弹窗:留空 = 回落全局倍率。 */
-function RateModal(props: {
-  user: UserAccount | null;
-  globalRate: number;
-  onCancel: () => void;
-  onSubmit: (id: number, rate: number | null) => Promise<void>;
-}) {
-  const { user, globalRate, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ rate: number | null }>();
-  const [saving, setSaving] = useState(false);
-
-  const submit = async () => {
-    const v = await form.validateFields();
-    if (!user) return;
-    setSaving(true);
-    try {
-      await onSubmit(user.id, v.rate ?? null);
-      form.resetFields();
-    } catch (e) {
-      message.error(`保存失败:${errMsg(e)}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal
-      title={user ? `设置「${user.username}」的售价倍率` : '售价倍率'}
-      open={!!user}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="保存"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
-    >
-      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ rate: user?.rateOverride ?? null }}>
-        <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
-          本站价 = 官方价 × 倍率。留空则跟随全局倍率(当前 <b className="gw-num" style={{ color: 'var(--gw-text)' }}>×{globalRate}</b>)。
-        </div>
-        <Form.Item
-          name="rate" label="倍率覆盖"
-          rules={[{ type: 'number', min: 0.01, message: '需为正数' }]}
-        >
-          <InputNumber style={{ width: '100%' }} precision={2} step={0.1} min={0.01} placeholder="留空=用全局倍率" />
-        </Form.Item>
-      </Form>
-    </Modal>
-  );
-}
-
 /** 令牌上限弹窗:限制该客户自建令牌能授权的额度/RPM 上限(0 = 不限)。 */
 function CeilingModal(props: {
   user: UserAccount | null;
@@ -304,12 +251,9 @@ export default function Users() {
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserAccount | null>(null);
   const [topupUser, setTopupUser] = useState<UserAccount | null>(null);
-  const [rateUser, setRateUser] = useState<UserAccount | null>(null);
   const [ceilingUser, setCeilingUser] = useState<UserAccount | null>(null);
 
   const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
-  const globalRate = settings?.priceMultiplier && settings.priceMultiplier > 0 ? settings.priceMultiplier : 1;
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] });
 
   const adminCount = users.filter(u => u.role === 'admin').length;
@@ -331,13 +275,6 @@ export default function Users() {
     await api.topupUser(id, amount, note);
     message.success(amount >= 0 ? '已充值' : '已扣减');
     setTopupUser(null);
-    refresh();
-  };
-
-  const saveRate = async (id: number, rate: number | null) => {
-    await api.setUserRate(id, rate);
-    message.success('倍率已保存');
-    setRateUser(null);
     refresh();
   };
 
@@ -378,20 +315,6 @@ export default function Users() {
         ),
     },
     {
-      title: '售价倍率', key: 'rate', width: 96, align: 'right',
-      render: (_, r) => {
-        if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
-        const own = r.rateOverride != null;
-        return (
-          <Tooltip title={own ? `覆盖全局倍率(全局 ×${globalRate})` : '跟随全局倍率'}>
-            <span className="gw-num" style={{ color: own ? 'var(--gw-text)' : 'var(--gw-text-3)' }}>
-              ×{own ? r.rateOverride : globalRate}{own ? '' : '(全局)'}
-            </span>
-          </Tooltip>
-        );
-      },
-    },
-    {
       title: '令牌上限', key: 'ceiling', width: 110, align: 'right',
       render: (_, r) => {
         if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
@@ -427,10 +350,6 @@ export default function Users() {
             <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无钱包'}
               onClick={() => setTopupUser(r)}>
               充值
-            </Button>
-            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无售价倍率'}
-              onClick={() => setRateUser(r)}>
-              倍率
             </Button>
             <Dropdown
               trigger={['click']}
@@ -505,7 +424,6 @@ export default function Users() {
       <CreateUserModal open={creating} onCancel={() => setCreating(false)} onSubmit={create} />
       <ResetPasswordModal user={resetting} onCancel={() => setResetting(null)} onSubmit={resetPw} />
       <TopupModal user={topupUser} onCancel={() => setTopupUser(null)} onSubmit={topup} />
-      <RateModal user={rateUser} globalRate={globalRate} onCancel={() => setRateUser(null)} onSubmit={saveRate} />
       <CeilingModal user={ceilingUser} onCancel={() => setCeilingUser(null)} onSubmit={saveCeiling} />
     </div>
   );

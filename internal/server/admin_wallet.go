@@ -42,39 +42,6 @@ func (s *Server) handleUserTopup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec)
 }
 
-// handleUserRateOverride 设/清某用户的售价倍率覆盖(body: {"rate": 0.5} 或 {"rate": null})。
-func (s *Server) handleUserRateOverride(w http.ResponseWriter, r *http.Request) {
-	id, ok := paramID(r, "id")
-	if !ok {
-		apiErr(w, http.StatusBadRequest, "validation", "bad user id")
-		return
-	}
-	u, _, err := s.st.AdminByID(id)
-	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	if u.Role != domain.RoleUser {
-		apiErr(w, http.StatusBadRequest, "validation", "only customer accounts have a rate override")
-		return
-	}
-	var req struct {
-		Rate *float64 `json:"rate"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if req.Rate != nil && *req.Rate <= 0 {
-		apiErr(w, http.StatusBadRequest, "validation", "rate must be positive (or null to clear)")
-		return
-	}
-	if err := s.st.SetRateOverride(id, req.Rate); err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rate": req.Rate})
-}
-
 // handleUserBalanceLogs 某用户的账变流水(管理员审计)。
 func (s *Server) handleUserBalanceLogs(w http.ResponseWriter, r *http.Request) {
 	id, ok := paramID(r, "id")

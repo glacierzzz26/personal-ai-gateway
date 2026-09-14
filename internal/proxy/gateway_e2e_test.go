@@ -80,6 +80,22 @@ func (e *e2eEnv) addModelOffer(model string, channelID int64, prio int) int64 {
 	return m.ID
 }
 
+// setModelRate 给模型设售价倍率(定价按模型,不再是用户级)。
+func (e *e2eEnv) setModelRate(modelID int64, rate float64) {
+	e.t.Helper()
+	m, err := e.st.GetModel(modelID)
+	if err != nil {
+		e.t.Fatalf("get model %d: %v", modelID, err)
+	}
+	_, err = e.st.UpdateModel(modelID, domain.ModelInput{
+		Name: m.Name, ContextWindow: m.ContextWindow, Capabilities: m.Capabilities,
+		Enabled: boolPtr(m.Enabled), RateOverride: domain.SetFloat(rate),
+	})
+	if err != nil {
+		e.t.Fatalf("set model rate: %v", err)
+	}
+}
+
 // addToken 建高额令牌返回明文(请求鉴权头用)。
 func (e *e2eEnv) addToken(name string, allowed []string, quota float64) string {
 	e.t.Helper()
@@ -215,17 +231,14 @@ func TestE2EWalletChargeAndGate(t *testing.T) {
 	e := newE2E(t)
 	up := openaiUpstream(t, "pong", http.StatusOK)
 	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
-	e.addModelOffer("m-w", chID, 1)
+	mid := e.addModelOffer("m-w", chID, 1)
 
 	u, err := e.st.CreateAdmin("cust", "h", domain.RoleUser)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	// 倍率 2.0:售价 = 成本 × 2。
-	rate := 2.0
-	if err := e.st.SetRateOverride(u.ID, &rate); err != nil {
-		t.Fatalf("set rate: %v", err)
-	}
+	// 倍率 2.0(按模型):售价 = 成本 × 2。
+	e.setModelRate(mid, 2.0)
 	// 先只给一点点余额,让一笔就扣穿。
 	if _, err := e.st.TopupBalance(u.ID, 0.00002, "seed"); err != nil {
 		t.Fatalf("topup: %v", err)

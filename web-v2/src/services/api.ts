@@ -56,10 +56,6 @@ export const api = {
   topupUser(id: number, amount: number, note?: string): Promise<BalanceLogItem> {
     return http.post(`/users/${id}/topup`, { amount, note });
   },
-  /** 设/清客户的售价倍率覆盖(rate=null 表示回落全局倍率) */
-  setUserRate(id: number, rate: number | null): Promise<unknown> {
-    return http.patch(`/users/${id}/rate`, { rate });
-  },
   /** 设客户名下令牌的额度/RPM 上限(0 = 不限);用户自助建令牌不得超过此值 */
   setUserCeiling(id: number, quotaUsd: number, rpmLimit: number): Promise<unknown> {
     return http.patch(`/users/${id}/ceiling`, { quotaUsd, rpmLimit });

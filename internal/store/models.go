@@ -14,7 +14,7 @@ import (
 // modelSelect models 表读列清单(与 scanModel 的扫描顺序严格一致)。
 // 新增列时只需改这里 + scanModel,避免四处内联 SELECT 漂移。
 const modelSelect = `SELECT id,name,display_name,official_vendor,official_model_name,
-	context_window,capabilities,enabled,created_at,updated_at FROM models`
+	context_window,capabilities,enabled,rate_override,created_at,updated_at FROM models`
 
 // CreateModel 新建目录模型(模型名唯一)。
 func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
@@ -38,10 +38,10 @@ func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
 		return domain.ModelRow{}, ErrConflict
 	}
 	res, err := s.db.Exec(`INSERT INTO models (name, display_name, context_window, capabilities, enabled,
-		official_vendor, official_model_name, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
+		official_vendor, official_model_name, rate_override, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled),
-		vendor, officialName, now, now)
+		vendor, officialName, nullFloatPtr(in.RateOverride.Ptr()), now, now)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ModelRow{}, ErrConflict
@@ -96,8 +96,9 @@ func canonicalModelKey(s string) string {
 // 同一模型被不同渠道以带前缀/裸名上报时归到一行,而不是各建一行。
 //
 // 保守闸门:仅当「一方本就是无前缀裸名」才跨后缀归并 —— 这样
-//   deepseek/deepseek-v4.1-flash 与 deepseek-v4.1-flash 归并(正中用户场景),
-//   而 openai/gpt-4o 与 anthropic/gpt-4o(两边都带前缀)不会误合并,交给手工合并。
+//
+//	deepseek/deepseek-v4.1-flash 与 deepseek-v4.1-flash 归并(正中用户场景),
+//	而 openai/gpt-4o 与 anthropic/gpt-4o(两边都带前缀)不会误合并,交给手工合并。
 func (s *Store) GetModelByCanonical(raw string) (domain.ModelRow, error) {
 	if m, err := s.GetModelByName(raw); err == nil {
 		return m, nil
@@ -197,16 +198,18 @@ func (s *Store) UpdateModel(id int64, in domain.ModelInput) (domain.ModelRow, er
 	if in.OfficialModelName != nil {
 		officialName = strings.TrimSpace(*in.OfficialModelName)
 	}
+	// 三态:未传保持原值,显式 null 清空(回落全局),数值覆盖。
+	rate := in.RateOverride.Apply(cur.RateOverride)
 	if taken, err := s.publicNameTaken(in.Name, display, id); err != nil {
 		return domain.ModelRow{}, err
 	} else if taken {
 		return domain.ModelRow{}, ErrConflict
 	}
 	res, err := s.db.Exec(`UPDATE models SET name=?, display_name=?, context_window=?, capabilities=?, enabled=?,
-		official_vendor=?, official_model_name=?, updated_at=?
+		official_vendor=?, official_model_name=?, rate_override=?, updated_at=?
 		WHERE id=?`,
 		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled),
-		vendor, officialName, formatRFC3339(s.nowUTC()), id)
+		vendor, officialName, nullFloatPtr(rate), formatRFC3339(s.nowUTC()), id)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ModelRow{}, ErrConflict
@@ -323,13 +326,18 @@ func scanModel(row scanner) (domain.ModelRow, error) {
 	var m domain.ModelRow
 	var caps string
 	var enabled int
+	var rate sql.NullFloat64
 	var created, updated string
 	if err := row.Scan(&m.ID, &m.Name, &m.DisplayName, &m.OfficialVendor, &m.OfficialModelName,
-		&m.ContextWindow, &caps, &enabled, &created, &updated); err != nil {
+		&m.ContextWindow, &caps, &enabled, &rate, &created, &updated); err != nil {
 		return domain.ModelRow{}, err
 	}
 	m.Capabilities = decodeCaps(caps)
 	m.Enabled = enabled == 1
+	if rate.Valid {
+		v := rate.Float64
+		m.RateOverride = &v
+	}
 	m.CreatedAt, _ = parseTime(created)
 	m.UpdatedAt, _ = parseTime(updated)
 	return m, nil
@@ -582,6 +590,30 @@ func (s *Store) ChannelEnabled(id int64) (bool, error) {
 		return false, err
 	}
 	return e == 1, nil
+}
+
+// UsableModelIDs 目录中「真正可调用」的模型 id 集合:启用模型 ∩ 至少一个启用 offer ∩ 渠道启用。
+// 与数据面 /v1/models 的口径(EnabledModelsWithOffers)同源 —— 用户面据此过滤,
+// 保证「列出来的就能调通」,不会出现启用模型但供给源/渠道被停用时的「列出却 404」。
+func (s *Store) UsableModelIDs() (map[int64]bool, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT m.id
+		FROM models m
+		JOIN model_offers o ON o.model_id = m.id
+		JOIN channels c ON c.id = o.channel_id
+		WHERE m.enabled=1 AND o.enabled=1 AND c.enabled=1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // EnabledModelsWithOffers 目录中「enabled 且有启用 offer」的模型(驱动 GET /v1/models)。

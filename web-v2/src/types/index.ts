@@ -117,6 +117,8 @@ export interface ModelCatalogItem {
   officialModelName?: string;
   /** 由模型名推断出的厂商(空=判不出)。聚合渠道据此自动匹配厂商官方价 */
   inferredVendor?: Provider;
+  /** 模型级售价倍率;缺省/空=跟随全局 settings.priceMultiplier */
+  rateOverride?: number | null;
 }
 
 /** 模型创建/编辑入参 */
@@ -130,6 +132,8 @@ export interface ModelDraft {
   /** 官方价绑定;不传=保持原值,空串=清空 */
   officialVendor?: string;
   officialModelName?: string;
+  /** 售价倍率;null=清空覆盖回落全局,不传=保持原值 */
+  rateOverride?: number | null;
 }
 
 /** 用户面模型清单一行(GET /models,role=user)。
@@ -331,7 +335,7 @@ export interface Settings {
   /** 人民币→美元换算率(手工维护,如 1 元 = 0.139 美元)。仅当官方价原币种与计价币种
    *  不一致时才用于折算;0=未设,此时拒绝折算(不臆造汇率)。 */
   usdPerCny?: number;
-  /** 全局售价倍率:本站价 = 官方价 × 倍率(用户级 rateOverride 优先;模型未绑官方价时回落成本 × 倍率)。<=0/缺省 = 1.0 不加价。 */
+  /** 全局售价倍率:本站价 = 官方价 × 倍率(模型级 rateOverride 优先;模型未绑官方价时回落成本 × 倍率)。<=0/缺省 = 1.0 不加价。 */
   priceMultiplier?: number;
 }
 
@@ -418,8 +422,6 @@ export interface UserAccount {
   createdAt: string;
   /** 钱包余额(计价币种);仅普通用户有钱包,管理员恒为 0 */
   balanceUsd: number;
-  /** 售价倍率覆盖(空 = 用全局 settings.priceMultiplier) */
-  rateOverride?: number | null;
   /** 该用户名下令牌的额度上限(0 = 不限);只约束普通用户自助建令牌 */
   tokenQuotaCeiling: number;
   /** 该用户名下令牌的 RPM 上限(0 = 不限) */

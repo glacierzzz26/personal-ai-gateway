@@ -33,31 +33,37 @@ type UserPrice struct {
 	Currency  string  `json:"currency"`
 }
 
-// userModelsList 客户可见模型 = 启用 ∩ 允许名单;价格取官方价 × 倍率。
+// userModelsList 客户可见模型 = 可用(启用 ∩ 有启用供给源 ∩ 渠道启用) ∩ 允许名单;
+// 价格取官方价 × 倍率,倍率按模型定(全站同模型同价,与归属用户无关)。
 // allowed 为令牌的 allowed_models(空 = 不过滤,仅用于无令牌的登录态预览)。
-func (s *Server) userModelsList(owner domain.AdminUser, allowed []string) ([]UserModelView, error) {
+func (s *Server) userModelsList(allowed []string) ([]UserModelView, error) {
 	settings, err := s.st.GetSettings()
 	if err != nil {
 		return nil, err
-	}
-	rate := settings.PriceMultiplier
-	if owner.Role == domain.RoleUser {
-		if r, err := s.st.GetRateOverride(owner.ID); err == nil && r != nil {
-			rate = *r
-		}
 	}
 	models, err := s.st.ListModels()
 	if err != nil {
 		return nil, err
 	}
+	// 与数据面同口径的「可调用」集合:光 m.Enabled 不够 —— 模型启用但供给源/渠道被停用时,
+	// 数据面会因 EnabledModelsWithOffers 过滤掉它,用户面若仍列出就是「看得见调不通」。
+	usable, err := s.st.UsableModelIDs()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]UserModelView, 0, len(models))
 	for _, m := range models {
-		if !m.Enabled {
+		if !m.Enabled || !usable[m.ID] {
 			continue
 		}
 		name := m.PublicName()
 		if !allowedName(allowed, name, m.Name) {
 			continue
+		}
+		// 倍率:该模型覆盖 ?? 全局(与 proxy.chargeUsd 同源,避免展示与结算漂移)。
+		rate := settings.PriceMultiplier
+		if m.RateOverride != nil {
+			rate = *m.RateOverride
 		}
 		v := UserModelView{
 			Name: name, ContextWindow: m.ContextWindow, Capabilities: m.Capabilities,

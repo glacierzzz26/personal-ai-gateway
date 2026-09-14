@@ -201,7 +201,6 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("DELETE /api/v1/users/{id}", adm(s.handleUserDelete))
 	// 钱包管理:管理员给客户充值 / 调倍率 / 限额 / 查流水
 	m.HandleFunc("POST /api/v1/users/{id}/topup", adm(s.handleUserTopup))
-	m.HandleFunc("PATCH /api/v1/users/{id}/rate", adm(s.handleUserRateOverride))
 	m.HandleFunc("PATCH /api/v1/users/{id}/ceiling", adm(s.handleUserCeiling))
 	m.HandleFunc("GET /api/v1/users/{id}/balance-logs", adm(s.handleUserBalanceLogs))
 

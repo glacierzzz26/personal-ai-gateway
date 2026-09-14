@@ -24,7 +24,22 @@ var migrations = []string{
 	m0007RelayWallet,
 	// v8:用户令牌上限(普通用户自助建令牌时不得超过管理员设的天花板)
 	m0008UserTokenCeiling,
+	// v9:模型级售价倍率覆盖(定价从「按用户」改为「按模型」,全站同模型同价)
+	m0009ModelRateOverride,
 }
+
+// m0009ModelRateOverride 把售价倍率从「按用户」下沉到「按模型」(见 PLAN.md §2):
+//
+//	models.rate_override  该模型的售价倍率;NULL = 回落全局 settings.price_multiplier
+//
+// 语义:本站价 = 官方价 × 倍率,而倍率只由模型决定 —— 同一模型对所有客户同一价。
+// 纯附加、默认 NULL,存量库行为不变(全部回落全局倍率)。
+//
+// 注:迁移 v7 的 admins.rate_override(用户级倍率)已废弃不再读写,列保留不删
+// (SQLite 删列代价大且无收益);新库不再写入该列。
+const m0009ModelRateOverride = `
+ALTER TABLE models ADD COLUMN rate_override REAL;
+`
 
 // m0008UserTokenCeiling 给「用户自助建令牌」加天窗,避免客户绕过额度约束:
 // 令牌额度只是子预算,但用户自己可以把它设成 0(不限)或极大值,分闸形同虚设。
@@ -41,7 +56,7 @@ ALTER TABLE admins ADD COLUMN token_rpm_ceiling   INTEGER NOT NULL DEFAULT 0;
 // m0007RelayWallet 把网关从「个人自用」推向「中转站」的存储基础(见 PLAN.md §3):
 //
 //	admins.balance_usd    用户钱包余额(仅 role=user 扣减;admin 即站主自己,不扣)
-//	admins.rate_override  该用户的售价倍率;NULL = 用全局 settings.price_multiplier
+//	admins.rate_override  【已废弃,见 v9】用户级售价倍率;倍率现按模型存(models.rate_override)
 //	balance_logs          账变流水(钱包不能只有当前值,充值/扣费都要可审计)
 //	request_logs.charge_usd  该笔「售价」(客户付你);与 cost(你付上游)分离,差额即毛利
 //	request_logs.owner_id    归属冗余,免 JOIN 即可按 owner 作用域查询;存量行由 tokens 回填

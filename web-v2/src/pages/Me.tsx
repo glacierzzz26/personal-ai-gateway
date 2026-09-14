@@ -14,11 +14,11 @@ import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { useCurrency } from '@/stores/currency';
-import { CAP_LABEL, FAIL_LABEL, STATUS_CLIENT_CLOSED, TONE_COLOR, classifyError, fmt } from '@/utils/format';
+import { FAIL_LABEL, STATUS_CLIENT_CLOSED, TONE_COLOR, classifyError, fmt } from '@/utils/format';
 import type { Tone } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
 import type { EChartsOption } from 'echarts';
-import type { RequestLogItem, UsageRow, UserModelItem, UserPrice } from '@/types';
+import type { RequestLogItem, UsageRow } from '@/types';
 
 const okCode = (code: number) => code >= 100 && code < 400;
 
@@ -42,23 +42,6 @@ function balanceTip(balance: number): string {
   if (balance <= 0) return '余额不足，调用已被拒绝';
   if (balance < 10) return '余额偏低，请及时充值';
   return '本页所有金额为本站售价口径';
-}
-
-/** 每百万 token 双行价：官方价(划线原价) + 本站价(实付)。缺失时退化为说明文字。 */
-function PricePair({ official, retail }: { official?: UserPrice; retail?: UserPrice }) {
-  if (!official || !retail) {
-    return <span style={{ color: 'var(--gw-text-3)', fontSize: 12 }}>价格待定</span>;
-  }
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ color: 'var(--gw-text-3)', fontSize: 12, textDecoration: 'line-through' }}>
-        {fmt.price(official.input)} / {fmt.price(official.output)}
-      </span>
-      <span className="gw-num" style={{ fontWeight: 600 }}>
-        {fmt.price(retail.input)} / {fmt.price(retail.output)}
-      </span>
-    </div>
-  );
 }
 
 /** 我的账户 —— 普通用户自助面：余额、用量、请求日志（作用域锁本人）。 */
@@ -85,7 +68,6 @@ export default function Me() {
     queryKey: ['me', 'logs', page, size],
     queryFn: () => api.getMyLogs({}, page, size),
   });
-  const modelsQ = useQuery({ queryKey: ['me', 'models'], queryFn: api.getMyModels });
   // 令牌额度自检(告警条用):用户面 /tokens 只返回本人名下,天然安全。
   const tokensQ = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
 
@@ -101,7 +83,6 @@ export default function Me() {
   const series = usageQ.data?.days ?? [];
   const logs = logsQ.data?.items ?? [];
   const total = logsQ.data?.total ?? 0;
-  const models = modelsQ.data ?? [];
   const ledger = balanceQ.data?.logs ?? [];
 
   // 阈值提醒:余额耗尽/偏低 + 令牌额度逼近(与管理员 Dashboard 同一套阈值)。
@@ -194,32 +175,6 @@ export default function Me() {
     { title: '花费', dataIndex: 'chargeUsd', align: 'right', width: 92, render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
-  /*
-   * 账变流水:卡片内只做「近期摘要」,完整列表进 LedgerDrawer。
-   * 右栏 xl 下仅约 322px,横向摆不下有效列宽(时间/类型/金额/余额合计 ≈292px+),
-   * 故不再把表格塞进窄栏。
-   */
-  const modelColumns: ColumnsType<UserModelItem> = [
-    { title: '模型', dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
-    { title: '上下文', dataIndex: 'contextWindow', width: 100, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
-    {
-      title: '能力', dataIndex: 'capabilities', width: 176,
-      render: (caps: string[]) => caps.length === 0
-        ? <span style={{ color: 'var(--gw-text-3)' }}>—</span>
-        : (
-          <Space size={4} wrap>
-            {caps.map(cp => <span key={cp} className="gw-badge">{CAP_LABEL[cp] ?? cp}</span>)}
-          </Space>
-        ),
-    },
-    {
-      title: '价格 (每百万 Token)', key: 'price',
-      render: (_, r) => r.official && r.retail
-        ? <PricePair official={r.official} retail={r.retail} />
-        : <span style={{ color: 'var(--gw-text-3)', fontSize: 12 }}>{r.priceNote || '价格待定'}</span>,
-    },
-  ];
-
   return (
     <div className="gw-page">
       <PageHeader
@@ -280,30 +235,6 @@ export default function Me() {
           </BlockCard>
         </Blocks>
       )}
-
-      <Blocks style={{ marginTop: 16 }}>
-        <BlockCard>
-          <BlockHead
-            title="可用模型与价格"
-            sub="价格为每百万 Token；划线为官方原价，实价为本站售价"
-          />
-          <Table<UserModelItem>
-            rowKey="name"
-            size="middle"
-            loading={modelsQ.isFetching && models.length === 0}
-            dataSource={models}
-            columns={modelColumns}
-            pagination={false}
-            locale={{
-              emptyText: modelsQ.isError ? (
-                <ErrorState title="模型清单加载失败" desc="无法读取可用模型。" onRetry={() => void modelsQ.refetch()} />
-              ) : (
-                <EmptyState title="暂无可用的模型" desc="请联系站长开通模型后再使用。" />
-              ),
-            }}
-          />
-        </BlockCard>
-      </Blocks>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
         <div style={{ minWidth: 0 }}>

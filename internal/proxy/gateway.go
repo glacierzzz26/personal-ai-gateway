@@ -643,7 +643,8 @@ func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 //
 // 定价模型(PLAN.md §2):本站价 = 官方价 × 倍率 —— 官方价是厂商官网挂牌价,
 // 不是 model_offers 里的成本(成本是你付上游的钱,两者是两回事)。
-// 倍率取归属用户的 rate_override,缺省用全局 settings.PriceMultiplier(<=0 → 1.0)。
+// 倍率取模型级 plan.RateOverride,缺省用全局 settings.PriceMultiplier(<=0 → 1.0)。
+// 倍率按模型定:同一模型对所有客户同一价,不再有用户级倍率(迁移 v9)。
 //
 // 官方价按模型级绑定 (vendor, model) 取(见 engine.Plan)。取不到时 —— 模型未绑定官方价、
 // 官方价未录入、或官方币种与计价币种不一致又没设汇率 —— 回落「成本 × 倍率」:
@@ -654,8 +655,8 @@ func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 func (g *Gateway) chargeUsd(in *inboundReq, plan *engine.Plan, offer domain.OfferRead, tok translate.Usage, settings domain.Settings) (charge float64, wallet bool) {
 	wallet = in.token.OwnerRole == domain.RoleUser
 	rate := settings.PriceMultiplier
-	if in.token.OwnerRateOverride != nil {
-		rate = *in.token.OwnerRateOverride
+	if plan != nil && plan.RateOverride != nil {
+		rate = *plan.RateOverride
 	}
 	if rate <= 0 {
 		rate = 1.0

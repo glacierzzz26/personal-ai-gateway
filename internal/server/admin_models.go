@@ -16,7 +16,7 @@ import (
 // 普通用户拿收敛后的清单(仅启用 ∩ 模型可及性,只留对外名/上下文/能力/官方价+本站价)。
 func (s *Server) handleModelsList(w http.ResponseWriter, r *http.Request) {
 	if s.currentAdmin(r).Role != domain.RoleAdmin {
-		views, err := s.userModelsList(s.currentAdmin(r), nil)
+		views, err := s.userModelsList(nil)
 		if err != nil {
 			writeStoreErr(w, err)
 			return
@@ -367,6 +367,7 @@ func (s *Server) singleModelRead(id int64) (domain.ModelRead, error) {
 		Offers:         make([]domain.OfferRead, 0, len(offers)),
 		OfficialVendor: m.OfficialVendor, OfficialModelName: m.OfficialModelName,
 		InferredVendor: pricing.InferVendor(m.Name),
+		RateOverride:   m.RateOverride,
 	}
 	for _, o := range offers {
 		mr.Offers = append(mr.Offers, s.offerRead(v, o))

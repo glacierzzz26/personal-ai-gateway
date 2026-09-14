@@ -6,8 +6,51 @@
 package domain
 
 import (
+	"encoding/json"
 	"time"
 )
+
+// OptionalFloat 三分态可空 float64:区分「未传」(键缺席 → 保持原值)、
+// 「显式 null」(清空覆盖)与「设值」。仅用于「null 与未传语义不同」的字段
+// (如 ModelInput.RateOverride);其余字段沿用 *T(nil 与未传同义)。
+type OptionalFloat struct {
+	Set   bool
+	Clear bool
+	Value float64
+}
+
+// UnmarshalJSON 记录键是否出现:出现即 Set,值为 null 则 Clear。
+func (o *OptionalFloat) UnmarshalJSON(b []byte) error {
+	o.Set = true
+	if string(b) == "null" {
+		o.Clear = true
+		return nil
+	}
+	return json.Unmarshal(b, &o.Value)
+}
+
+// SetFloat 构造「设值」态。
+func SetFloat(v float64) OptionalFloat { return OptionalFloat{Set: true, Value: v} }
+
+// ClearFloat 构造「显式清空」态。
+func ClearFloat() OptionalFloat { return OptionalFloat{Set: true, Clear: true} }
+
+// Ptr 转为存储用的 *float64:未设或清空 → nil(SQL NULL),否则指向值。
+func (o OptionalFloat) Ptr() *float64 {
+	if !o.Set || o.Clear {
+		return nil
+	}
+	v := o.Value
+	return &v
+}
+
+// Apply 在「保持原值」基础上套用本三态:未传 → cur 原样;清空 → nil;设值 → 新值。
+func (o OptionalFloat) Apply(cur *float64) *float64 {
+	if !o.Set {
+		return cur
+	}
+	return o.Ptr()
+}
 
 // ---------- 枚举 ----------
 
@@ -200,6 +243,10 @@ type ModelInput struct {
 	// 用于聚合中转等 provider 非厂商的渠道显示厂商官方价。更新时非 nil 才改动(nil = 不动)。
 	OfficialVendor    *string `json:"officialVendor"`
 	OfficialModelName *string `json:"officialModelName"`
+	// RateOverride 该模型的售价倍率(本站价 = 官方价 × 倍率)。未传 = 保持原值;显式 null = 清空
+	// (回落全局 settings.price_multiplier);数值 = 覆盖。三态(OptionalFloat)区分「未传」与「清空」,
+	// 普通 *float64 无法区分,会让清空退化成 no-op。
+	RateOverride OptionalFloat `json:"rateOverride"`
 }
 
 func (m *ModelInput) Defaults() {
@@ -221,10 +268,13 @@ type ModelRow struct {
 	Capabilities  []Capability `json:"capabilities"`
 	Enabled       bool         `json:"enabled"`
 	// 模型级官方价绑定(空 = 未绑定,走自动匹配)。
-	OfficialVendor    Provider  `json:"officialVendor"`
-	OfficialModelName string    `json:"officialModelName"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	OfficialVendor    Provider `json:"officialVendor"`
+	OfficialModelName string   `json:"officialModelName"`
+	// RateOverride 该模型的售价倍率;nil = 回落全局 settings.price_multiplier。
+	// 定价按模型(全站同模型同价),不再有用户级倍率(见迁移 v9)。
+	RateOverride *float64  `json:"rateOverride,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // PublicName 网关对外统一名:重命名后为 display_name,否则回落真实模型名。
@@ -319,6 +369,8 @@ type ModelRead struct {
 	// InferredVendor 由模型名(取首个 '/' 前的段)推断出的厂商;空 = 判不出。
 	// 前端据此在「provider 直连」之外追加一次「推断厂商」官方价匹配(聚合渠道场景)。
 	InferredVendor Provider `json:"inferredVendor,omitempty"`
+	// RateOverride 模型级售价倍率;缺省/nil = 跟随全局 settings.price_multiplier。模型编辑器回显用。
+	RateOverride *float64 `json:"rateOverride,omitempty"`
 }
 
 // ---------- 官方定价(厂商官网) ----------
@@ -522,9 +574,8 @@ type TokenRow struct {
 	OwnerID       *int64
 	// 归属账号的钱包视图(随鉴权一次查出,免数据面每请求再查一次):
 	// 全局 key(OwnerID=nil)时 OwnerRole 为空、余额为 0。
-	OwnerRole         Role
-	OwnerBalance      float64
-	OwnerRateOverride *float64 // nil = 用全局 settings.price_multiplier
+	OwnerRole    Role
+	OwnerBalance float64
 }
 
 // ---------- 管理员 / 用户与会话 ----------
@@ -558,9 +609,9 @@ type UserRead struct {
 	Role      Role      `json:"role"`
 	KeyCount  int       `json:"keyCount"`
 	CreatedAt time.Time `json:"createdAt"`
-	// BalanceUsd 钱包余额(计价币种金额);RateOverride 非空 = 该用户的售价倍率覆盖全局。
-	BalanceUsd   float64  `json:"balanceUsd"`
-	RateOverride *float64 `json:"rateOverride,omitempty"`
+	// BalanceUsd 钱包余额(计价币种金额)。售价倍率按模型存(见 ModelRow.RateOverride),
+	// 不再有用户级倍率(迁移 v9 起)。
+	BalanceUsd float64 `json:"balanceUsd"`
 	// TokenQuotaCeiling 该用户名下令牌的额度上限(0 = 不限);TokenRpmCeiling 同理。
 	// 只约束 role=user 的自助建令牌,管理员不受限。
 	TokenQuotaCeiling float64 `json:"tokenQuotaCeiling"`
@@ -758,8 +809,9 @@ type Settings struct {
 	// 仅当官方价原币种与 DisplayCurrency 不一致时用于折算;0 = 未设置(此时拒绝折算,不臆造汇率)。
 	// 汇率非厂商官方数据,故不自动抓取。
 	USDPerCNY float64 `json:"usdPerCny"`
-	// PriceMultiplier 全局售价倍率:本站卖给客户的价格 = 成本价 × 该倍率(见 PLAN.md §2)。
-	// 用户级 rate_override 非空时覆盖它。默认 1.0(= 不加价)。<=0 视为 1.0。
+	// PriceMultiplier 全局售价倍率(默认基线):本站卖给客户的价格 = 官方价 × 该倍率(见 PLAN.md §2)。
+	// 模型级 ModelRow.RateOverride 非空时覆盖它 —— 倍率按模型定,全站同模型同价。
+	// 默认 1.0(= 不加价)。<=0 视为 1.0。
 	PriceMultiplier float64 `json:"priceMultiplier"`
 	// PublicBaseURL 生成 Claude 配置时对外可见的网关基址(如 https://ai-gateway.lan)。
 	// 留空则按请求的 scheme+host 推断(X-Forwarded-Proto/Host 优先)。

@@ -88,16 +88,15 @@ func (s *Store) LookupTokenBySHA256(sha string) (domain.TokenRow, error) {
 	var tk domain.TokenRow
 	var allowed string
 	var expires, lastUsed, ownerID sql.NullString
-	var rateOverride sql.NullFloat64
 	var ownerRole string
 	var created, updated string
 	err := s.db.QueryRow(`SELECT t.id,t.name,t.sha256,t.key_masked,t.allowed_models,t.quota_usd,t.used_usd,
 		t.rpm_limit,t.expires_at,t.status,t.last_used_at,t.owner_id,
-		COALESCE(a.role,''), COALESCE(a.balance_usd,0), a.rate_override
+		COALESCE(a.role,''), COALESCE(a.balance_usd,0)
 		FROM tokens t LEFT JOIN admins a ON a.id = t.owner_id WHERE t.sha256=?`, sha).
 		Scan(&tk.ID, &tk.Name, &tk.SHA256, &tk.KeyMasked, &allowed, &tk.QuotaUsd, &tk.UsedUsd,
 			&tk.RpmLimit, &expires, &tk.Status, &lastUsed, &ownerID,
-			&ownerRole, &tk.OwnerBalance, &rateOverride)
+			&ownerRole, &tk.OwnerBalance)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.TokenRow{}, ErrNotFound
 	}
@@ -107,10 +106,6 @@ func (s *Store) LookupTokenBySHA256(sha string) (domain.TokenRow, error) {
 	tk.AllowedModels = decodeStringList(allowed)
 	tk.OwnerID = nullInt64Ptr(ownerID)
 	tk.OwnerRole = domain.Role(ownerRole)
-	if rateOverride.Valid {
-		v := rateOverride.Float64
-		tk.OwnerRateOverride = &v
-	}
 	if expires.Valid {
 		v := expires.String
 		tk.ExpiresAt = &v
