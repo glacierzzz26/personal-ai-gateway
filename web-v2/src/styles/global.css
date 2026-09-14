@@ -354,16 +354,13 @@ body {
   color: var(--gw-text-3);
 }
 
-/* ============================================================
-   轻量表格（区块内嵌，非分页数据表）
-   与 antd Table 分开：这里只做对齐与分隔线，不需要排序/选择列。
-   ============================================================ */
+/* 轻量表格 (区块内嵌, 非分页数据表) — 只做对齐与分隔线，不需要排序/选择列。 */
 .gw-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
-  /* 内嵌在窄区块里(如 Dashboard 左栏),1366 笔记本下横向空间就 700px 上下;
-     单元格一律 nowrap 且列多,左右各 20px 内边距会把表撑出滚动条。 */
+  /* 内嵌在窄区块里(如 Dashboard 左栏),1366 下横向空间约 700px;
+     单元格一律 nowrap,内边距稍大就会把表撑出滚动条。 */
   table-layout: auto;
 }
 .gw-table th {
@@ -382,14 +379,21 @@ body {
   color: var(--gw-text-2);
   white-space: nowrap;
 }
-/* 首列(渠道名)左缘与区块内其他内容对齐,末列(金额)右缘贴齐卡片边距 */
+/*
+ * 首末列留白:区块 body 无 padding,首列若也贴边,文字会直接顶到卡片边框上。
+ * 补到 16px(antd 大表默认内边距,而非自造数值),首末各一份:
+ * 只加首末列(而非每列),宽度预算 = 2×增量,而非 2×增量×列数 —— 表格本就
+ * nowrap 且列多,每列都加会在 1366 笔记本下撑出横向滚动条。
+ * 16 而非 20:卡片头/正文是 20px,但 /tokens 八列在 1366 下已零余量,
+ * 20px 会溢出 3px;16px 全站安全,且与 antd 表格自身的节奏一致。
+ */
 .gw-table th:first-child,
 .gw-table td:first-child {
-  padding-left: 0;
+  padding-left: 16px;
 }
 .gw-table th:last-child,
 .gw-table td:last-child {
-  padding-right: 0;
+  padding-right: 16px;
 }
 .gw-table tbody tr:last-child td {
   border-bottom: 0;
@@ -915,6 +919,27 @@ tr.gw-drop-after > td {
 .ant-table-wrapper .ant-table-container {
   border-start-start-radius: var(--gw-r-card);
   border-start-end-radius: var(--gw-r-card);
+}
+
+/*
+ * 首末列留白:卡片内表格贴边很难看。antd 主题的 cellPaddingInline 只作用于
+ * size="large",middle/small 走的是 cellPaddingInline*SM 另一套 token,
+ * 改主题够不着,故在此按「首末列」补足到 16px:
+ *   - 只加首末列(而非每列),宽度预算 = 2×增量,而非 2×增量×列数 ——
+ *     表格本就 nowrap 且列多,每列都加会在 1366 笔记本下撑出横向滚动条;
+ *   - small 本身内边距更小,同样补到 16,避免同一页两种表格边缘不齐。
+ */
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-tbody > tr > td:first-child,
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-thead > tr > th:first-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-tbody > tr > td:first-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-thead > tr > th:first-child {
+  padding-left: 16px;
+}
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-tbody > tr > td:last-child,
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-thead > tr > th:last-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-tbody > tr > td:last-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-thead > tr > th:last-child {
+  padding-right: 16px;
 }
 
 /* 偏好减少动效时关闭全部过渡 */
