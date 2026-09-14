@@ -10,7 +10,7 @@ import type {
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
   OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
-  TokenDraft, UsageDim, UsageRow, UserAccount, UserModelItem,
+  TokenDraft, TokenProbeResp, UsageDim, UsageRow, UserAccount, UserModelItem,
 } from '@/types';
 import { http } from './http';
 
@@ -224,6 +224,10 @@ export const api = {
   updateToken(id: number, body: TokenDraft): Promise<GatewayToken> { return http.patch(`/tokens/${id}`, body); },
   deleteToken(id: number): Promise<unknown> { return http.del(`/tokens/${id}`); },
   getClaudeConfig(id: number): Promise<ClaudeConfig> { return http.get(`/tokens/${id}/claude-config`); },
+  /** 令牌自检:不访问上游、不计费地判定「这个 key 能否用某模型」 */
+  probeToken(id: number, model: string): Promise<TokenProbeResp> {
+    return http.post(`/tokens/${id}/probe`, { model });
+  },
 
   /* —— 路由规则 —— */
   getRules(): Promise<RouteRule[]> { return http.get('/rules'); },

@@ -173,6 +173,8 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("PATCH /api/v1/tokens/{id}", s.handleTokensUpdate)
 	m.HandleFunc("DELETE /api/v1/tokens/{id}", s.handleTokensDelete)
 	m.HandleFunc("GET /api/v1/tokens/{id}/claude-config", s.handleTokenClaudeConfig)
+	// 自检:不访问上游、不计费地回答「这个 key 能不能用某模型」(issue #8 P1)
+	m.HandleFunc("POST /api/v1/tokens/{id}/probe", s.handleTokenProbe)
 
 	m.HandleFunc("GET /api/v1/logs", adm(s.handleLogsList))
 	m.HandleFunc("DELETE /api/v1/logs", adm(s.handleLogsClear))

@@ -9,13 +9,13 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import StatusDot from '@/components/StatusDot';
-import { EmptyState, ErrorState, NoResultState } from '@/components/States';
+import { EmptyState, ErrorState, NoResultState, SkBlock } from '@/components/States';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { copyText } from '@/utils/clipboard';
 import { fmt } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
-import type { GatewayToken, ModelCatalogItem, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
+import type { GatewayToken, ModelCatalogItem, ProbeCheck, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
 
@@ -293,6 +293,90 @@ function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => v
   );
 }
 
+/** 「自检」弹窗:不产生真实调用地回答「这个 key 现在能不能用某模型」。 */
+function ProbeModal(props: { token: GatewayToken | null; models: ModelCatalogItem[]; onClose: () => void }) {
+  const { token, models, onClose } = props;
+  const [model, setModel] = useState('');
+  const { data, isFetching, isError, error, refetch } = useQuery({
+    queryKey: ['token-probe', token?.id, model],
+    queryFn: () => api.probeToken(token!.id, model),
+    enabled: !!token && !!model,
+    retry: false,
+  });
+
+  // 关闭时清掉模型选择,下次打开不残留上次结果。
+  useEffect(() => {
+    if (!token) setModel('');
+  }, [token]);
+
+  return (
+    <Modal
+      title={token ? `自检 · ${token.name}` : '令牌自检'}
+      open={!!token}
+      onCancel={onClose}
+      footer={<Button type="primary" onClick={onClose}>关闭</Button>}
+      destroyOnHidden
+      width={560}
+    >
+      <div className="gw-note" style={{ marginBottom: 14 }}>
+        <span>选择模型后核查「状态 / 有效期 / 授权 / 可用性 / 额度 / 余额」,<b>不访问上游、不计费、不消耗限速</b>。</span>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <Select
+          style={{ width: '100%' }}
+          showSearch
+          placeholder="选择要自检的模型"
+          value={model || undefined}
+          onChange={setModel}
+          optionFilterProp="label"
+          options={models.map(m => ({ value: m.name, label: m.name }))}
+        />
+      </div>
+      {!model ? (
+        <div style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>请先选择一个模型。</div>
+      ) : isFetching ? (
+        <SkBlock />
+      ) : isError ? (
+        <ErrorState
+          title="自检失败"
+          desc={(error as Error)?.message || '无法完成自检,请稍后重试。'}
+          onRetry={() => void refetch()}
+        />
+      ) : data ? (
+        <Table<ProbeCheck>
+          rowKey="name"
+          size="small"
+          dataSource={data.checks}
+          pagination={false}
+          columns={[
+            {
+              title: '检查项', dataIndex: 'name', width: 110,
+              render: v => <span style={{ color: 'var(--gw-text-2)' }}>{v}</span>,
+            },
+            {
+              title: '结果', dataIndex: 'ok', width: 90,
+              render: (v: boolean) => (
+                <StatusDot status="" text={v ? '通过' : '未通过'} tone={v ? 'ok' : 'err'} />
+              ),
+            },
+            {
+              title: '说明', dataIndex: 'detail',
+              render: (v: string) => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span>,
+            },
+          ]}
+        />
+      ) : null}
+      {data && (
+        <div style={{ marginTop: 12, fontSize: 13 }}>
+          {data.ok
+            ? <span style={{ color: TOKENS.ok }}>✓ 该令牌可用「{data.model}」发起调用。</span>
+            : <span style={{ color: TOKENS.err }}>✗ 该令牌当前不能使用「{data.model}」,请按上表逐项处理。</span>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export default function Tokens() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
@@ -300,6 +384,7 @@ export default function Tokens() {
   const [editor, setEditor] = useState<{ open: boolean; initial: GatewayToken | null }>({ open: false, initial: null });
   const [created, setCreated] = useState<TokenCreateResult | null>(null);
   const [configToken, setConfigToken] = useState<GatewayToken | null>(null);
+  const [probeToken, setProbeToken] = useState<GatewayToken | null>(null);
   const [ownerFilter, setOwnerFilter] = useState<number | 'all'>('all');
 
   const { data: tokens = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
@@ -436,7 +521,7 @@ export default function Tokens() {
     },
     { title: '状态', dataIndex: 'status', width: 100, render: v => <StatusDot status={v} /> },
     {
-      title: '操作', align: 'right', width: 210,
+      title: '操作', align: 'right', width: 270,
       render: (_, r) => (
         <Space size={4}>
           <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
@@ -444,6 +529,7 @@ export default function Tokens() {
               生成配置
             </Button>
           </Tooltip>
+          <Button size="small" onClick={() => setProbeToken(r)}>自检</Button>
           <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
           <Button size="small" danger onClick={() => confirmDelete(r)}>删除</Button>
         </Space>
@@ -532,6 +618,7 @@ export default function Tokens() {
       />
 
       <ClaudeConfigModal token={configToken} onClose={() => setConfigToken(null)} />
+      <ProbeModal token={probeToken} models={models} onClose={() => setProbeToken(null)} />
 
       <Modal
         open={!!created}

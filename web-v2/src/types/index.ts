@@ -475,3 +475,17 @@ export interface TokenCreateResult {
   key: string;
   token: GatewayToken;
 }
+
+/** POST /tokens/{id}/probe:令牌对某模型「能不能用」的静态自检(不访问上游、不计费)。 */
+export interface TokenProbeResp {
+  model: string;
+  ok: boolean;
+  checks: ProbeCheck[];
+}
+
+/** 自检的一项结果。 */
+export interface ProbeCheck {
+  name: string;
+  ok: boolean;
+  detail?: string;
+}

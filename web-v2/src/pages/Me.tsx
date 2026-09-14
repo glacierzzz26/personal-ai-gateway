@@ -12,12 +12,16 @@ import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { useCurrency } from '@/stores/currency';
-import { CAP_LABEL, FAIL_LABEL, STATUS_CLIENT_CLOSED, classifyError, fmt } from '@/utils/format';
+import { CAP_LABEL, FAIL_LABEL, STATUS_CLIENT_CLOSED, TONE_COLOR, classifyError, fmt } from '@/utils/format';
+import type { Tone } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
 import type { EChartsOption } from 'echarts';
 import type { BalanceLogItem, RequestLogItem, UsageRow, UserModelItem, UserPrice } from '@/types';
 
 const okCode = (code: number) => code >= 100 && code < 400;
+
+/** 令牌额度告警阈值,与管理员 Dashboard 同口径(≥85% 视为告警)。 */
+const QUOTA_ALERT = 0.85;
 
 const REASON: Record<string, { t: string; tone: string }> = {
   topup: { t: '充值', tone: 'ok' },
@@ -73,6 +77,8 @@ export default function Me() {
     queryFn: () => api.getMyLogs({}, page, size),
   });
   const modelsQ = useQuery({ queryKey: ['me', 'models'], queryFn: api.getMyModels });
+  // 令牌额度自检(告警条用):用户面 /tokens 只返回本人名下,天然安全。
+  const tokensQ = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
 
   // 普通用户读不到 /settings(admin-only),计价币种只能从 /me/balance 带回并水合,
   // 否则管理员配了 USD 时用户侧仍按默认 CNY 渲染(issue #8 P2)。
@@ -87,6 +93,25 @@ export default function Me() {
   const logs = logsQ.data?.items ?? [];
   const total = logsQ.data?.total ?? 0;
   const models = modelsQ.data ?? [];
+
+  // 阈值提醒:余额耗尽/偏低 + 令牌额度逼近(与管理员 Dashboard 同一套阈值)。
+  // 用户此前只能等某次请求撞上 402/429 才知道(issue #8 P2)。
+  const tokens = tokensQ.data ?? [];
+  const alert = useMemo((): { tone: Tone; title: string; desc: string } | null => {
+    const tight = tokens.filter(t => t.quotaUsd > 0 && t.usedUsd / t.quotaUsd >= QUOTA_ALERT);
+    if (balance <= 0) {
+      return { tone: 'err', title: '余额不足', desc: '账户余额已耗尽，调用已被拒绝；请联系管理员充值。' };
+    }
+    const parts: string[] = [];
+    if (balance < 10) parts.push(`账户余额偏低（${fmt.usd(balance)}），可能很快耗尽`);
+    if (tight.length) {
+      parts.push(`${tight.length} 个令牌额度已用 ≥${(QUOTA_ALERT * 100).toFixed(0)}%（${tight.map(t => t.name).join('、')}）`);
+    }
+    if (!parts.length) {
+      return { tone: 'ok', title: '一切正常', desc: `余额可用 · ${tokens.length} 个令牌额度充足 · 每次调用按本站售价从余额扣除` };
+    }
+    return { tone: 'warn', title: '请注意', desc: parts.join(' · ') };
+  }, [balance, tokens]);
 
   const totals = useMemo(() => {
     let requests = 0, inTokens = 0, outTokens = 0, cost = 0;
@@ -207,6 +232,26 @@ export default function Me() {
         title="我的账户"
         desc={`${me?.username ?? ''} 的余额、用量与请求明细`}
       />
+
+      {alert && (
+        <div
+          role="status"
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 11, marginBottom: 16,
+            border: '1px solid var(--gw-border)',
+            borderLeft: `3px solid ${TONE_COLOR[alert.tone]}`,
+            borderRadius: 'var(--gw-r-card)',
+            background: 'var(--gw-card)',
+            padding: '13px 16px', fontSize: 14,
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 500, color: 'var(--gw-text)', flexShrink: 0 }}>
+            <i className={`gw-dot ${alert.tone}`} />
+            {alert.title}
+          </span>
+          <span style={{ color: 'var(--gw-text-2)' }}>{alert.desc}</span>
+        </div>
+      )}
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={12} xl={6}>

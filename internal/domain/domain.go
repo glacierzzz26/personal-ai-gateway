@@ -603,6 +603,23 @@ type BalanceResp struct {
 	TokenRpmCeiling   int     `json:"tokenRpmCeiling"`
 }
 
+// TokenProbeResp POST /tokens/{id}/probe 返回:该令牌对某模型「能不能用」的静态判定。
+// 只做本地校验(不访问上游、不计费、不消耗 RPM),用于客户自检 —— 今天只能真发一次请求去猜。
+type TokenProbeResp struct {
+	Model string `json:"model"`
+	// Ok 全部检查通过。
+	Ok bool `json:"ok"`
+	// Checks 逐项判定(名称/是否通过/说明),便于前端逐条展示未通过的原因。
+	Checks []ProbeCheck `json:"checks"`
+}
+
+// ProbeCheck 一项自检结果。
+type ProbeCheck struct {
+	Name   string `json:"name"`
+	Ok     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
 // UserCreateReq POST /users 请求体(管理员建号,设初始密码)。
 type UserCreateReq struct {
 	Username string `json:"username"`
