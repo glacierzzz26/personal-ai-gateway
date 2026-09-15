@@ -1,0 +1,13 @@
+[Unit]
+Description=周期触发 AI 网关自更新(每 60s)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+# 精度给几秒余量,避免每次准点打 ghcr;错过的触发开机后补跑一次。
+AccuracySec=10s
+Persistent=true
+Unit=gw-updater.service
+
+[Install]
+WantedBy=timers.target

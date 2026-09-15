@@ -52,7 +52,9 @@ scp -q "$REPO/deploy/docker-compose.yml" "$HOST:$REMOTE_DIR/docker-compose.yml"
 rsync -az --delete "$CERTS_DIR/" "$HOST:$REMOTE_DIR/certs/"
 
 echo "==> [6/6] 远端 compose up -d"
-ssh "$HOST" "cd '$REMOTE_DIR' && docker compose up -d"
+# 显式覆盖 GW_IMAGE 为本地短名 —— compose 缺省指向 ghcr,而本条应急链路推的是
+# docker save 过去的本地镜像 ai-gateway:$VER,不能让 compose 去 ghcr 拉。
+ssh "$HOST" "cd '$REMOTE_DIR' && GW_IMAGE=ai-gateway docker compose up -d"
 
 echo
 echo "部署完成(image=$IMAGE,host=$HOST,dir=$REMOTE_DIR)。"
