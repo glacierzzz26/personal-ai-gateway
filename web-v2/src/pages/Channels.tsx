@@ -111,18 +111,28 @@ const resetText = (iso: string): string => {
 };
 
 /**
+ * 该渠道要不要查额度。第三方中转没有统一约定,没配路径就不发请求
+ * (后端会回「未配置」,查了也只是白报错)。查询的 enabled 与单元格的
+ * 占位判定共用此函数 —— 两处若各写各的,很容易对不上而永远显示读取中。
+ */
+function quotaEnabled(ch: Channel): boolean {
+  return ch.channelType !== 'thirdparty' || !!ch.quotaPath;
+}
+
+/**
  * 额度单元格。三种形态:
  *   1. 窗口型(commandcode/opencode/通用信封)→ "5h 12% · 周 34%" + 逐窗口 tooltip;
  *   2. 余额型(deepseek/one-api)→ 余额金额 + 余额 tooltip(可能同时有窗口);
  *   3. 不可用 → 灰色占位,未配置额度路径时给出可点提示。
  */
-function QuotaCell({ q }: { q: UseQueryResult<ChannelQuota, Error> }) {
-  // fetchStatus==='idle' 表示查询被 enabled 关掉了(第三方渠道没配额度路径):
-  // 不显示「读取中…」,直接给一个指路占位,否则会永远转圈。
-  if (q.fetchStatus === 'idle') {
+function QuotaCell({ q, ch }: { q: UseQueryResult<ChannelQuota, Error>; ch: Channel }) {
+  // 不查的渠道直接给指路占位。用 quotaEnabled 判定而非 fetchStatus ——
+  // 查询**成功结束后** fetchStatus 同样是 'idle'(见 query-core 的 success 分支),
+  // 拿它当「被禁用」用会把每一条已拿到数据的渠道都误判成灰色占位。
+  if (!quotaEnabled(ch)) {
     return <Tooltip title="第三方渠道需在「编辑」里配置额度查询路径">{dash}</Tooltip>;
   }
-  if (q.isPending && !q.data) return <span style={{ color: 'var(--gw-text-3)' }}>读取中…</span>;
+  if (q.isPending) return <span style={{ color: 'var(--gw-text-3)' }}>读取中…</span>;
   const quota = q.data;
   if (q.isError || !quota || !quota.available) {
     const notConfigured = !!quota?.error?.includes('未配置额度查询路径');
@@ -232,7 +242,7 @@ export default function Channels() {
     queries: channels.map(ch => ({
       queryKey: ['channel-quota', ch.id],
       queryFn: () => api.channelQuota(ch.id),
-      enabled: ch.channelType !== 'thirdparty' || !!ch.quotaPath,
+      enabled: quotaEnabled(ch),
       retry: 0,
       staleTime: 60_000,
     })),
@@ -462,7 +472,7 @@ export default function Channels() {
       title: '额度', key: 'quota', width: 140,
       render: (_, r) => {
         const q = quotaById.get(r.id);
-        return q ? <QuotaCell q={q} /> : dash;
+        return q ? <QuotaCell q={q} ch={r} /> : dash;
       },
     },
     {
