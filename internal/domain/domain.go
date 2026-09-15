@@ -54,24 +54,101 @@ func (o OptionalFloat) Apply(cur *float64) *float64 {
 
 // ---------- 枚举 ----------
 
-// Provider 渠道供应商。字符串即前端 ProviderMark 展示名,勿改。
+// Provider 渠道供应商 —— **只留真厂商**(卖的是谁的模型)。字符串即前端 ProviderMark 展示名,勿改。
+// 「怎么连上去」由 EgressProto 承载;「上游是哪家、怎么查额度」由 ChannelType 承载。
+// 非厂商渠道(聚合/中转,如 command code)该字段为空,徽标回落显示渠道类型。
 type Provider string
 
 const (
-	ProviderOpenAI     Provider = "OpenAI"
-	ProviderAzure      Provider = "Azure"
-	ProviderAnthropic  Provider = "Anthropic"
-	ProviderDeepSeek   Provider = "DeepSeek"
-	ProviderQwen       Provider = "通义千问"
-	ProviderZhipu      Provider = "智谱"
-	ProviderMoonshot   Provider = "Moonshot"
-	ProviderOpenRouter Provider = "聚合中转"
+	ProviderOpenAI    Provider = "OpenAI"
+	ProviderAnthropic Provider = "Anthropic"
+	ProviderDeepSeek  Provider = "DeepSeek"
+	ProviderQwen      Provider = "通义千问"
+	ProviderZhipu     Provider = "智谱"
+	ProviderMoonshot  Provider = "Moonshot"
 )
 
-// Providers 前端「新建渠道」下拉的可选集合(与 web-v2 mock providers 一致)。
+// ProviderNone 「不是单一厂商」(多厂家中转/区域部署)。空串即此语义 —— 用常量而非裸 ""
+// 是为了让 Go 代码与测试有明确的书写对象,不代表它是 Providers 里的一个可选值。
+const ProviderNone Provider = ""
+
+// Providers 前端「新建渠道」下拉的可选集合(与 web-v2 constants.providers 一致)。
 var Providers = []Provider{
-	ProviderOpenAI, ProviderAnthropic, ProviderAzure, ProviderDeepSeek,
-	ProviderQwen, ProviderZhipu, ProviderMoonshot, ProviderOpenRouter,
+	ProviderOpenAI, ProviderAnthropic, ProviderDeepSeek,
+	ProviderQwen, ProviderZhipu, ProviderMoonshot,
+}
+
+// ChannelType 渠道类型 —— 决定**上游额度怎么查**(各家问法完全不同),与 Provider 正交:
+// 同一类型可卖多家厂商的模型,同一厂商的模型也可来自多种类型。
+type ChannelType string
+
+const (
+	ChannelTypeDeepSeek    ChannelType = "deepseek"    // DeepSeek 官方直连
+	ChannelTypeCommandCode ChannelType = "commandcode" // command code 订阅
+	ChannelTypeOpenCode    ChannelType = "opencode"    // opencode zen
+	ChannelTypeThirdParty  ChannelType = "thirdparty"  // 其它中转站(额度路径手工配置)
+)
+
+// ChannelTypes 前端「渠道类型」下拉的可选集合,与 web-v2 constants.channelTypes 一致。
+var ChannelTypes = []ChannelType{
+	ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeThirdParty,
+}
+
+// Valid 是否为受支持的渠道类型。
+func (t ChannelType) Valid() bool {
+	switch t {
+	case ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeThirdParty:
+		return true
+	}
+	return false
+}
+
+// EgressProto 出站协议 —— 「怎么把请求发上去」。原先由 provider 反推(OutProto),
+// 但聚合渠道卖别家模型却仍走 OpenAI 协议,两者必须解耦。
+type EgressProto string
+
+const (
+	EgressAnthropic EgressProto = "anthropic"
+	EgressOpenAI    EgressProto = "openai"
+	EgressAzure     EgressProto = "azure" // OpenAI 兼容 + api-version 查询参数
+)
+
+// EgressProtos 前端「出站协议」下拉的可选集合。
+var EgressProtos = []EgressProto{EgressOpenAI, EgressAnthropic, EgressAzure}
+
+// Valid 是否为受支持的出站协议。
+func (p EgressProto) Valid() bool {
+	switch p {
+	case EgressAnthropic, EgressOpenAI, EgressAzure:
+		return true
+	}
+	return false
+}
+
+// QuotaShape 第三方渠道额度接口的响应形状(路径手工填,形状从这里选)。
+type QuotaShape string
+
+const (
+	// ShapeUsage 通用额度信封:路径返回 {usage:{rolling,weekly,monthly:{status,percent,resetsAt}}}。
+	// 网关原生的 /v1/usage 协议,opencode zen 与部分中转站同形 —— 默认形状。
+	ShapeUsage QuotaShape = "usage"
+	// ShapeOneAPI one-api / new-api / veloera 的计费接口:
+	// /v1/dashboard/billing/subscription → {hard_limit_usd},配 /v1/dashboard/billing/usage → {total_usage}(美分)。
+	ShapeOneAPI QuotaShape = "oneapi"
+	// ShapeNewAPIUser new-api 的 /api/user/self → {data:{quota(剩余),used_quota(已用)}}(额度单位制,无币种)。
+	ShapeNewAPIUser QuotaShape = "newapi_user"
+)
+
+// QuotaShapes 前端「额度形状」下拉的可选集合(与 web-v2 constants.quotaShapes 一致)。
+var QuotaShapes = []QuotaShape{ShapeUsage, ShapeOneAPI, ShapeNewAPIUser}
+
+// Valid 是否为受支持的额度形状。
+func (s QuotaShape) Valid() bool {
+	switch s {
+	case ShapeUsage, ShapeOneAPI, ShapeNewAPIUser:
+		return true
+	}
+	return false
 }
 
 // HealthStatus 渠道/供给源健康态(读接口计算)。
@@ -157,10 +234,15 @@ func (l AnnouncementLevel) Valid() bool {
 
 // ChannelInput 创建/更新渠道的请求体。apiKey 留空表示不改/不设置。
 type ChannelInput struct {
-	Name        string   `json:"name"`
-	Provider    Provider `json:"provider"`
-	BaseURL     string   `json:"baseUrl"`
-	APIKey      string   `json:"apiKey,omitempty"`
+	Name        string      `json:"name"`
+	Provider    Provider    `json:"provider"`    // 真厂商;非厂商渠道留空
+	ChannelType ChannelType `json:"channelType"` // 决定额度协议
+	EgressProto EgressProto `json:"egressProto"` // 决定出站协议
+	BaseURL     string      `json:"baseUrl"`
+	APIKey      string      `json:"apiKey,omitempty"`
+	// QuotaPath/QuotaShape 仅 thirdparty 用:上游额度查询路径 + 响应形状(手工配置)。
+	QuotaPath   string   `json:"quotaPath,omitempty"`
+	QuotaShape  string   `json:"quotaShape,omitempty"`
 	Priority    int      `json:"priority"`
 	Weight      int      `json:"weight"`
 	TimeoutMs   int      `json:"timeoutMs"`
@@ -173,8 +255,17 @@ type ChannelInput struct {
 
 // Defaults 填充请求未显式给出的零值默认,供 handler 调用后写库。
 func (c *ChannelInput) Defaults() {
-	if c.Provider == "" {
-		c.Provider = ProviderOpenAI
+	// Provider 不设默认:留空即「非单一厂商」(聚合渠道),徽标回落显示渠道类型。
+	if c.ChannelType == "" {
+		c.ChannelType = ChannelTypeThirdParty
+	}
+	if c.EgressProto == "" {
+		// 旧客户端只传 provider:按老口径(Anthropic 之外皆 OpenAI 兼容)推。
+		if c.Provider == ProviderAnthropic {
+			c.EgressProto = EgressAnthropic
+		} else {
+			c.EgressProto = EgressOpenAI
+		}
 	}
 	if c.TimeoutMs == 0 {
 		c.TimeoutMs = 60000
@@ -199,6 +290,8 @@ type ChannelRead struct {
 	ID            int64        `json:"id"`
 	Name          string       `json:"name"`
 	Provider      Provider     `json:"provider"`
+	ChannelType   ChannelType  `json:"channelType"`
+	EgressProto   EgressProto  `json:"egressProto"`
 	BaseURL       string       `json:"baseUrl"`
 	Priority      int          `json:"priority"`
 	Weight        int          `json:"weight"`
@@ -214,6 +307,8 @@ type ChannelRead struct {
 	Tags          []string     `json:"tags"`
 	Enabled       bool         `json:"enabled"`
 	Note          string       `json:"note,omitempty"`
+	QuotaPath     string       `json:"quotaPath,omitempty"`
+	QuotaShape    string       `json:"quotaShape,omitempty"`
 	MaxFailures   int          `json:"maxFailures"`
 	CooldownSec   int          `json:"cooldownSec"`
 	CircuitOpen   bool         `json:"circuitOpen,omitempty"`
@@ -224,20 +319,24 @@ type ChannelRead struct {
 
 // ChannelRow 是渠道表的一行(含密文与内部控制字段,仅 store/auth/engine 可见)。
 type ChannelRow struct {
-	ID           int64    `json:"id"`
-	Name         string   `json:"name"`
-	Provider     Provider `json:"provider"`
-	BaseURL      string   `json:"baseUrl"`
-	APIKeyCipher string   `json:"-"`
-	KeyMasked    string   `json:"keyMasked"`
-	Priority     int      `json:"priority"`
-	Weight       int      `json:"weight"`
-	TimeoutMs    int      `json:"timeoutMs"`
-	Tags         []string `json:"tags"`
-	Enabled      bool     `json:"enabled"`
-	MaxFailures  int      `json:"maxFailures"`
-	CooldownSec  int      `json:"cooldownSec"`
-	Note         string   `json:"note"`
+	ID           int64       `json:"id"`
+	Name         string      `json:"name"`
+	Provider     Provider    `json:"provider"`
+	ChannelType  ChannelType `json:"channelType"`
+	EgressProto  EgressProto `json:"egressProto"`
+	BaseURL      string      `json:"baseUrl"`
+	APIKeyCipher string      `json:"-"`
+	KeyMasked    string      `json:"keyMasked"`
+	Priority     int         `json:"priority"`
+	Weight       int         `json:"weight"`
+	TimeoutMs    int         `json:"timeoutMs"`
+	Tags         []string    `json:"tags"`
+	Enabled      bool        `json:"enabled"`
+	QuotaPath    string      `json:"quotaPath"`
+	QuotaShape   string      `json:"quotaShape"`
+	MaxFailures  int         `json:"maxFailures"`
+	CooldownSec  int         `json:"cooldownSec"`
+	Note         string      `json:"note"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -340,6 +439,8 @@ type OfferRead struct {
 	ChannelID         int64        `json:"channelId"`
 	ChannelName       string       `json:"channelName"`
 	Provider          Provider     `json:"provider"`
+	// ChannelType 所属渠道的类型(provider 为空时前端用它的标签代替供应商展示)。
+	ChannelType       ChannelType  `json:"channelType,omitempty"`
 	InputPriceUsd     float64      `json:"inputPriceUsd"`
 	OutputPriceUsd    float64      `json:"outputPriceUsd"`
 	CacheReadPriceUsd float64      `json:"cacheReadPriceUsd,omitempty"`
@@ -919,19 +1020,34 @@ type ClaudeConfigResp struct {
 	Warnings     []string          `json:"warnings,omitempty"`
 }
 
-// QuotaWindow 渠道 /v1/usage 单个窗口(rolling≈近5h/weekly/monthly)。
+// QuotaWindow 渠道额度单个窗口(rolling≈近5h/weekly/monthly)。
 // Status=="ok" 时 Percent 为该窗口已用百分比。
+// Used/Cap/ResetAt 为可选的原始信息:上游给了就带上(不同渠道类型给的不一样),
+// 前端据此在 tooltip 里显示「已用 12/14」与重置时间。
 type QuotaWindow struct {
 	Status  string  `json:"status"`
 	Percent float64 `json:"percent"`
+	Used    float64 `json:"used,omitempty"`    // 上游原始已用量(如 1.24 美元)
+	Cap     float64 `json:"cap,omitempty"`     // 上游原始上限(如 14 美元)
+	ResetAt string  `json:"resetAt,omitempty"` // 窗口重置时间,统一 RFC3339(上游 ms/ISO 都归一)
+}
+
+// QuotaBalance 绝对余额型额度(DeepSeek /user/balance、one-api 等):
+// 这类上游只报「还剩多少钱」,没有窗口百分比。Amount 按**上游原币种**原样展示,不做折算。
+type QuotaBalance struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"` // 上游原币种(CNY/USD),原样展示
 }
 
 // ChannelQuotaResp GET /channels/{id}/quota 返回。windows 仅含 status=ok 的窗口
 // (缺失/非 ok = 该窗口/该渠道不提供额度)。Available=false 时 error 给出原因。
+// Balance 与 Windows 互斥:窗口型上游(rolling/weekly/monthly)用 Windows,
+// 余额型上游(DeepSeek / one-api)用 Balance。
 type ChannelQuotaResp struct {
 	Available bool                   `json:"available"`
 	PlanName  string                 `json:"planName,omitempty"`
 	Windows   map[string]QuotaWindow `json:"windows"`
+	Balance   *QuotaBalance          `json:"balance,omitempty"`
 	LatencyMs int64                  `json:"latencyMs"`
 	Error     string                 `json:"error,omitempty"`
 }

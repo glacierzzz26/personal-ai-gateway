@@ -543,7 +543,7 @@ func (s *Store) ReorderOffers(modelID int64, fromIdx, insertAt int) ([]domain.Of
 	return s.ListModelOffers(modelID)
 }
 
-const offerSelect = `SELECT o.id, o.model_id, o.channel_id, c.name, c.provider,
+const offerSelect = `SELECT o.id, o.model_id, o.channel_id, c.name, c.provider, c.channel_type,
 	o.input_price_usd, o.output_price_usd, o.cache_read_price_usd, o.override_price,
 	o.priority, o.enabled, o.rate_limit_rpm, o.timeout_ms, o.note,
 	m.context_window, c.enabled,
@@ -555,9 +555,10 @@ const offerSelect = `SELECT o.id, o.model_id, o.channel_id, c.name, c.provider,
 func scanOffer(row scanner) (domain.OfferRead, error) {
 	var of domain.OfferRead
 	var provider domain.Provider
+	var channelType domain.ChannelType
 	var overridePrice, enabled, channelEnabled int
 	var timeout sql.NullInt64
-	if err := row.Scan(&of.ID, &of.ModelID, &of.ChannelID, &of.ChannelName, &provider,
+	if err := row.Scan(&of.ID, &of.ModelID, &of.ChannelID, &of.ChannelName, &provider, &channelType,
 		&of.InputPriceUsd, &of.OutputPriceUsd, &of.CacheReadPriceUsd, &overridePrice,
 		&of.Priority, &enabled, &of.RateLimitRpm, &timeout, &of.Note,
 		&of.ContextWindow, &channelEnabled,
@@ -565,6 +566,7 @@ func scanOffer(row scanner) (domain.OfferRead, error) {
 		return domain.OfferRead{}, err
 	}
 	of.Provider = provider
+	of.ChannelType = channelType
 	of.OverridePrice = overridePrice == 1
 	of.Enabled = enabled == 1
 	if timeout.Valid {

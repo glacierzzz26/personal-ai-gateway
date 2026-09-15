@@ -28,6 +28,8 @@ var migrations = []string{
 	m0009ModelRateOverride,
 	// v10:通知/公告(管理员发布,全站可见,「我已知晓」后不再对本人显示)
 	m0010Announcements,
+	// v11:渠道类型 + 出站协议拆分 + 第三方额度手工配置(见 DESIGN.md §5.3)
+	m0011ChannelQuota,
 }
 
 // m0010Announcements 增加「通知/公告」能力(见 issue #10):
@@ -59,6 +61,46 @@ CREATE TABLE IF NOT EXISTS announcement_dismissals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_announcements_live ON announcements(enabled, publish_at, expires_at);
+`
+
+// m0011ChannelQuota 拆开 overloaded 的 channels.provider,并给渠道额度查询留位:
+//
+//	channel_type  渠道类型:deepseek | commandcode | opencode | thirdparty。
+//	              **额度协议由它决定**(各上游问法完全不同),与 provider(卖的是谁的模型)正交。
+//	egress_proto  出站协议:anthropic | openai | azure。原先由 provider 反推(OutProto),
+//	              但「卖谁的模型」与「怎么连上去」本是两回事 —— 聚合渠道卖别家模型,却走 openai 协议。
+//	quota_path    第三方渠道额度查询路径(如 /v1/dashboard/billing/subscription);空 = 未配置。
+//	quota_shape   该路径的响应形状(oneapi | newapi);空 = 未配置。仅 thirdparty 用得上。
+//
+// 回填与收窄同批完成(幂等 UPDATE,可重复执行):
+//   - egress_proto 按原 provider 推:Anthropic→anthropic,Azure→azure,其余→openai;
+//   - channel_type 按 base_url/provider 认领:commandcode.ai→commandcode,opencode.ai→opencode,
+//     provider='DeepSeek'→deepseek,其余→thirdparty;
+//   - provider 收窄到真厂商:Azure→OpenAI(协议已由 egress_proto 承载),
+//     聚合中转→空串(非单一厂商,官方价靠模型级 official_vendor 绑定)。
+//
+// commandcode / opencode 这两类上游本身即聚合(卖别家模型),provider 留空、由徽标回落显示渠道类型。
+const m0011ChannelQuota = `
+ALTER TABLE channels ADD COLUMN channel_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN egress_proto TEXT NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN quota_path   TEXT NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN quota_shape  TEXT NOT NULL DEFAULT '';
+
+UPDATE channels SET egress_proto = CASE provider
+  WHEN 'Anthropic' THEN 'anthropic'
+  WHEN 'Azure'     THEN 'azure'
+  ELSE 'openai'
+END WHERE egress_proto = '';
+
+UPDATE channels SET channel_type = CASE
+  WHEN base_url LIKE '%commandcode.ai%' THEN 'commandcode'
+  WHEN base_url LIKE '%opencode.ai%'    THEN 'opencode'
+  WHEN provider = 'DeepSeek'            THEN 'deepseek'
+  ELSE 'thirdparty'
+END WHERE channel_type = '';
+
+UPDATE channels SET provider = 'OpenAI' WHERE provider = 'Azure';
+UPDATE channels SET provider = ''       WHERE provider = '聚合中转';
 `
 
 // m0009ModelRateOverride 把售价倍率从「按用户」下沉到「按模型」(见 PLAN.md §2):

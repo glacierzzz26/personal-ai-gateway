@@ -1,6 +1,17 @@
+/** 真实厂商(卖的是谁的模型)。已不含 Azure / 聚合中转 —— 出站协议见 EgressProto,
+ *  渠道上游归属见 ChannelType。空串 = 不是单一厂商(多厂商聚合渠道)。 */
 export type Provider =
-  | 'OpenAI' | 'Azure' | 'Anthropic' | 'DeepSeek'
-  | '通义千问' | '智谱' | 'Moonshot' | '聚合中转';
+  | 'OpenAI' | 'Anthropic' | 'DeepSeek'
+  | '通义千问' | '智谱' | 'Moonshot' | '';
+
+/** 渠道类型:决定上游额度怎么查。 */
+export type ChannelType = 'deepseek' | 'commandcode' | 'opencode' | 'thirdparty';
+
+/** 出站协议:决定请求怎么发上去。 */
+export type EgressProto = 'openai' | 'anthropic' | 'azure';
+
+/** 第三方渠道额度接口的响应形状。 */
+export type QuotaShape = 'usage' | 'oneapi' | 'newapi_user';
 
 export type HealthStatus = 'healthy' | 'degraded' | 'down' | 'disabled';
 
@@ -8,6 +19,8 @@ export interface Channel {
   id: number;
   name: string;
   provider: Provider;
+  channelType: ChannelType;
+  egressProto: EgressProto;
   baseUrl: string;
   priority: number;
   weight: number;
@@ -25,6 +38,9 @@ export interface Channel {
   cooldownSec: number;
   tags: string[];
   note?: string;
+  /** 第三方渠道额度查询路径(仅 thirdparty 有意义) */
+  quotaPath?: string;
+  quotaShape?: string;
   proxy?: string;
   circuitOpen?: boolean;
   createdAt?: string;
@@ -35,6 +51,8 @@ export interface Channel {
 export interface ChannelDraft {
   name: string;
   provider: Provider;
+  channelType: ChannelType;
+  egressProto: EgressProto;
   baseUrl: string;
   apiKey?: string;
   priority: number;
@@ -44,6 +62,8 @@ export interface ChannelDraft {
   maxFailures: number;
   cooldownSec: number;
   tags: string[];
+  quotaPath?: string;
+  quotaShape?: string;
   note?: string;
 }
 
@@ -55,6 +75,8 @@ export interface ModelOffer {
   channelId: number;
   channelName: string;
   provider: Provider;
+  /** 所属渠道的类型;provider 为空(聚合渠道)时前端用它代替供应商展示 */
+  channelType?: ChannelType;
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd?: number;
@@ -477,19 +499,33 @@ export interface SyncResult {
   modelCount: number;
 }
 
-/** 渠道额度单窗口(status==="ok" 时 percent 为已用百分比,0-100)。 */
+/** 渠道额度单窗口(status==="ok" 时 percent 为已用百分比,0-100)。
+ *  used/cap/resetAt 是上游给得出时才有的原始信息(commandcode 给 used/cap,opencode 给 resetsAt)。 */
 export interface QuotaWindow {
   status: string;
   percent: number;
+  used?: number;
+  cap?: number;
+  /** 窗口重置时间,已归一为 RFC3339 */
+  resetAt?: string;
 }
 
 export type QuotaWindowKey = 'rolling' | 'weekly' | 'monthly';
 
-/** GET /channels/{id}/quota 返回:windows 仅含可用窗口;available=false 时 error 给出原因。 */
+/** 绝对余额型额度(DeepSeek / one-api 等只报「还剩多少钱」的上游)。
+ *  currency 是上游原币种,不做折算 —— 汇率是手工维护的,不该拿它当余额前提。 */
+export interface QuotaBalance {
+  amount: number;
+  currency: string;
+}
+
+/** GET /channels/{id}/quota 返回:windows 仅含可用窗口;available=false 时 error 给出原因。
+ *  windows 与 balance 可同时有(one-api 既算得出百分比也报余额)。 */
 export interface ChannelQuota {
   available: boolean;
   planName?: string;
   windows?: Partial<Record<QuotaWindowKey, QuotaWindow>>;
+  balance?: QuotaBalance;
   latencyMs: number;
   error?: string;
 }

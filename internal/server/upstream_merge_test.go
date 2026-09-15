@@ -97,4 +97,3 @@ func TestMergeModelsEndpoint(t *testing.T) {
 		map[string]any{"intoId": 99999})
 	mustStatus(t, code, http.StatusNotFound, "merge missing target")
 }
-

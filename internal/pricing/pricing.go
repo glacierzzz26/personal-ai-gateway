@@ -28,7 +28,7 @@ import (
 // 触发抓取时显式返回此错误,绝不悄悄跳过或返回空集冒充成功。
 var ErrManualOnly = errors.New("该厂商官方计费页为动态渲染,无法稳定抓取;请在管理台手工录入官方参考价")
 
-// ErrNoOfficialSource 该 provider 根本没有官方单价来源(OpenAI/Anthropic/Azure/聚合中转 等)。
+// ErrNoOfficialSource 该 provider 根本没有官方单价来源(或者 provider 为空 = 非单一厂商)。
 var ErrNoOfficialSource = errors.New("该厂商无受支持的官方单价页面")
 
 // quote 一条解析结果(内部;原币种 / 百万 token)。
@@ -89,16 +89,11 @@ var scrapers = map[domain.Provider]scraper{
 		ManualOnly:     true,
 		ManualCurrency: domain.CurrencyUSD,
 	},
-	// Moonshot 官网定价为动态渲染;Azure 按区域/部署定价无单一官方页 —— 均只能手工录入。
+	// Moonshot 官网定价为动态渲染,只能手工录入。
 	domain.ProviderMoonshot: {
 		URL:            "https://platform.moonshot.cn/docs/pricing",
 		ManualOnly:     true,
 		ManualCurrency: domain.CurrencyCNY,
-	},
-	domain.ProviderAzure: {
-		URL:            "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
-		ManualOnly:     true,
-		ManualCurrency: domain.CurrencyUSD,
 	},
 }
 

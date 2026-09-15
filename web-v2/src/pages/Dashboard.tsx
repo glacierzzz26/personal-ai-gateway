@@ -16,6 +16,7 @@ import { useFailureAttribution } from '@/hooks/useFailureAttribution';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { TOKENS } from '@/styles/tokens';
+import { channelLabel } from '@/utils/channel';
 import {
   FAIL_DESC, FAIL_LABEL, FAIL_TONE, STATUS_CLIENT_CLOSED, TONE_COLOR, classifyError, fmt,
 } from '@/utils/format';
@@ -393,7 +394,7 @@ export default function Dashboard() {
                         onClick={() => navigate('/channels')}
                         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/channels'); } }}>
                         <td className="name" title={ch.name}>{ch.name}</td>
-                        <td>{ch.provider}</td>
+                        <td>{channelLabel(ch)}</td>
                         <td>
                           <StatusDot status={ch.status} />
                           {ch.circuitOpen && <span className="gw-badge" style={{ marginLeft: 6 }}>熔断中</span>}

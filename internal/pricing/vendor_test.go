@@ -42,9 +42,10 @@ func TestInferVendor(t *testing.T) {
 
 func TestVendors(t *testing.T) {
 	vs := Vendors()
-	// S4 后:DeepSeek/通义(可抓)+ 智谱/Anthropic/OpenAI/Moonshot/Azure(仅手工)= 7。
-	if len(vs) != 7 {
-		t.Fatalf("Vendors() len = %d, want 7: %+v", len(vs), vs)
+	// S4 后:DeepSeek/通义(可抓)+ 智谱/Anthropic/OpenAI/Moonshot(仅手工)= 6。
+	// (Azure 已从 provider 枚举移除 —— 按区域部署定价,不是厂商。)
+	if len(vs) != 6 {
+		t.Fatalf("Vendors() len = %d, want 6: %+v", len(vs), vs)
 	}
 	// 字典序稳定输出。
 	for i := 1; i < len(vs); i++ {
@@ -65,7 +66,6 @@ func TestVendors(t *testing.T) {
 		domain.ProviderAnthropic: domain.CurrencyUSD,
 		domain.ProviderOpenAI:    domain.CurrencyUSD,
 		domain.ProviderMoonshot:  domain.CurrencyCNY,
-		domain.ProviderAzure:     domain.CurrencyUSD,
 	} {
 		if !byP[p].ManualOnly {
 			t.Errorf("%s should be manual-only", p)

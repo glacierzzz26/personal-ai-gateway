@@ -197,9 +197,9 @@ func TestManualOnlyProviders(t *testing.T) {
 	if !Supports(domain.ProviderOpenAI) || !ManualOnly(domain.ProviderOpenAI) {
 		t.Error("OpenAI 应为仅手工录入")
 	}
-	// 聚合中转不是厂商,始终无官方来源。
-	if Supports(domain.ProviderOpenRouter) {
-		t.Error("聚合中转无官方来源")
+	// 中转站不是厂商,始终无官方来源。
+	if Supports(domain.Provider("示例中转站")) {
+		t.Error("中转站无官方来源")
 	}
 }
 
@@ -237,9 +237,9 @@ func TestBuildManualValidates(t *testing.T) {
 	}); err == nil {
 		t.Error("missing sourceUrl should fail")
 	}
-	// 无官方来源的 provider → 拒绝(聚合中转不是厂商,其价只能来自所转厂商)。
+	// 无官方来源的 provider → 拒绝(中转站不是厂商,其价只能来自所转厂商)。
 	if _, err := BuildManual(domain.OfficialPriceInput{
-		Provider: domain.ProviderOpenRouter, ModelName: "gpt", SourceURL: "https://openai.com/pricing", InputPrice: 1, OutputPrice: 2,
+		Provider: domain.Provider("示例中转站"), ModelName: "gpt", SourceURL: "https://openai.com/pricing", InputPrice: 1, OutputPrice: 2,
 	}); err == nil {
 		t.Error("unsupported provider should fail")
 	}

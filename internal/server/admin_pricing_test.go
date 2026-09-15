@@ -81,13 +81,13 @@ func TestFetchPricingManualOnlyProvider(t *testing.T) {
 	}
 }
 
-// TestFetchPricingUnsupportedProvider 聚合中转不是厂商,无官方单价来源 → 400。
+// TestFetchPricingUnsupportedProvider 中转站不是厂商,无官方单价来源 → 400。
 // (S4 后 OpenAI/Anthropic 已放开为「仅手工录入」,不再是 unsupported。)
 func TestFetchPricingUnsupportedProvider(t *testing.T) {
 	srv, c, _ := newTestServer(t)
 	base := srv.URL
 	bootstrap(t, c, base)
-	oid := mkChannelOf(t, c, base, "agg", domain.ProviderOpenRouter)
+	oid := mkChannelOf(t, c, base, "agg", domain.Provider("示例中转站"))
 
 	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels/"+itoa(oid)+"/fetch-pricing", nil)
 	mustStatus(t, code, http.StatusBadRequest, "agg fetch pricing")
@@ -359,7 +359,7 @@ func TestVendorFetchOfficialPrices(t *testing.T) {
 		return &http.Client{Transport: &redirectRT{target: upstream.URL}}
 	}
 
-	// 不建任何渠道,直接按厂商抓取(聚合中转场景)。
+	// 不建任何渠道,直接按厂商抓取(中转站场景)。
 	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch",
 		map[string]any{"provider": string(domain.ProviderDeepSeek)})
 	mustStatus(t, code, http.StatusOK, "vendor fetch")
@@ -388,17 +388,16 @@ func TestVendorFetchOfficialPrices(t *testing.T) {
 		t.Fatalf("type = %q, body %s", e.Error.Type, body)
 	}
 
-	// 无官方来源的厂商(聚合中转不是厂商)→ 400 unsupported。
+	// 无官方来源的厂商(中转站不是厂商)→ 400 unsupported。
 	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch",
-		map[string]any{"provider": string(domain.ProviderOpenRouter)})
+		map[string]any{"provider": string(domain.Provider("示例中转站"))})
 	mustStatus(t, code, http.StatusBadRequest, "vendor fetch unsupported")
 	if !strings.Contains(string(body), "无受支持的官方单价页面") {
 		t.Fatalf("unexpected body: %s", body)
 	}
 }
 
-// TestOfficialVendorsEndpoint 厂商清单:3 个厂商,仅智谱标「仅手工」,来源 URL 非空。
-// TestOfficialVendorsEndpoint 厂商清单:可抓(DeepSeek/通义)+ 仅手工(智谱/Anthropic/OpenAI/Moonshot/Azure),
+// TestOfficialVendorsEndpoint 厂商清单:可抓(DeepSeek/通义)+ 仅手工(智谱/Anthropic/OpenAI/Moonshot),
 // 来源 URL 非空;仅手工厂商带默认原币。
 func TestOfficialVendorsEndpoint(t *testing.T) {
 	srv, c, _ := newTestServer(t)
@@ -408,7 +407,7 @@ func TestOfficialVendorsEndpoint(t *testing.T) {
 	code, body := doJSON(t, c, http.MethodGet, base+"/api/v1/official-prices/vendors", nil)
 	mustStatus(t, code, http.StatusOK, "list vendors")
 	vs := decode[[]map[string]any](t, body)
-	if len(vs) != 7 {
+	if len(vs) != 6 {
 		t.Fatalf("vendors len = %d: %s", len(vs), body)
 	}
 	manual := map[string]bool{}

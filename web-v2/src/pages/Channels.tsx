@@ -13,11 +13,13 @@ import ProviderMark from '@/components/ProviderMark';
 import StatusDot from '@/components/StatusDot';
 import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import { api } from '@/services/api';
-import { providers } from '@/constants';
+import { channelTypes, egressProtos, providers, quotaShapes } from '@/constants';
+import { channelLabel, channelMark, egressLabel } from '@/utils/channel';
 import { fmt } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
 import type {
-  Channel, ChannelDraft, ChannelQuota, FetchPricingResult, HealthStatus, Provider, QuotaWindowKey,
+  Channel, ChannelDraft, ChannelQuota, ChannelType, EgressProto, FetchPricingResult,
+  HealthStatus, Provider, QuotaShape, QuotaWindowKey,
 } from '@/types';
 
 /** 官方定价抓取结果弹窗载荷(失败即失败:error 非空时 models 为空)。 */
@@ -30,7 +32,9 @@ interface PricingRes {
 
 /** 新建渠道表单默认值 */
 const DEFAULTS = {
-  provider: 'OpenAI' as Provider,
+  provider: '' as Provider,
+  channelType: 'thirdparty' as ChannelType,
+  egressProto: 'openai' as EgressProto,
   priority: 10,
   weight: 1,
   timeoutMs: 60000,
@@ -38,6 +42,8 @@ const DEFAULTS = {
   maxFailures: 5,
   cooldownSec: 30,
   tags: [] as string[],
+  quotaPath: '',
+  quotaShape: '' as QuotaShape | '',
 };
 
 const TIMEOUT_OPTIONS = [
@@ -53,6 +59,8 @@ const TIMEOUT_OPTIONS = [
 interface ChannelFormValues {
   name: string;
   provider: Provider;
+  channelType: ChannelType;
+  egressProto: EgressProto;
   baseUrl: string;
   apiKey?: string;
   priority: number;
@@ -62,6 +70,8 @@ interface ChannelFormValues {
   maxFailures: number;
   cooldownSec: number;
   tags: string[];
+  quotaPath?: string;
+  quotaShape?: QuotaShape | '';
   note?: string;
 }
 
@@ -87,37 +97,77 @@ const pctText = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFi
 
 const dash = <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
 
-/** 额度单元格:可用→"5h 12% · 周 34% · 月 56%" + 逐窗口已用/剩余 tooltip;失败/不支持→灰色占位。 */
-function QuotaCell({ q, provider }: { q: UseQueryResult<ChannelQuota, Error>; provider: Provider }) {
-  if (provider === 'Anthropic') {
-    return <Tooltip title="Anthropic 协议无 /v1/usage 额度接口">{dash}</Tooltip>;
+/** 币种符号:余额按上游原币种展示,不折算(汇率是手工维护的,不该拿它当余额前提)。 */
+const CUR_SYMBOL: Record<string, string> = { CNY: '¥', USD: '$' };
+const money = (amount: number, currency: string) =>
+  `${CUR_SYMBOL[currency] ?? `${currency} `}${amount.toFixed(2)}`;
+
+/** 重置时间显示:只到分钟(额度窗口不需要秒级)。 */
+const resetText = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/**
+ * 额度单元格。三种形态:
+ *   1. 窗口型(commandcode/opencode/通用信封)→ "5h 12% · 周 34%" + 逐窗口 tooltip;
+ *   2. 余额型(deepseek/one-api)→ 余额金额 + 余额 tooltip(可能同时有窗口);
+ *   3. 不可用 → 灰色占位,未配置额度路径时给出可点提示。
+ */
+function QuotaCell({ q }: { q: UseQueryResult<ChannelQuota, Error> }) {
+  // fetchStatus==='idle' 表示查询被 enabled 关掉了(第三方渠道没配额度路径):
+  // 不显示「读取中…」,直接给一个指路占位,否则会永远转圈。
+  if (q.fetchStatus === 'idle') {
+    return <Tooltip title="第三方渠道需在「编辑」里配置额度查询路径">{dash}</Tooltip>;
   }
   if (q.isPending && !q.data) return <span style={{ color: 'var(--gw-text-3)' }}>读取中…</span>;
   const quota = q.data;
   if (q.isError || !quota || !quota.available) {
-    return <Tooltip title={quota?.error || '额度接口未响应'}>{dash}</Tooltip>;
+    const notConfigured = !!quota?.error?.includes('未配置额度查询路径');
+    const tip = notConfigured
+      ? `${quota?.error} —— 点「编辑」进入渠道,填第三方额度路径`
+      : quota?.error || '额度接口未响应';
+    return <Tooltip title={tip}>{dash}</Tooltip>;
   }
   const wins = QUOTA_WINS.filter(w => quota.windows?.[w.key]?.status === 'ok');
-  if (wins.length === 0) {
+  const balance = quota.balance;
+  if (wins.length === 0 && !balance) {
     return <Tooltip title="该渠道未返回可用额度窗口(不支持或已耗尽未上报)">{dash}</Tooltip>;
   }
+
   const detail = (
-    <div style={{ fontSize: 12.5, lineHeight: 1.9, minWidth: 180 }}>
+    <div style={{ fontSize: 12.5, lineHeight: 1.9, minWidth: 200 }}>
       {quota.planName && <div style={{ opacity: 0.85 }}>套餐：{quota.planName}</div>}
+      {balance && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
+          <span>剩余额度</span>
+          <span className="gw-num">{money(balance.amount, balance.currency)}</span>
+        </div>
+      )}
       {wins.map(w => {
-        const pct = quota.windows![w.key]!.percent;
+        const win = quota.windows![w.key]!;
+        const raw = win.cap != null && win.cap > 0 ? `(${money(win.used ?? 0, balance?.currency ?? 'USD')} / ${money(win.cap, balance?.currency ?? 'USD')})` : '';
         return (
           <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
             <span>{w.label} 窗口</span>
-            <span className="gw-num">已用 {pctText(pct)}% · 剩余 {pctText(Math.max(0, 100 - pct))}%</span>
+            <span className="gw-num">
+              已用 {pctText(win.percent)}%{raw ? ` ${raw}` : ''}
+              {win.resetAt ? ` · ${resetText(win.resetAt)} 重置` : ''}
+            </span>
           </div>
         );
       })}
     </div>
   );
+
   return (
     <Tooltip title={detail}>
       <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+        {balance && (
+          <span className="gw-num" style={{ fontSize: 12.5 }}>{money(balance.amount, balance.currency)}</span>
+        )}
         {wins.map(w => {
           const pct = quota.windows![w.key]!.percent;
           const warn = pct >= QUOTA_ALERT;
@@ -142,6 +192,8 @@ export default function Channels() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const [form] = Form.useForm<ChannelFormValues>();
+  // 第三方渠道才展开「额度路径 + 形状」,故需跟随表单实时值渲染。
+  const channelType = Form.useWatch('channelType', form);
 
   const [kw, setKw] = useState('');
   const [provider, setProvider] = useState('');
@@ -174,12 +226,13 @@ export default function Channels() {
   });
   const vendorInfo = (p: Provider) => officialVendors.find(v => v.provider === p);
 
-  // 额度:对每条渠道并发查询上游 /v1/usage(Anthropic 协议渠道不查)。失败静默,UI 显示灰色占位。
+  // 额度:按渠道类型分发到对应上游接口。第三方渠道没配「额度路径」时不查
+  // (后端会直接返回「未配置」),避免整列无谓报错。失败静默,UI 显示灰色占位。
   const quotaQueries = useQueries({
     queries: channels.map(ch => ({
       queryKey: ['channel-quota', ch.id],
       queryFn: () => api.channelQuota(ch.id),
-      enabled: ch.provider !== 'Anthropic',
+      enabled: ch.channelType !== 'thirdparty' || !!ch.quotaPath,
       retry: 0,
       staleTime: 60_000,
     })),
@@ -223,6 +276,8 @@ export default function Channels() {
     form.setFieldsValue({
       name: row.name,
       provider: row.provider,
+      channelType: row.channelType,
+      egressProto: row.egressProto,
       baseUrl: row.baseUrl,
       priority: row.priority,
       weight: row.weight,
@@ -231,6 +286,8 @@ export default function Channels() {
       maxFailures: row.maxFailures,
       cooldownSec: row.cooldownSec,
       tags: row.tags ?? [],
+      quotaPath: row.quotaPath ?? '',
+      quotaShape: (row.quotaShape as QuotaShape) || '',
       note: row.note,
     });
     setOpen(true);
@@ -248,6 +305,8 @@ export default function Channels() {
     const base = {
       name: values.name.trim(),
       provider: values.provider,
+      channelType: values.channelType,
+      egressProto: values.egressProto,
       baseUrl: values.baseUrl.trim(),
       priority: values.priority ?? DEFAULTS.priority,
       weight: values.weight ?? DEFAULTS.weight,
@@ -256,6 +315,9 @@ export default function Channels() {
       maxFailures: values.maxFailures ?? DEFAULTS.maxFailures,
       cooldownSec: values.cooldownSec ?? DEFAULTS.cooldownSec,
       tags: values.tags ?? [],
+      // 额度配置只有第三方渠道有意义;切回内置类型时下发空值,免得残留路径日后误导。
+      quotaPath: values.channelType === 'thirdparty' ? values.quotaPath?.trim() ?? '' : '',
+      quotaShape: values.channelType === 'thirdparty' ? (values.quotaShape ?? '') : '',
       note: values.note?.trim() || undefined,
     };
     setSubmitting(true);
@@ -335,7 +397,8 @@ export default function Channels() {
 
   const list = channels.filter(c => {
     if (kw && !`${c.name}${c.baseUrl}`.toLowerCase().includes(kw.toLowerCase())) return false;
-    if (provider && c.provider !== provider) return false;
+    if (provider === '__none__') { if (c.provider) return false; }
+    else if (provider && c.provider !== provider) return false;
     if (status && c.status !== status) return false;
     return true;
   });
@@ -349,7 +412,8 @@ export default function Channels() {
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</div>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--gw-text-3)' }}>
-            <ProviderMark name={r.provider} size={14} />{r.provider} · {r.modelCount} 个模型
+            <ProviderMark name={channelMark(r)} size={14} />
+            {channelLabel(r)} · {egressLabel(r.egressProto)} · {r.modelCount} 个模型
           </div>
           <Tooltip title={r.baseUrl}>
             <div
@@ -398,7 +462,7 @@ export default function Channels() {
       title: '额度', key: 'quota', width: 140,
       render: (_, r) => {
         const q = quotaById.get(r.id);
-        return q ? <QuotaCell q={q} provider={r.provider} /> : dash;
+        return q ? <QuotaCell q={q} /> : dash;
       },
     },
     {
@@ -479,7 +543,12 @@ export default function Channels() {
             <Input.Search allowClear placeholder="搜索名称或地址" style={{ width: 240 }} value={kw} onChange={e => setKw(e.target.value)} />
             <Select
               style={{ width: 150 }} value={provider} onChange={setProvider}
-              options={[{ value: '', label: '全部供应商' }, ...providers.map(p => ({ value: p, label: p }))]}
+              options={[
+                { value: '', label: '全部供应商' },
+                ...providers.map(p => ({ value: p, label: p })),
+                // 聚合渠道 provider 为空,单列一项才能筛出来(空串已被「全部」占用)
+                { value: '__none__', label: '非厂商 / 聚合' },
+              ]}
             />
             <Select
               style={{ width: 140 }} value={status} onChange={setStatus}
@@ -531,15 +600,37 @@ export default function Channels() {
           requiredMark={false}
           initialValues={{ provider: DEFAULTS.provider, enabled: DEFAULTS.enabled }}
         >
+          <Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true, message: '请输入渠道名称' }]}>
+            <Input placeholder="例:DeepSeek 官方" />
+          </Form.Item>
+
           <Row gutter={12}>
-            <Col span={12}>
-              <Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true, message: '请输入渠道名称' }]}>
-                <Input placeholder="例:DeepSeek 官方" />
+            <Col span={8}>
+              <Form.Item
+                name="channelType" label="渠道类型" rules={[{ required: true, message: '请选择渠道类型' }]}
+                tooltip="决定上游额度怎么查。第三方渠道需手工配置额度路径与形状"
+              >
+                <Select options={channelTypes.map(t => ({ value: t.value, label: t.label }))} />
               </Form.Item>
             </Col>
-            <Col span={12}>
-              <Form.Item name="provider" label="供应商" rules={[{ required: true, message: '请选择供应商' }]}>
-                <Select options={providers.map(p => ({ value: p, label: p }))} />
+            <Col span={8}>
+              <Form.Item
+                name="egressProto" label="出站协议" rules={[{ required: true, message: '请选择出站协议' }]}
+                tooltip="决定请求怎么发上去,与「是哪家的模型」无关"
+              >
+                <Select options={egressProtos.map(p => ({ value: p.value, label: p.label }))} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="provider" label="供应商"
+                tooltip="卖的是谁的模型。聚合渠道(如 command code)留空,列表按渠道类型显示"
+              >
+                <Select
+                  allowClear
+                  placeholder="— 非厂商 / 聚合"
+                  options={providers.map(p => ({ value: p, label: p }))}
+                />
               </Form.Item>
             </Col>
           </Row>
@@ -547,6 +638,41 @@ export default function Channels() {
           <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, whitespace: true, message: '请输入上游地址' }]}>
             <Input className="gw-mono" placeholder="https://api.deepseek.com/v1" />
           </Form.Item>
+
+          {channelType === 'thirdparty' && (
+            <Row gutter={12}>
+              <Col span={14}>
+                <Form.Item
+                  name="quotaPath" label="额度路径"
+                  tooltip="相对路径,拼在 Base URL 之后。留空则该渠道不查额度"
+                  rules={[{
+                    pattern: /^\/\S*$/,
+                    message: '需以 / 开头的相对路径,如 /v1/dashboard/billing/subscription',
+                  }]}
+                >
+                  <Input className="gw-mono" placeholder="/v1/dashboard/billing/subscription" />
+                </Form.Item>
+              </Col>
+              <Col span={10}>
+                <Form.Item
+                  name="quotaShape" label="额度形状"
+                  tooltip="上游返回的 JSON 形状;填了路径就必须选形状"
+                  dependencies={['quotaPath']}
+                  rules={[({ getFieldValue }) => ({
+                    validator: (_, v) =>
+                      getFieldValue('quotaPath') && !v
+                        ? Promise.reject(new Error('填写额度路径后需选择形状'))
+                        : Promise.resolve(),
+                  })]}
+                >
+                  <Select
+                    allowClear placeholder="选择形状"
+                    options={quotaShapes.map(s => ({ value: s.value, label: s.label, title: s.hint }))}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
 
           <Form.Item
             name="apiKey"

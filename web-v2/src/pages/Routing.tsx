@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import ProviderMark from '@/components/ProviderMark';
+import { channelLabel, channelMark } from '@/utils/channel';
 import { EmptyState, ErrorState } from '@/components/States';
 import { useSortableRows } from '@/hooks/useSortableRows';
 import { api } from '@/services/api';
@@ -160,7 +161,7 @@ function RuleModal(props: {
     }
   };
 
-  const opts = channels.map(c => ({ value: c.id, label: `${c.name} · ${c.provider}` }));
+  const opts = channels.map(c => ({ value: c.id, label: `${c.name} · ${channelLabel(c)}` }));
 
   return (
     <Modal
@@ -499,7 +500,7 @@ export default function Routing() {
               const ch = channels.find(c => c.id === id);
               return (
                 <span className="gw-badge" key={id} style={{ gap: 5 }}>
-                  {ch && <ProviderMark name={ch.provider} size={14} />}
+                  {ch && <ProviderMark name={channelMark(ch)} size={14} />}
                   {ch?.name ?? `#${id}`}
                 </span>
               );

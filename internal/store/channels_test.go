@@ -149,3 +149,49 @@ func TestDeleteChannelPurgesOrphanModels(t *testing.T) {
 		t.Errorf("only-b should survive: %v", err)
 	}
 }
+
+// TestChannelQuotaFieldsRoundTrip 新增的四列(Create→Get/List→Update)必须逐字回读:
+// scanChannel 是位置扫描,列顺序错位不会被编译器发现,只能靠这条往返测试守住。
+func TestChannelQuotaFieldsRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+
+	ch, err := st.CreateChannel(domain.ChannelInput{
+		Name: "cc", Provider: domain.ProviderNone,
+		ChannelType: domain.ChannelTypeThirdParty,
+		EgressProto: domain.EgressAnthropic,
+		BaseURL:     "https://us.example.com",
+		QuotaPath:   "/v1/dashboard/billing/subscription",
+		QuotaShape:  string(domain.ShapeOneAPI),
+	})
+	mustNoErr(t, err, "create channel")
+
+	// provider 允许为空(非单一厂商):旧 Defaults 会把它兜成 OpenAI,此断言守住该行为。
+	mustEqual(t, string(ch.Provider), "", "empty provider should round-trip")
+	mustEqual(t, string(ch.ChannelType), "thirdparty", "channel_type")
+	mustEqual(t, string(ch.EgressProto), "anthropic", "egress_proto")
+	mustEqual(t, ch.QuotaPath, "/v1/dashboard/billing/subscription", "quota_path")
+	mustEqual(t, ch.QuotaShape, "oneapi", "quota_shape")
+
+	got, err := st.GetChannel(ch.ID)
+	mustNoErr(t, err, "get channel")
+	mustEqual(t, got.QuotaPath, ch.QuotaPath, "quota_path via GetChannel")
+
+	list, err := st.ListChannels()
+	mustNoErr(t, err, "list channels")
+	if len(list) != 1 || list[0].QuotaShape != ch.QuotaShape {
+		t.Fatalf("list channels = %+v, want quota_shape %q", list, ch.QuotaShape)
+	}
+
+	// 更新后重读:整体替换语义下四列都要被正确写回。
+	up, err := st.UpdateChannel(ch.ID, domain.ChannelInput{
+		Name: "cc", Provider: domain.ProviderNone,
+		ChannelType: domain.ChannelTypeOpenCode,
+		EgressProto: domain.EgressOpenAI,
+		BaseURL:     "https://opencode.ai/zen/go/v1",
+		QuotaPath:   "",
+		QuotaShape:  "",
+	})
+	mustNoErr(t, err, "update channel")
+	mustEqual(t, string(up.ChannelType), "opencode", "channel_type after update")
+	mustEqual(t, up.QuotaPath, "", "quota_path cleared")
+}

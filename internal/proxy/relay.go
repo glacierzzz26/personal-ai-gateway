@@ -100,9 +100,9 @@ func (r *Relay) Client(settings domain.Settings, timeoutMs int) *http.Client {
 	return c
 }
 
-// OutProto 由渠道 provider 定出站协议。
-func OutProto(p domain.Provider) string {
-	if p == domain.ProviderAnthropic {
+// OutProto 由渠道出站协议定出站协议常量。
+func OutProto(p domain.EgressProto) string {
+	if p == domain.EgressAnthropic {
 		return ProtoAnthropic
 	}
 	return ProtoOpenAI
@@ -165,7 +165,7 @@ func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []by
 	case ProtoOpenAI:
 		req.URL = base + "/v1/chat/completions"
 	}
-	if ch.Provider == domain.ProviderAzure && !strings.Contains(req.URL, "api-version") {
+	if ch.EgressProto == domain.EgressAzure && !strings.Contains(req.URL, "api-version") {
 		sep := "?"
 		if strings.Contains(req.URL, "?") {
 			sep = "&"

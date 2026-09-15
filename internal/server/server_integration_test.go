@@ -499,7 +499,7 @@ func TestChannelQuota(t *testing.T) {
 	t.Cleanup(up.Close)
 
 	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/channels", map[string]any{
-		"name": "q-oa", "provider": "OpenAI", "baseUrl": up.URL, "apiKey": "sk-quota",
+		"name": "q-oa", "provider": "OpenAI", "channelType": "opencode", "baseUrl": up.URL, "apiKey": "sk-quota",
 	})
 	mustStatus(t, code, http.StatusOK, "create channel")
 	chID := int64(decode[map[string]any](t, body)["id"].(float64))
@@ -524,9 +524,9 @@ func TestChannelQuota(t *testing.T) {
 		t.Fatalf("rolling window = %v", windows["rolling"])
 	}
 
-	// Anthropic:协议无额度接口 → available=false + error(不打上游)
+	// Anthropic 出站协议 → 渠道类型留空(thirdparty)且未配额度路径 → available=false + error(不打上游)
 	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/channels", map[string]any{
-		"name": "q-ant", "provider": "Anthropic", "baseUrl": up.URL, "apiKey": "sk-x",
+		"name": "q-ant", "provider": "Anthropic", "egressProto": "anthropic", "baseUrl": up.URL, "apiKey": "sk-x",
 	})
 	mustStatus(t, code, http.StatusOK, "create anthropic channel")
 	antID := int64(decode[map[string]any](t, body)["id"].(float64))

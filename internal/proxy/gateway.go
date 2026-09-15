@@ -363,7 +363,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 		if !ok {
 			continue
 		}
-		outProto := OutProto(ch.Provider)
+		outProto := OutProto(ch.EgressProto)
 		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), outboundModel(plan, at))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
@@ -440,7 +440,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			total, nil, ptrStr("upstream unavailable: "+firstErr.upErr))
 		return
 	}
-	writeTranslatedError(w, inProto, OutProto(firstErr.channel.Provider), firstErr.status, firstErr.body)
+	writeTranslatedError(w, inProto, OutProto(firstErr.channel.EgressProto), firstErr.status, firstErr.body)
 	g.logFailure(in, firstErr.channel, firstErr.offer, firstErr.status,
 		total, &firstErr.latencyMs, upstreamMsg(firstErr.status, firstErr.body))
 }
@@ -466,7 +466,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 		if !ok {
 			continue
 		}
-		outProto := OutProto(ch.Provider)
+		outProto := OutProto(ch.EgressProto)
 		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), outboundModel(plan, at))
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
@@ -516,7 +516,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 			total, nil, ptrStr("upstream unavailable: "+firstErr.upErr))
 		return
 	}
-	writeTranslatedError(w, inProto, OutProto(firstErr.channel.Provider), firstErr.status, firstErr.errBody)
+	writeTranslatedError(w, inProto, OutProto(firstErr.channel.EgressProto), firstErr.status, firstErr.errBody)
 	g.logFailure(in, firstErr.channel, firstErr.offer, firstErr.status,
 		total, nil, upstreamMsg(firstErr.status, firstErr.errBody))
 }

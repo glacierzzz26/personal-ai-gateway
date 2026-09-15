@@ -16,6 +16,7 @@ import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { capabilities as ALL_CAPS } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
+import { channelLabel, channelMark } from '@/utils/channel';
 import type { EChartsOption } from 'echarts';
 import type { Capability, Channel, ModelCatalogItem, ModelDraft, ModelOffer, OfferDraft } from '@/types';
 
@@ -168,7 +169,7 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
               placeholder="选择渠道"
               options={candidateChannels.map(c => ({
                 value: c.id,
-                label: `${c.name} · ${c.provider}${c.enabled ? '' : '（渠道已停用）'}`,
+                label: `${c.name} · ${channelLabel(c)}${c.enabled ? '' : '（渠道已停用）'}`,
               }))}
               showSearch
               optionFilterProp="label"
@@ -427,11 +428,14 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     },
     {
       title: '供应商', dataIndex: 'provider',
-      render: v => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <ProviderMark name={v} /> {v}
-        </span>
-      ),
+      render: (_, r) => {
+        const label = channelLabel(r);
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <ProviderMark name={channelMark(r)} /> {label}
+          </span>
+        );
+      },
     },
     {
       title: '上游名', key: 'upstream',

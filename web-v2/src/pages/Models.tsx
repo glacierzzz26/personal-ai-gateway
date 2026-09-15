@@ -13,6 +13,7 @@ import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import { api } from '@/services/api';
 import { capabilities, providers } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
+import { channelLabel } from '@/utils/channel';
 import { buildOfficialIndex, officialOfModel } from '@/utils/official';
 import type { Capability, Channel, ModelCatalogItem, ModelDraft, OfficialPriceView } from '@/types';
 
@@ -160,7 +161,7 @@ function SyncModal({ open, onClose, channels, onSync, syncing }: {
           showSearch
           optionFilterProp="label"
           autoFocus
-          options={channels.map(ch => ({ value: ch.id, label: `${ch.name}（${ch.provider}）` }))}
+          options={channels.map(ch => ({ value: ch.id, label: `${ch.name}（${channelLabel(ch)}）` }))}
         />
       )}
     </Modal>

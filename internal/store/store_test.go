@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -71,4 +73,67 @@ func TestOpenMigratesAndIdempotent(t *testing.T) {
 	var gone int
 	mustNoErr(t, st2.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'`).Scan(&gone), "check sessions gone")
 	mustEqual(t, gone, 0, "sessions table dropped")
+}
+
+// TestM0011BackfillsLegacyChannels 迁移回填:老库的 Azure/聚合中转 渠道应被
+// 拆成 egress_proto + 空 provider,commandcode/opencode 按 base_url 认领渠道类型。
+// 这些行在迁移前 provider 是唯一线索,回填错了会静默改变出站协议 —— 故逐条断言。
+func TestM0011BackfillsLegacyChannels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	// 建一个「迁移前」形态的库:只跑到 m0010,手工插入老行,再由 Open 跑完 m0011。
+	dsn, err := sqliteDSN(path)
+	mustNoErr(t, err, "dsn")
+	db, err := sql.Open("sqlite", dsn)
+	mustNoErr(t, err, "open raw")
+	_, err = db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`)
+	mustNoErr(t, err, "create schema_migrations")
+	for i, step := range migrations[:len(migrations)-1] {
+		_, err = db.Exec(step)
+		mustNoErr(t, err, fmt.Sprintf("apply migration %d", i+1))
+		_, err = db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, i+1, nowRFC3339())
+		mustNoErr(t, err, "record migration")
+	}
+
+	now := nowRFC3339()
+	legacy := []struct{ name, provider, baseURL string }{
+		{"old-azure", "Azure", "https://myres.openai.azure.com"},
+		{"old-agg", "聚合中转", "https://relay.example.com"},
+		{"old-cc", "OpenAI", "https://api.commandcode.ai/provider/v1"},
+		{"old-ant", "Anthropic", "https://api.anthropic.com"},
+		{"old-ds", "DeepSeek", "https://api.deepseek.com/v1"},
+	}
+	for _, c := range legacy {
+		_, err := db.Exec(`INSERT INTO channels (name, provider, base_url, api_key_cipher, key_masked,
+			priority, weight, timeout_ms, tags, enabled, max_failures, cooldown_sec, note, created_at, updated_at)
+			VALUES (?,?,?,'','',0,0,60000,'[]',1,3,60,'',?,?)`, c.name, c.provider, c.baseURL, now, now)
+		mustNoErr(t, err, "insert legacy "+c.name)
+	}
+	db.Close()
+
+	st, err := Open(path)
+	mustNoErr(t, err, "reopen to apply m0011")
+	defer st.Close()
+
+	want := map[string]struct{ provider, egress, ctype string }{
+		"old-azure": {"OpenAI", "azure", "thirdparty"},
+		"old-agg":   {"", "openai", "thirdparty"},
+		"old-cc":    {"OpenAI", "openai", "commandcode"},
+		"old-ant":   {"Anthropic", "anthropic", "thirdparty"},
+		"old-ds":    {"DeepSeek", "openai", "deepseek"},
+	}
+	for _, c := range legacy {
+		ch, err := st.GetChannelByName(c.name)
+		mustNoErr(t, err, "get "+c.name)
+		w := want[c.name]
+		if string(ch.Provider) != w.provider {
+			t.Errorf("%s provider = %q, want %q", c.name, ch.Provider, w.provider)
+		}
+		if string(ch.EgressProto) != w.egress {
+			t.Errorf("%s egress_proto = %q, want %q", c.name, ch.EgressProto, w.egress)
+		}
+		if string(ch.ChannelType) != w.ctype {
+			t.Errorf("%s channel_type = %q, want %q", c.name, ch.ChannelType, w.ctype)
+		}
+	}
 }

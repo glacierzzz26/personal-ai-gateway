@@ -26,7 +26,7 @@ func channelProbeReq(ch domain.ChannelRow) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if OutProto(ch.Provider) == ProtoAnthropic {
+	if OutProto(ch.EgressProto) == ProtoAnthropic {
 		req.Header.Set("x-api-key", key)
 		req.Header.Set("anthropic-version", "2023-06-01")
 	} else {

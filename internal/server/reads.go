@@ -105,11 +105,13 @@ func (s *Server) channelHealth(v *adminView, id int64, enabled bool) (successRat
 // channelRead 组合渠道展示行。
 func (s *Server) channelRead(v *adminView, ch domain.ChannelRow) domain.ChannelRead {
 	r := domain.ChannelRead{
-		ID: ch.ID, Name: ch.Name, Provider: ch.Provider, BaseURL: ch.BaseURL,
+		ID: ch.ID, Name: ch.Name, Provider: ch.Provider,
+		ChannelType: ch.ChannelType, EgressProto: ch.EgressProto, BaseURL: ch.BaseURL,
 		Priority: ch.Priority, Weight: ch.Weight,
 		KeyMasked: ch.KeyMasked, ModelCount: v.chModels[ch.ID],
 		TimeoutMs: ch.TimeoutMs, Tags: ch.Tags, Enabled: ch.Enabled,
-		Note: ch.Note, MaxFailures: ch.MaxFailures, CooldownSec: ch.CooldownSec,
+		Note: ch.Note, QuotaPath: ch.QuotaPath, QuotaShape: ch.QuotaShape,
+		MaxFailures: ch.MaxFailures, CooldownSec: ch.CooldownSec,
 		CreatedAt: ch.CreatedAt, UpdatedAt: ch.UpdatedAt,
 	}
 	if t, ok := v.chToday[ch.ID]; ok {

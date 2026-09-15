@@ -27,13 +27,13 @@ func (s *Store) CreateChannel(in domain.ChannelInput) (domain.ChannelRow, error)
 	}
 	now := formatRFC3339(s.nowUTC())
 	res, err := s.db.Exec(`INSERT INTO channels (
-		name, provider, base_url, api_key_cipher, key_masked,
+		name, provider, channel_type, egress_proto, base_url, api_key_cipher, key_masked,
 		priority, weight, timeout_ms, tags, enabled, max_failures, cooldown_sec, note,
-		created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		in.Name, in.Provider, in.BaseURL, cipher, domain.MaskKey(in.APIKey),
+		quota_path, quota_shape, created_at, updated_at
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		in.Name, in.Provider, in.ChannelType, in.EgressProto, in.BaseURL, cipher, domain.MaskKey(in.APIKey),
 		in.Priority, in.Weight, in.TimeoutMs, encodeJSON(in.Tags), b2i(*in.Enabled),
-		in.MaxFailures, in.CooldownSec, in.Note, now, now)
+		in.MaxFailures, in.CooldownSec, in.Note, in.QuotaPath, in.QuotaShape, now, now)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ChannelRow{}, ErrConflict
@@ -62,12 +62,13 @@ func (s *Store) UpdateChannel(id int64, in domain.ChannelInput) (domain.ChannelR
 	}
 	now := formatRFC3339(s.nowUTC())
 	res, err := s.db.Exec(`UPDATE channels SET
-		name=?, provider=?, base_url=?, api_key_cipher=?, key_masked=?,
-		priority=?, weight=?, timeout_ms=?, tags=?, enabled=?, max_failures=?, cooldown_sec=?, note=?, updated_at=?
+		name=?, provider=?, channel_type=?, egress_proto=?, base_url=?, api_key_cipher=?, key_masked=?,
+		priority=?, weight=?, timeout_ms=?, tags=?, enabled=?, max_failures=?, cooldown_sec=?, note=?,
+		quota_path=?, quota_shape=?, updated_at=?
 		WHERE id=?`,
-		in.Name, in.Provider, in.BaseURL, cipher, masked,
+		in.Name, in.Provider, in.ChannelType, in.EgressProto, in.BaseURL, cipher, masked,
 		in.Priority, in.Weight, in.TimeoutMs, encodeJSON(in.Tags), b2i(*in.Enabled),
-		in.MaxFailures, in.CooldownSec, in.Note, now, id)
+		in.MaxFailures, in.CooldownSec, in.Note, in.QuotaPath, in.QuotaShape, now, id)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ChannelRow{}, ErrConflict
@@ -95,8 +96,8 @@ func (s *Store) SetChannelEnabled(id int64, enabled bool) error {
 
 // GetChannel 返回渠道整行(含密文;仅引擎/管理回显内部使用)。
 func (s *Store) GetChannel(id int64) (domain.ChannelRow, error) {
-	row := s.db.QueryRow(`SELECT id,name,provider,base_url,api_key_cipher,key_masked,
-		priority,weight,timeout_ms,tags,enabled,max_failures,cooldown_sec,note,created_at,updated_at
+	row := s.db.QueryRow(`SELECT id,name,provider,channel_type,egress_proto,base_url,api_key_cipher,key_masked,
+		priority,weight,timeout_ms,tags,enabled,max_failures,cooldown_sec,note,quota_path,quota_shape,created_at,updated_at
 		FROM channels WHERE id=?`, id)
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -107,8 +108,8 @@ func (s *Store) GetChannel(id int64) (domain.ChannelRow, error) {
 
 // GetChannelByName 按唯一名查渠道。
 func (s *Store) GetChannelByName(name string) (domain.ChannelRow, error) {
-	row := s.db.QueryRow(`SELECT id,name,provider,base_url,api_key_cipher,key_masked,
-		priority,weight,timeout_ms,tags,enabled,max_failures,cooldown_sec,note,created_at,updated_at
+	row := s.db.QueryRow(`SELECT id,name,provider,channel_type,egress_proto,base_url,api_key_cipher,key_masked,
+		priority,weight,timeout_ms,tags,enabled,max_failures,cooldown_sec,note,quota_path,quota_shape,created_at,updated_at
 		FROM channels WHERE name=?`, name)
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -119,8 +120,8 @@ func (s *Store) GetChannelByName(name string) (domain.ChannelRow, error) {
 
 // ListChannels 返回全部渠道,priority 升序、同优后创建在前。
 func (s *Store) ListChannels() ([]domain.ChannelRow, error) {
-	rows, err := s.db.Query(`SELECT id,name,provider,base_url,api_key_cipher,key_masked,
-		priority,weight,timeout_ms,tags,enabled,max_failures,cooldown_sec,note,created_at,updated_at
+	rows, err := s.db.Query(`SELECT id,name,provider,channel_type,egress_proto,base_url,api_key_cipher,key_masked,
+		priority,weight,timeout_ms,tags,enabled,max_failures,cooldown_sec,note,quota_path,quota_shape,created_at,updated_at
 		FROM channels ORDER BY priority ASC, id ASC`)
 	if err != nil {
 		return nil, err
@@ -193,9 +194,10 @@ func scanChannel(row scanner) (domain.ChannelRow, error) {
 	var tags string
 	var enabled int
 	var created, updated string
-	if err := row.Scan(&ch.ID, &ch.Name, &ch.Provider, &ch.BaseURL, &ch.APIKeyCipher,
-		&ch.KeyMasked, &ch.Priority, &ch.Weight, &ch.TimeoutMs, &tags, &enabled,
-		&ch.MaxFailures, &ch.CooldownSec, &ch.Note, &created, &updated); err != nil {
+	if err := row.Scan(&ch.ID, &ch.Name, &ch.Provider, &ch.ChannelType, &ch.EgressProto,
+		&ch.BaseURL, &ch.APIKeyCipher, &ch.KeyMasked, &ch.Priority, &ch.Weight, &ch.TimeoutMs,
+		&tags, &enabled, &ch.MaxFailures, &ch.CooldownSec, &ch.Note,
+		&ch.QuotaPath, &ch.QuotaShape, &created, &updated); err != nil {
 		return domain.ChannelRow{}, err
 	}
 	ch.Tags = decodeStringList(tags)
