@@ -423,7 +423,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			// 只在成功且翻译通过时记,供下一轮 a2o 回填 reasoning_content。
 			g.reason.Put(in.token.ID, cap)
 		}
-		g.finish(w, r, in, res.latencyMs, res.status, outBody, ch, at.Offer, plan, tok, settings, start)
+		g.finish(w, r, in, res.ttfbMs, res.status, outBody, ch, at.Offer, plan, tok, settings, start)
 		return
 	}
 	// 全候选失败:回错误前也落一条失败账(供用量/错误率/渠道健康统计)。
@@ -442,7 +442,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 	}
 	writeTranslatedError(w, inProto, OutProto(firstErr.channel.EgressProto), firstErr.status, firstErr.body)
 	g.logFailure(in, firstErr.channel, firstErr.offer, firstErr.status,
-		total, &firstErr.latencyMs, upstreamMsg(firstErr.status, firstErr.body))
+		total, &firstErr.ttfbMs, upstreamMsg(firstErr.status, firstErr.body))
 }
 
 // finish 落账+回写:非流成功路径。

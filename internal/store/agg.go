@@ -7,7 +7,11 @@ import (
 	"personal-ai-gateway/internal/domain"
 )
 
-// AvgFirstTokenMsSince 窗口内成功请求首 token 延迟均值(无样本返回 0)。
+// AvgFirstTokenMsSince 窗口内成功流式请求首 token 延迟均值(无样本返回 0)。
+//
+// 只统计 stream=1:首字延迟这个词只对流式有意义(非流式一次返回,「首字」等于整程)。
+// 此前不过滤 stream,把非流式的整程耗时也平均进来 —— 非流式实测均值约为流式的 2 倍,
+// 混算会系统性抬高这个数字,且同一列在不同流式占比的窗口间不可比。
 func (s *Store) AvgFirstTokenMsSince(sinceUTC time.Time) (float64, error) {
 	return s.avgFirstTokenMsSince(sinceUTC, 0)
 }
@@ -21,7 +25,7 @@ func (s *Store) avgFirstTokenMsSince(sinceUTC time.Time, ownerID int64) (float64
 	cond, args := ownerCond(ownerID)
 	var avg sql.NullFloat64
 	err := s.db.QueryRow(`SELECT AVG(first_token_ms) FROM request_logs
-		WHERE ts >= ? AND status BETWEEN 100 AND 399 AND first_token_ms > 0`+cond,
+		WHERE ts >= ? AND status BETWEEN 100 AND 399 AND first_token_ms > 0 AND stream = 1`+cond,
 		append([]any{formatRFC3339(sinceUTC)}, args...)...).Scan(&avg)
 	if err != nil {
 		return 0, err
