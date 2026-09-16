@@ -190,9 +190,19 @@ func (s *Store) QuerySeriesOwner(bucket string, fromUTC, toUTC time.Time, tzOffM
 	return s.querySeries(bucket, fromUTC, toUTC, tzOffMin, ownerID)
 }
 
+// QuerySeriesCustomers 客户归属口径的时间桶曲线(营收/成本/请求数),供「经营」视图用。
+func (s *Store) QuerySeriesCustomers(bucket string, fromUTC, toUTC time.Time, tzOffMin int) ([]domain.MetricPoint, error) {
+	return s.querySeriesWhere(bucket, fromUTC, toUTC, tzOffMin, customerCond, nil)
+}
+
 func (s *Store) querySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin int, ownerID int64) ([]domain.MetricPoint, error) {
-	n := MetricBucket(bucket)
 	cond, args := ownerCond(ownerID)
+	return s.querySeriesWhere(bucket, fromUTC, toUTC, tzOffMin, cond, args)
+}
+
+// querySeriesWhere 是时间桶聚合的公共实现;cond 为附加过滤片段(含前导 AND,可为空)。
+func (s *Store) querySeriesWhere(bucket string, fromUTC, toUTC time.Time, tzOffMin int, cond string, args []any) ([]domain.MetricPoint, error) {
+	n := MetricBucket(bucket)
 	rows, err := s.db.Query(`SELECT substr(datetime(ts, ?), 1, ?) AS bkt,
 			COUNT(*),
 			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
@@ -226,6 +236,18 @@ func ownerCond(ownerID int64) (string, []any) {
 	}
 	return "", nil
 }
+
+// customerCond 「客户归属」过滤:只统计归属为 role=user 的请求。
+//
+// 为什么按角色而不是 owner_id>0:owner_id 只记归属账号,站主自己(admin)名下的令牌
+// 也带 owner_id,而那部分流量既非营收也非成本 —— 混进来会凭空拉低毛利率。
+//
+// 为什么不用 charge_usd>0 排除改造前的旧日志:那批日志 owner_id=0(回落
+// COALESCE(t.owner_id, 0)),按角色过滤天然排除;而 charge_usd 本来就可以合法为 0
+// (倍率 0、零 token 的失败请求),拿它当「有效样本」判据会误杀真实流量。
+// 用 EXISTS 子查询而非 JOIN:请求量按用户计远小于日志量,且避免了 GROUP BY 下
+// JOIN 可能带来的行放大。
+const customerCond = ` AND EXISTS (SELECT 1 FROM admins a WHERE a.id = request_logs.owner_id AND a.role = 'user')`
 
 // dimWhitelist 维度 → 实际列(防注入)。
 func dimCol(dim string) string {

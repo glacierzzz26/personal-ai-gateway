@@ -225,6 +225,10 @@ func fillSeries(points []domain.MetricPoint, buckets []string) []domain.MetricPo
 
 // overview 组装 Dashboard 首屏。窗口由 rng 决定:起止都落在窗口内的按日曲线 + 同窗口汇总。
 // 桶粒度随窗口伸缩:≤3 天按小时,>3 天按日 —— 一天 1 个点太粗,30 天 720 个点太密。
+//
+// 首屏要给站主看的是「这门生意」,故除全站请求/错误外还带客户归属口径的营收/成本/毛利
+// (Totals,见 domain.MarginTotals)。全站成本(totalCostUsd)保留但不再当营收用 ——
+// 它含站主自用与无归属流量,与营收不同源。
 func (s *Server) overview(rng statRange) (domain.OverviewResp, error) {
 	settings, err := s.st.GetSettings()
 	if err != nil {
@@ -254,7 +258,35 @@ func (s *Server) overview(rng statRange) (domain.OverviewResp, error) {
 		return resp, err
 	}
 	resp.AvgFirstTokenMs = int64(avg)
+
+	// 经营口径:客户归属的营收/成本/毛利,同一批请求行算出(见 store.WindowTotalsCustomers)。
+	// 曲线也走客户归属口径 —— 与合计同源,否则「曲线求和 ≠ 条上营收」。
+	cpts, err := s.st.QuerySeriesCustomers(bucket, rng.from, rng.to, tz)
+	if err != nil {
+		return resp, err
+	}
+	resp.CustomerPoints = fillSeries(cpts, seriesBuckets(bucket, tz, rng.to, bucketCount(rng, bucket)))
+
+	creqs, revenue, ccost, err := s.st.WindowTotalsCustomers(rng.from, rng.to)
+	if err != nil {
+		return resp, err
+	}
+	resp.Totals = domain.MarginTotals{
+		Requests:   creqs,
+		RevenueUsd: revenue,
+		CostUsd:    ccost,
+		MarginUsd:  revenue - ccost,
+		MarginRate: marginRate(revenue, ccost),
+	}
 	return resp, nil
+}
+
+// marginRate 毛利率 = 毛利 / 营收;营收为 0 时返回 0(没有分母就不臆造 100%)。
+func marginRate(revenue, cost float64) float64 {
+	if revenue == 0 {
+		return 0
+	}
+	return (revenue - cost) / revenue
 }
 
 // bucketCount 曲线应补多少个桶。

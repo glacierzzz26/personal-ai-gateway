@@ -10,7 +10,7 @@ import type {
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   AnnouncementDraft, AnnouncementItem,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
-  OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, StatRangeQuery, SyncResult,
+  OverviewData, CustomerFocusData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, StatRangeQuery, SyncResult,
   TokenCreateResult,
   TokenDraft, TokenProbeResp, UsageDim, UsageRow, UserAccount, UserModelItem,
 } from '@/types';
@@ -86,8 +86,12 @@ export const api = {
   getMyModels(): Promise<UserModelItem[]> { return http.get('/models'); },
 
   /* —— 概览 —— */
-  getOverview(range: StatRangeQuery = { days: 7 }): Promise<OverviewData> {
+  getOverview(range: StatRangeQuery = { days: 1 }): Promise<OverviewData> {
     return http.get(`/overview${qs({ ...range })}`);
+  },
+  /** 客户关注区:余额告警 + 窗口内消耗排行(仅 admin) */
+  getCustomerFocus(range: StatRangeQuery = { days: 1 }): Promise<CustomerFocusData> {
+    return http.get(`/customers/focus${qs({ ...range })}`);
   },
 
   /* —— 渠道 —— */

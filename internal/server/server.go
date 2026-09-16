@@ -142,6 +142,8 @@ func (s *Server) apiMux() *http.ServeMux {
 	// 管理台数据:管理员专用
 	m.HandleFunc("GET /api/v1/overview", adm(s.handleOverview))
 	m.HandleFunc("GET /api/v1/usage", adm(s.handleUsage))
+	// 客户关注区:余额告警 + 窗口内消耗排行(仅 admin;成本口径不得下发给 user)
+	m.HandleFunc("GET /api/v1/customers/focus", adm(s.handleCustomersFocus))
 
 	m.HandleFunc("GET /api/v1/channels", adm(s.handleChannelsList))
 	m.HandleFunc("POST /api/v1/channels", adm(s.handleChannelsCreate))

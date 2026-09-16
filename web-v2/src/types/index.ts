@@ -327,12 +327,48 @@ export interface OverviewData {
   points: MetricPoint[];
   totalRequests: number;
   totalErrors: number;
+  /** 全站成本(你付上游,含站主自用与无归属流量)。不是营收 —— 营收看 totals。 */
   totalCostUsd: number;
   avgFirstTokenMs: number;
   /** 窗口自然日数(服务端回填) */
   days: number;
   /** 曲线桶粒度:hour | day */
   bucket: 'hour' | 'day';
+  /** 客户归属口径的同窗口曲线(营收/成本),与 totals 同源同桶 */
+  customerPoints: MetricPoint[];
+  /** 客户归属的经营口径:营收/成本/毛利(仅 admin 面返回) */
+  totals: MarginTotals;
+  /** 上一等长自然日窗口的同口径合计(环比基准);自定义区间为 null */
+  prev: MarginTotals | null;
+}
+
+/** 一窗口的经营合计:营收(客户付你)、成本(你付上游)、毛利与毛利率。 */
+export interface MarginTotals {
+  requests: number;
+  revenueUsd: number;
+  costUsd: number;
+  marginUsd: number;
+  /** 毛利率 = 毛利/营收;营收为 0 时为 0 */
+  marginRate: number;
+}
+
+/** 客户关注区一行:余额 + 窗口消耗 + 风险判定。 */
+export interface CustomerRow {
+  id: number;
+  username: string;
+  balanceUsd: number;
+  spendUsd: number;
+  requests: number;
+  /** depleted 余额≤0(已被拒)/ low 撑不过一天 / ok */
+  risk: 'depleted' | 'low' | 'ok';
+  note: string;
+}
+
+/** GET /customers/focus:余额告警 + 窗口内消耗排行(仅 admin)。 */
+export interface CustomerFocusData {
+  window: string;
+  atRisk: CustomerRow[];
+  top: CustomerRow[];
 }
 
 export interface ModelUsageData {
