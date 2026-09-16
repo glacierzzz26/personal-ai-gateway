@@ -37,29 +37,36 @@ function snapPreset(from: Dayjs, to: Dayjs): PresetDays | null {
   return PRESET_SET.has(n) && n <= STAT_MAX_DAYS ? (n as PresetDays) : null;
 }
 
+/**
+ * 默认窗口 = 最近 1 天(issue #13)。
+ *
+ * 站主看的是「这门生意今天怎么样」,靠的是每天的节奏 —— 默认 7 天会把一次上游抖动、
+ * 一个客户放量摊薄到看不见。1 天窗口同时落在小时桶(days<=3 → bucket=hour),
+ * 正好回答「今天几点开始不对劲」。7/30 天退为对照视图,预设里仍可选。
+ */
 export const defaultRange = (): SelectedRange => {
-  const [from, to] = presetBounds(7);
-  return { days: 7, from, to };
+  const [from, to] = presetBounds(1);
+  return { days: 1, from, to };
 };
 
 /** 选中态 -> 后端查询参数。 */
 export function toQuery(r: SelectedRange): StatRangeQuery {
   if (r.days) return { days: r.days };
   if (r.from && r.to) return { from: r.from.format('YYYY-MM-DD'), to: r.to.format('YYYY-MM-DD') };
-  return { days: 7 };
+  return { days: 1 };
 }
 
 /** 副标题用的可读描述。 */
 export function rangeLabel(r: SelectedRange): string {
   if (r.days) return `近 ${r.days} 天`;
   if (r.from && r.to) return `${r.from.format('MM-DD')} ~ ${r.to.format('MM-DD')}`;
-  return '近 7 天';
+  return '近 1 天';
 }
 
 /** 紧邻当前窗口之前的等长窗口 —— 首页环比(较上期)用。 */
 export function previousWindow(r: SelectedRange): StatRangeQuery {
   const [f, t] = r.days ? presetBounds(r.days) : [r.from, r.to];
-  if (!f || !t) return { days: 7 };
+  if (!f || !t) return { days: 1 };
   const end = t.startOf('day');
   const n = end.diff(f.startOf('day'), 'day') + 1;
   const prevTo = f.startOf('day').subtract(1, 'day');

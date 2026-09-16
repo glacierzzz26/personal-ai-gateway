@@ -88,7 +88,7 @@ func (s *Store) QueryModelChannels(model string, fromUTC, toUTC time.Time) ([]do
 	return out, rows.Err()
 }
 
-// WindowTotals 窗口内请求/错误/成本合计。
+// WindowTotals 窗口内请求/错误/成本合计(全站口径)。
 func (s *Store) WindowTotals(fromUTC, toUTC time.Time) (reqs, errs int, cost float64, err error) {
 	var e sql.NullInt64
 	err = s.db.QueryRow(`SELECT COUNT(*),
@@ -98,4 +98,77 @@ func (s *Store) WindowTotals(fromUTC, toUTC time.Time) (reqs, errs int, cost flo
 		formatRFC3339(fromUTC), formatRFC3339(toUTC)).Scan(&reqs, &e, &cost)
 	errs = int(e.Int64)
 	return
+}
+
+// WindowTotalsCustomers 窗口内「客户归属」的营收/成本/请求合计(经营口径)。
+//
+// 口径见 customerCond:只算归属为 role=user 的请求。返回 charge=客户付你的钱(营收)、
+// cost=你付上游的钱 —— 差额即毛利,由调用方算(口径只在展示层表述,不在这层臆造)。
+// 旧日志(改造前,owner_id=0)与站主自用流量都不进来。
+func (s *Store) WindowTotalsCustomers(fromUTC, toUTC time.Time) (reqs int, charge, cost float64, err error) {
+	err = s.db.QueryRow(`SELECT COUNT(*),
+			COALESCE(SUM(charge_usd),0),
+			COALESCE(SUM(cost),0)
+		FROM request_logs WHERE ts >= ? AND ts < ?`+customerCond,
+		formatRFC3339(fromUTC), formatRFC3339(toUTC)).Scan(&reqs, &charge, &cost)
+	return
+}
+
+// CustomerDist 客户归属在窗口内的消耗分布(按 owner 聚合)。
+type CustomerDist struct {
+	OwnerID   int64
+	Requests  int
+	ChargeUsd float64 // 营收(客户付你)
+	CostUsd   float64 // 成本(你付上游),其与 ChargeUsd 的差即该客户的毛利
+}
+
+// QueryCustomerDist 窗口内按客户聚合的营收/成本/请求数,消耗高→低(经营「谁在涨」用)。
+// 无消耗客户不会出现在结果里 —— 与「余额预警」名单合并的事交给上层。
+func (s *Store) QueryCustomerDist(fromUTC, toUTC time.Time) ([]CustomerDist, error) {
+	rows, err := s.db.Query(`SELECT owner_id, COUNT(*),
+			COALESCE(SUM(charge_usd),0),
+			COALESCE(SUM(cost),0)
+		FROM request_logs WHERE ts >= ? AND ts < ?`+customerCond+`
+		GROUP BY owner_id ORDER BY SUM(charge_usd) DESC`,
+		formatRFC3339(fromUTC), formatRFC3339(toUTC))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CustomerDist
+	for rows.Next() {
+		var d CustomerDist
+		if err := rows.Scan(&d.OwnerID, &d.Requests, &d.ChargeUsd, &d.CostUsd); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// CustomerWallet 客户钱包快照(仅 role=user,余额高→低)。
+type CustomerWallet struct {
+	ID       int64
+	Username string
+	Balance  float64
+}
+
+// ListCustomerWallets 列出全部客户账号及其余额(供「欠费/低余额」告警合并消耗数据)。
+// 只取 role=user —— 站主账号是经营主体,不是客户,不该出现在欠费名单里。
+func (s *Store) ListCustomerWallets() ([]CustomerWallet, error) {
+	rows, err := s.db.Query(`SELECT id, username, balance_usd FROM admins
+		WHERE role = 'user' ORDER BY balance_usd ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CustomerWallet
+	for rows.Next() {
+		var w CustomerWallet
+		if err := rows.Scan(&w.ID, &w.Username, &w.Balance); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
 }

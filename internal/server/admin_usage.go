@@ -29,7 +29,37 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	} else {
 		ov.Bucket = "day"
 	}
+	// 环比基准与前端 previousWindow 对齐:预设窗口(含默认的 1 天)是「与上一等长的
+	// 自然日窗口比」—— 1 天即昨日整日,而不是前 1×24 小时(那会跨零点漂移)。
+	// 自定义区间没有「上一等长区间」的自然对齐,故不回填(前端只在预设窗口下显示环比)。
+	if !rng.custom {
+		ov.Prev = s.prevTotals(rng)
+	}
 	writeJSON(w, http.StatusOK, ov)
+}
+
+// prevTotals 上一等长自然日窗口的合计(环比用)。只看合计,不取曲线。
+//
+// 窗口非零长度是 parseStatRange 保证的;这里仍做一次防御:days<1 视为 1 天。
+func (s *Server) prevTotals(rng statRange) *domain.MarginTotals {
+	days := rng.days
+	if days < 1 {
+		days = 1
+	}
+	// 当前窗口起点的前一个自然日窗口:[from-days, from)。
+	to := rng.from
+	from := to.AddDate(0, 0, -days)
+	reqs, revenue, cost, err := s.st.WindowTotalsCustomers(from, to)
+	if err != nil {
+		return nil // 环比只是附加信息,取不到就不给,不让首屏整体失败
+	}
+	return &domain.MarginTotals{
+		Requests:   reqs,
+		RevenueUsd: revenue,
+		CostUsd:    cost,
+		MarginUsd:  revenue - cost,
+		MarginRate: marginRate(revenue, cost),
+	}
 }
 
 // handleUsage 用量统计:按 dim 聚合行 + 曲线。窗口同 /overview(days 或 from&to)。

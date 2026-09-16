@@ -434,11 +434,11 @@ func (o *OfferInput) Defaults() {
 
 // OfferRead 供给源读结构(展示字段由读接口填充)。
 type OfferRead struct {
-	ID                int64        `json:"id"`
-	ModelID           int64        `json:"modelId"`
-	ChannelID         int64        `json:"channelId"`
-	ChannelName       string       `json:"channelName"`
-	Provider          Provider     `json:"provider"`
+	ID          int64    `json:"id"`
+	ModelID     int64    `json:"modelId"`
+	ChannelID   int64    `json:"channelId"`
+	ChannelName string   `json:"channelName"`
+	Provider    Provider `json:"provider"`
 	// ChannelType 所属渠道的类型(provider 为空时前端用它的标签代替供应商展示)。
 	ChannelType       ChannelType  `json:"channelType,omitempty"`
 	InputPriceUsd     float64      `json:"inputPriceUsd"`
@@ -876,6 +876,13 @@ type UsageRow struct {
 
 // OverviewResp Dashboard 首屏。窗口由前端筛选器决定(1/7/30 天或自定义区间):
 // Points 为窗口内曲线(≤3 天按小时,>3 天按天),汇总同窗口。
+//
+// 金额有两个口径,别混:
+//   - TotalCostUsd 全站成本 —— 你付上游的钱,含站主自用与无归属流量;
+//   - Totals 客户归属的经营口径(营收/成本/毛利并列出现,由同一批行算出,自洽)。
+//
+// 全站成本不进 Totals:它与营收不同源(一个含站主自用、一个只算客户),
+// 相减出来的「毛利」是假的。要看的「今天赚了多少」在 Totals。
 type OverviewResp struct {
 	Points          []MetricPoint `json:"points"`
 	TotalRequests   int           `json:"totalRequests"`
@@ -884,6 +891,50 @@ type OverviewResp struct {
 	AvgFirstTokenMs int64         `json:"avgFirstTokenMs"`
 	Days            int           `json:"days"`
 	Bucket          string        `json:"bucket"`
+	// CustomerPoints 客户归属口径的同窗口曲线(营收/成本),与 Totals 同源同桶,
+	// 供「营收 vs 成本」图用 —— 拿全站 Points 画会把站主自用算进来,与营收合计对不上。
+	CustomerPoints []MetricPoint `json:"customerPoints"`
+	// Totals 客户归属的营收/成本/毛利(经营口径),见 WindowTotalsCustomers。
+	Totals MarginTotals `json:"totals"`
+	// Prev 上一等长自然日窗口的同口径合计(环比基准)。仅预设窗口回填;
+	// 自定义区间没有自然对齐的「上一区间」,为 null。
+	Prev *MarginTotals `json:"prev"`
+}
+
+// MarginTotals 经营口径的一窗口合计:营收(客户付你)、成本(你付上游)、毛利与毛利率。
+// RevenueUsd 与 CostUsd 恒同源(同一批客户归属的请求行),故 MarginUsd 可直接相减。
+type MarginTotals struct {
+	Requests   int     `json:"requests"`
+	RevenueUsd float64 `json:"revenueUsd"`
+	CostUsd    float64 `json:"costUsd"`
+	MarginUsd  float64 `json:"marginUsd"`
+	// MarginRate 毛利率 = 毛利 / 营收。营收为 0 时返回 0(不是 100%——没有分母就没有比率)。
+	MarginRate float64 `json:"marginRate"`
+}
+
+// CustomerRow 客户关注区的一行:近 1 天消耗 + 钱包余额 + 风险判定。
+type CustomerRow struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	// BalanceUsd 钱包余额(计价币种)。可为负(透支至多一笔)。
+	BalanceUsd float64 `json:"balanceUsd"`
+	// SpendUsd 窗口内该客户的营收消耗(charge_usd 合计);无消耗为 0。
+	SpendUsd float64 `json:"spendUsd"`
+	Requests int     `json:"requests"`
+	// Risk 风险等级:depleted 余额 ≤0(已被拒,客户在流失)/ low 余额撑不过一天 / ok。
+	Risk string `json:"risk"`
+	// Note 面向站主的一句话说明(为什么被标红)。
+	Note string `json:"note"`
+}
+
+// CustomerFocusResp 「客户关注区」:欠费/低余额名单 + 消耗排行(仅 admin 可见)。
+type CustomerFocusResp struct {
+	// Window 本区各指标的时间窗说明,与 /overview 的经营窗口一致(供前端副标题直显)。
+	Window string `json:"window"`
+	// AtRisk 余额告警客户:已欠费(≤0)+ 撑不过一天的,按余额升序(最危险在前)。
+	AtRisk []CustomerRow `json:"atRisk"`
+	// Top 消耗 Top 客户(窗口内营收降序),含所有有消耗的客户。
+	Top []CustomerRow `json:"top"`
 }
 
 // ModelUsageResp 模型抽屉「用量」Tab。
