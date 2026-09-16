@@ -81,7 +81,9 @@ if [ "$WAS_ACTIVE" = 1 ]; then
 fi
 
 echo "==> 本地构建并部署(host=$HOST, dir=$REMOTE_DIR)"
-REMOTE_DIR="$REMOTE_DIR" bash "$SCRIPT_DIR/deploy.sh" "$HOST"
+# 清理在 deploy.sh 末尾执行(覆盖本机 + lab 旧镜像);要保留产物部署后排查,
+# 传 KEEP_ARTIFACTS=1(会透传给 deploy.sh)。
+REMOTE_DIR="$REMOTE_DIR" KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}" bash "$SCRIPT_DIR/deploy.sh" "$HOST"
 
 # 对齐对账基线:让 updater 恢复后认为「ghcr :latest 已部署过」,从而不把你的
 # 本地版本顶回去。只有 ghcr 真出了下一个新 digest,它才会接手。
