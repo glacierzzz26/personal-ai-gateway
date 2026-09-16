@@ -257,18 +257,26 @@ func (s *Server) overview(rng statRange) (domain.OverviewResp, error) {
 	return resp, nil
 }
 
-// bucketCount 曲线应补多少个桶。hour 桶取窗口小时数(24 的倍数),day 桶取自然日数。
+// bucketCount 曲线应补多少个桶。
+//
+// 日桶直接用 rng.days(自然日跨度)—— 不能用「窗口时长 ÷ 24h 再四舍五入」反推:
+// 预设窗口的 to 是「此刻」而非当天结束,时长里含着当天已过的一小截,
+// round 会把这一截吞掉。例:days=7 在本地 11:57 时,时长 = 6d11.95h,
+// round(6.498) = 6 → 曲线少画一天(当天被整个丢掉)。过了 12:00 小数部分
+// ≥0.5 又会对上,所以这个 bug 按时辰飘,不是稳定失败。
+//
+// 小时桶同理,但它要覆盖「已经过去的小时 + 当前这个不完整小时」,
+// 故取 floor(时长) + 1:11:57 → 12 个桶(0..11 点),12:24 → 13 个(0..12 点)。
 func bucketCount(rng statRange, bucket string) int {
 	if bucket == "hour" {
-		n := int(rng.to.Sub(rng.from).Hours() + 0.5)
+		n := int(rng.to.Sub(rng.from).Hours()) + 1
 		if n < 1 {
 			n = 1
 		}
 		return n
 	}
-	n := int(rng.to.Sub(rng.from).Hours()/24 + 0.5)
-	if n < 1 {
-		n = 1
+	if rng.days < 1 {
+		return 1
 	}
-	return n
+	return rng.days
 }
