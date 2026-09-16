@@ -20,7 +20,146 @@ var migrations = []string{
 	m0005OfferUpstreamModel,
 	// v6:模型级官方价绑定(厂商官方价行 ↔ 目录模型,供聚合渠道显示厂商官方价)
 	m0006ModelOfficialBinding,
+	// v7:中转站改造(用户级钱包 + 售价记账 + 日志归属作用域)
+	m0007RelayWallet,
+	// v8:用户令牌上限(普通用户自助建令牌时不得超过管理员设的天花板)
+	m0008UserTokenCeiling,
+	// v9:模型级售价倍率覆盖(定价从「按用户」改为「按模型」,全站同模型同价)
+	m0009ModelRateOverride,
+	// v10:通知/公告(管理员发布,全站可见,「我已知晓」后不再对本人显示)
+	m0010Announcements,
+	// v11:渠道类型 + 出站协议拆分 + 第三方额度手工配置(见 DESIGN.md §5.3)
+	m0011ChannelQuota,
 }
+
+// m0010Announcements 增加「通知/公告」能力(见 issue #10):
+//
+//	announcements           公告正文 + 级别 + 启停 + 定时发布/过期
+//	announcement_dismissals 每个账号对每条公告的「已读」记录(「我已知晓」后的去重依据)
+//
+// publish_at 空 = 立即发布;expires_at 空 = 永不过期。二者存 UTC RFC3339Nano,
+// 生效判定与既有 tokens.expires_at 同口径(字典序即时间序)。
+// 已读记录随公告/账号删除级联清除(store.go 已开启 foreign_keys)。
+const m0010Announcements = `
+CREATE TABLE IF NOT EXISTS announcements (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT    NOT NULL,
+  body       TEXT    NOT NULL,
+  level      TEXT    NOT NULL DEFAULT 'info',  -- info|warn|danger
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  publish_at TEXT,                             -- NULL = 立即发布;否则到点才可见
+  expires_at TEXT,                             -- NULL = 永不过期
+  created_at TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS announcement_dismissals (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+  admin_id        INTEGER NOT NULL REFERENCES admins(id)        ON DELETE CASCADE,
+  dismissed_at    TEXT    NOT NULL,
+  PRIMARY KEY (announcement_id, admin_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_announcements_live ON announcements(enabled, publish_at, expires_at);
+`
+
+// m0011ChannelQuota 拆开 overloaded 的 channels.provider,并给渠道额度查询留位:
+//
+//	channel_type  渠道类型:deepseek | commandcode | opencode | thirdparty。
+//	              **额度协议由它决定**(各上游问法完全不同),与 provider(卖的是谁的模型)正交。
+//	egress_proto  出站协议:anthropic | openai | azure。原先由 provider 反推(OutProto),
+//	              但「卖谁的模型」与「怎么连上去」本是两回事 —— 聚合渠道卖别家模型,却走 openai 协议。
+//	quota_path    第三方渠道额度查询路径(如 /v1/dashboard/billing/subscription);空 = 未配置。
+//	quota_shape   该路径的响应形状(oneapi | newapi);空 = 未配置。仅 thirdparty 用得上。
+//
+// 回填与收窄同批完成(幂等 UPDATE,可重复执行):
+//   - egress_proto 按原 provider 推:Anthropic→anthropic,Azure→azure,其余→openai;
+//   - channel_type 按 base_url/provider 认领:commandcode.ai→commandcode,opencode.ai→opencode,
+//     provider='DeepSeek'→deepseek,其余→thirdparty;
+//   - provider 收窄到真厂商:Azure→OpenAI(协议已由 egress_proto 承载),
+//     聚合中转→空串(非单一厂商,官方价靠模型级 official_vendor 绑定)。
+//
+// commandcode / opencode 这两类上游本身即聚合(卖别家模型),provider 留空、由徽标回落显示渠道类型。
+const m0011ChannelQuota = `
+ALTER TABLE channels ADD COLUMN channel_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN egress_proto TEXT NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN quota_path   TEXT NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN quota_shape  TEXT NOT NULL DEFAULT '';
+
+UPDATE channels SET egress_proto = CASE provider
+  WHEN 'Anthropic' THEN 'anthropic'
+  WHEN 'Azure'     THEN 'azure'
+  ELSE 'openai'
+END WHERE egress_proto = '';
+
+UPDATE channels SET channel_type = CASE
+  WHEN base_url LIKE '%commandcode.ai%' THEN 'commandcode'
+  WHEN base_url LIKE '%opencode.ai%'    THEN 'opencode'
+  WHEN provider = 'DeepSeek'            THEN 'deepseek'
+  ELSE 'thirdparty'
+END WHERE channel_type = '';
+
+UPDATE channels SET provider = 'OpenAI' WHERE provider = 'Azure';
+UPDATE channels SET provider = ''       WHERE provider = '聚合中转';
+`
+
+// m0009ModelRateOverride 把售价倍率从「按用户」下沉到「按模型」(见 PLAN.md §2):
+//
+//	models.rate_override  该模型的售价倍率;NULL = 回落全局 settings.price_multiplier
+//
+// 语义:本站价 = 官方价 × 倍率,而倍率只由模型决定 —— 同一模型对所有客户同一价。
+// 纯附加、默认 NULL,存量库行为不变(全部回落全局倍率)。
+//
+// 注:迁移 v7 的 admins.rate_override(用户级倍率)已废弃不再读写,列保留不删
+// (SQLite 删列代价大且无收益);新库不再写入该列。
+const m0009ModelRateOverride = `
+ALTER TABLE models ADD COLUMN rate_override REAL;
+`
+
+// m0008UserTokenCeiling 给「用户自助建令牌」加天窗,避免客户绕过额度约束:
+// 令牌额度只是子预算,但用户自己可以把它设成 0(不限)或极大值,分闸形同虚设。
+//
+//	admins.token_quota_ceiling  该用户名下令牌的额度上限(0 = 不限;仅约束 role=user)
+//	admins.token_rpm_ceiling    该用户名下令牌的 RPM 上限(0 = 不限)
+//
+// 管理员不受限(管理员建令牌走 admin 分支,不校验此值)。纯附加、默认 0,存量库行为不变。
+const m0008UserTokenCeiling = `
+ALTER TABLE admins ADD COLUMN token_quota_ceiling REAL    NOT NULL DEFAULT 0;
+ALTER TABLE admins ADD COLUMN token_rpm_ceiling   INTEGER NOT NULL DEFAULT 0;
+`
+
+// m0007RelayWallet 把网关从「个人自用」推向「中转站」的存储基础(见 PLAN.md §3):
+//
+//	admins.balance_usd    用户钱包余额(仅 role=user 扣减;admin 即站主自己,不扣)
+//	admins.rate_override  【已废弃,见 v9】用户级售价倍率;倍率现按模型存(models.rate_override)
+//	balance_logs          账变流水(钱包不能只有当前值,充值/扣费都要可审计)
+//	request_logs.charge_usd  该笔「售价」(客户付你);与 cost(你付上游)分离,差额即毛利
+//	request_logs.owner_id    归属冗余,免 JOIN 即可按 owner 作用域查询;存量行由 tokens 回填
+//
+// 金额口径同既有 offers.*_price_usd / logs.cost:字段名带 _usd 是历史命名,装的其实是
+// settings.displayCurrency 币种金额(本站为人民币)。
+const m0007RelayWallet = `
+ALTER TABLE admins ADD COLUMN balance_usd   REAL NOT NULL DEFAULT 0;
+ALTER TABLE admins ADD COLUMN rate_override REAL;
+
+CREATE TABLE IF NOT EXISTS balance_logs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id      INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+  delta         REAL    NOT NULL,              -- 正=充值,负=扣费
+  balance_after REAL    NOT NULL,
+  reason        TEXT    NOT NULL,              -- charge | topup | adjust
+  log_id        INTEGER NOT NULL DEFAULT 0,    -- 关联 request_logs.id(charge 时)
+  note          TEXT    NOT NULL DEFAULT '',
+  created_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_balance_logs_admin ON balance_logs (admin_id, id);
+
+ALTER TABLE request_logs ADD COLUMN charge_usd REAL    NOT NULL DEFAULT 0;
+ALTER TABLE request_logs ADD COLUMN owner_id   INTEGER NOT NULL DEFAULT 0;
+UPDATE request_logs SET owner_id = COALESCE(
+	(SELECT t.owner_id FROM tokens t WHERE t.id = request_logs.token_id), 0);
+CREATE INDEX IF NOT EXISTS idx_logs_owner ON request_logs (owner_id, ts);
+`
 
 // m0006ModelOfficialBinding 模型级「官方参考价来源」绑定:
 // 聚合中转渠道的 provider 不是厂商(多为 OpenAI),模型名(如 deepseek/deepseek-v4.1-flash)

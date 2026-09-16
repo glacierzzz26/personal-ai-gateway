@@ -15,7 +15,8 @@ import (
 
 // TestE2EThinkingReasoningBackfill 复现线上故障:thinking 模型跑工具轮次时,
 // 第 2 轮必须把上一轮的 reasoning_content 带回去,否则上游回
-//   400 The `reasoning_content` in the thinking mode must be passed back to the API.
+//
+//	400 The `reasoning_content` in the thinking mode must be passed back to the API.
 //
 // anthropic 客户端根本没有这个字段可回传,只能靠网关记着再补回(见 reasoncache)。
 // 这个测试走完整网关链路:上游 SSE → a2o 翻译 → 客户端 anthropic 事件 →

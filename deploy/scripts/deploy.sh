@@ -52,10 +52,28 @@ scp -q "$REPO/deploy/docker-compose.yml" "$HOST:$REMOTE_DIR/docker-compose.yml"
 rsync -az --delete "$CERTS_DIR/" "$HOST:$REMOTE_DIR/certs/"
 
 echo "==> [6/6] 远端 compose up -d"
-ssh "$HOST" "cd '$REMOTE_DIR' && docker compose up -d"
+# 显式覆盖 GW_IMAGE 为本地短名 —— compose 缺省指向 ghcr,而本条应急链路推的是
+# docker save 过去的本地镜像 ai-gateway:$VER,不能让 compose 去 ghcr 拉。
+ssh "$HOST" "cd '$REMOTE_DIR' && GW_IMAGE=ai-gateway docker compose up -d"
 
 echo
 echo "部署完成(image=$IMAGE,host=$HOST,dir=$REMOTE_DIR)。"
+
+# 清理构建/部署产物:本机的 ai-gateway 镜像与 lab 上非运行中的旧版本镜像。
+# 刚部署的版本在运行,必然被跳过。留产物排查用 KEEP_ARTIFACTS=1 关掉。
+# 清理是尽力而为 —— 失败也不影响本次部署结果。
+if [ "${KEEP_ARTIFACTS:-0}" = "1" ] || [ "${NO_CLEAN:-0}" = "1" ]; then
+  echo "跳过产物清理(KEEP_ARTIFACTS/NO_CLEAN 已置位)。"
+else
+  echo
+  echo "==> 清理构建产物"
+  CLEAN_SH="$HOME/.claude/skills/clean-docker-artifacts/scripts/clean.sh"
+  if [ -x "$CLEAN_SH" ]; then
+    bash "$CLEAN_SH" --host "$HOST" || true
+  else
+    echo "    未找到清理脚本($CLEAN_SH),跳过。"
+  fi
+fi
 echo "  数据面  https://192.168.0.202:17080/v1   /  https://47.116.65.140:17080/v1 (frp)"
 echo "  管理台  https://192.168.0.202:17090      /  https://47.116.65.140:17090    (frp)"
 echo "  CA      $CERTS_DIR/ca.crt —— 导入信任后两端口均可验真"

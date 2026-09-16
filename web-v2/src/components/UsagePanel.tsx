@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Card, Col, Empty, Row, Segmented, Select, Table } from 'antd';
+import { Card, Col, Empty, Row, Segmented, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
+import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { fmt } from '@/utils/format';
@@ -20,11 +21,13 @@ const dayLabel = (ts: string) => ts.slice(5);
 export default function UsagePanel() {
   const c = useChartColors();
   const [dim, setDim] = useState<UsageDim>('model');
-  const [days, setDays] = useState(7);
+  const [range, setRange] = useState(defaultRange);
+  const rq = useMemo(() => toQuery(range), [range]);
+  const rl = rangeLabel(range);
 
   const { data, isFetching } = useQuery({
-    queryKey: ['usage', dim, days],
-    queryFn: () => api.getUsage(dim, days),
+    queryKey: ['usage', dim, rq],
+    queryFn: () => api.getUsage(dim, rq),
   });
   const rows = data?.rows ?? [];
   const series = data?.days ?? [];
@@ -132,15 +135,11 @@ export default function UsagePanel() {
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
           <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
-            按 {COL_LABEL[dim]} × 近 {days} 天聚合请求与成本
+            按 {COL_LABEL[dim]} × {rl} 聚合请求与成本
           </div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <Select
-            style={{ width: 130 }} value={days}
-            onChange={v => setDays(v)}
-            options={[{ value: 7, label: '近 7 天' }, { value: 30, label: '近 30 天' }]}
-          />
+          <RangePicker value={range} onChange={setRange} size="small" />
           <Segmented
             value={dim} onChange={v => setDim(v as UsageDim)}
             options={(['model', 'channel', 'token'] as UsageDim[]).map(d => ({ value: d, label: DIM_LABEL[d] }))}
@@ -150,7 +149,7 @@ export default function UsagePanel() {
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={24} xl={16}>
-          <Card title={`每日请求与花费(近 ${days} 天)`}>
+          <Card title={`每日请求与花费(${rl})`}>
             <Chart option={barOption} height={280} />
           </Card>
         </Col>

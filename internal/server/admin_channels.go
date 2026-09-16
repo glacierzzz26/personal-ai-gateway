@@ -35,6 +35,10 @@ func (s *Server) handleChannelsCreate(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, "validation", "name and baseUrl are required")
 		return
 	}
+	if err := validateChannelQuota(in); err != nil {
+		apiErr(w, http.StatusBadRequest, "validation", err.Error())
+		return
+	}
 	ch, err := s.st.CreateChannel(in)
 	if err != nil {
 		writeStoreErr(w, err)
@@ -53,6 +57,10 @@ func (s *Server) handleChannelsUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	var in domain.ChannelInput
 	if !decodeBody(w, r, &in) {
+		return
+	}
+	if err := validateChannelQuota(in); err != nil {
+		apiErr(w, http.StatusBadRequest, "validation", err.Error())
 		return
 	}
 	ch, err := s.st.UpdateChannel(id, in)
@@ -108,7 +116,25 @@ func (s *Server) handleChannelTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleChannelQuota 渠道额度(GET {{apiRoot}}/v1/usage 的 rolling/weekly/monthly)。
+// validateChannelQuota 校验第三方额度配置。**安全红线**:额度请求会带上该渠道密钥,
+// 故路径必须是纯路径(见 proxy.ValidateQuotaPath)—— 否则一个自由文本字段就能把密钥送到任意域名。
+// 仅对 thirdparty 生效;其它渠道类型忽略这些字段(切换类型时不清空,便于来回切换)。
+func validateChannelQuota(in domain.ChannelInput) error {
+	if in.ChannelType != domain.ChannelTypeThirdParty && in.ChannelType != "" {
+		return nil
+	}
+	if err := proxy.ValidateQuotaPath(in.QuotaPath); err != nil {
+		return err
+	}
+	if in.QuotaPath != "" {
+		if s := domain.QuotaShape(in.QuotaShape); !s.Valid() {
+			return errors.New("额度形状无效或未选择")
+		}
+	}
+	return nil
+}
+
+// handleChannelQuota 渠道上游额度(按渠道类型分派:窗口型 rolling/weekly/monthly、余额型或二者兼有)。
 // 失败/不支持也回 200 + available=false + error(前端据此展示灰色占位,不抛查询异常)。
 func (s *Server) handleChannelQuota(w http.ResponseWriter, r *http.Request) {
 	id, ok := paramID(r, "id")
@@ -127,20 +153,26 @@ func (s *Server) handleChannelQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := domain.ChannelQuotaResp{Available: true, Windows: map[string]domain.QuotaWindow{}}
-	plan, windows, lat, err := s.rl.FetchChannelQuota(r.Context(), s.rl.Client(settings, 0), ch)
-	resp.PlanName = plan
-	resp.LatencyMs = lat
+	res, err := s.rl.FetchChannelQuota(r.Context(), s.rl.Client(settings, 0), ch)
+	resp.PlanName = res.PlanName
+	resp.LatencyMs = res.LatencyMs
 	if err != nil {
 		resp.Available = false
-		if errors.Is(err, proxy.ErrQuotaUnsupported) {
-			resp.Error = "该渠道协议无 /v1/usage 额度接口"
-		} else {
+		switch {
+		case errors.Is(err, proxy.ErrQuotaNotConfigured):
+			resp.Error = "该渠道未配置额度查询路径"
+		case errors.Is(err, proxy.ErrQuotaUnsupported):
+			resp.Error = "该渠道类型没有已知的额度接口"
+		default:
 			resp.Error = err.Error()
 		}
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	resp.Windows = windows
+	if res.Windows != nil {
+		resp.Windows = res.Windows
+	}
+	resp.Balance = res.Balance
 	writeJSON(w, http.StatusOK, resp)
 }
 

@@ -87,8 +87,19 @@ func (r *Relay) Client(settings domain.Settings, timeoutMs int) *http.Client {
 		DialContext:           (&net.Dialer{Timeout: r.cfg.DialTimeout}).DialContext,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: settings.SkipTLSVerify},
 		ResponseHeaderTimeout: k.headerWait,
-		MaxIdleConns:          64,
-		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          256,
+		// MaxIdleConnsPerHost 必须显式设大:Go 默认只有 2,而本服务对同一上游
+		// (实测 97% 流量压在一条 Cloudflare 后的渠道)是持续单主机高并发。
+		// 池子只有 2 时,第 3 个并发请求拿不到空闲连接、只能重开——
+		// 到 Cloudflare 的 TCP+TLS 握手实测中位 ~400ms、长尾到秒级,且 TLS
+		// 握手本身有相当比例直接超时,表现为首字延迟整体抬高 + 秒级尖刺。
+		// 实测:复用连接 1.2~2.0s 且无长尾;每次新建 1.7~6.7s 并偶发 40s 长尾。
+		MaxIdleConnsPerHost: 32,
+		IdleConnTimeout:     90 * time.Second,
+		// 上游支持 HTTP/2(实测 ALPN 协商到 h2)。不设此项时,一旦提供了
+		// 自定义 DialContext/TLSClientConfig,Transport 会退回 HTTP/1.1 且
+		// 不主动升级——多路复用对「单主机大量并发出站」的场景收益明显。
+		ForceAttemptHTTP2: true,
 	}
 	if settings.HTTPProxy != "" {
 		if u, err := url.Parse(settings.HTTPProxy); err == nil {
@@ -100,9 +111,9 @@ func (r *Relay) Client(settings domain.Settings, timeoutMs int) *http.Client {
 	return c
 }
 
-// OutProto 由渠道 provider 定出站协议。
-func OutProto(p domain.Provider) string {
-	if p == domain.ProviderAnthropic {
+// OutProto 由渠道出站协议定出站协议常量。
+func OutProto(p domain.EgressProto) string {
+	if p == domain.EgressAnthropic {
 		return ProtoAnthropic
 	}
 	return ProtoOpenAI
@@ -165,7 +176,7 @@ func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []by
 	case ProtoOpenAI:
 		req.URL = base + "/v1/chat/completions"
 	}
-	if ch.Provider == domain.ProviderAzure && !strings.Contains(req.URL, "api-version") {
+	if ch.EgressProto == domain.EgressAzure && !strings.Contains(req.URL, "api-version") {
 		sep := "?"
 		if strings.Contains(req.URL, "?") {
 			sep = "&"
@@ -207,7 +218,7 @@ type attemptResult struct {
 	status    int
 	body      []byte // 非流成功:成功体;非流失败:错误体
 	latencyMs int64  // 整程耗时(非流:含读完体);用于日志/展示
-	ttfbMs    int64  // 首字节(响应头)耗时;渠道健康 EWMA 用,与流式 firstTTFB 同口径
+	ttfbMs    int64  // 首字节(响应头)耗时;渠道健康 EWMA 与日志 first_token_ms 均用此值
 	upErr     string // 网络/超时类错误(无 body)
 }
 
@@ -240,11 +251,14 @@ func (r *Relay) doNonStream(ctx context.Context, client *http.Client, req *outbo
 	ttfb := time.Since(t0).Milliseconds() // Do 返回即响应头到达 ≈ 首字节
 	defer resp.Body.Close()
 	body, rerr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	lat := time.Since(t0).Milliseconds()
 	if rerr != nil {
 		return &attemptResult{channel: ch, offer: offer, upErr: rerr.Error()}, nil
 	}
-	return &attemptResult{channel: ch, offer: offer, status: resp.StatusCode, body: body, latencyMs: lat, ttfbMs: ttfb}, nil
+	// 注意 latencyMs 是「整程耗时」(含读完响应体),与 ttfbMs(首字节)是两回事:
+	// 日志里的 first_token_ms 必须用 ttfbMs,否则非流请求会把总耗时当首字延迟记,
+	// 污染统计口径(实测混入后均值被抬高约 70ms,且该列语义不再可比)。
+	return &attemptResult{channel: ch, offer: offer, status: resp.StatusCode, body: body,
+		latencyMs: time.Since(t0).Milliseconds(), ttfbMs: ttfb}, nil
 }
 
 // defaultRequestTimeoutMs settings 缺省值兜底(与 domain.Settings.Defaults 一致)。

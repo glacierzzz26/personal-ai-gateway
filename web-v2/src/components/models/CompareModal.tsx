@@ -46,7 +46,7 @@ export default function CompareModal({ open, models, onClose }: Props) {
 
   const attrColumns: ColumnsType<AttrRow> = [
     {
-      title: '属性', dataIndex: 'label', width: 110,
+      title: '属性', dataIndex: 'label', width: 110, ellipsis: true,
       render: v => <span style={{ color: 'var(--gw-text-2)' }}>{v}</span>,
     },
     ...models.map((m, i) => ({
@@ -83,11 +83,11 @@ export default function CompareModal({ open, models, onClose }: Props) {
 
   const offerColumns: ColumnsType<OfferRow> = [
     {
-      title: '模型', dataIndex: 'modelName',
+      title: '模型', dataIndex: 'modelName', ellipsis: true,
       render: v => <span className="gw-mono">{v}</span>,
     },
     {
-      title: '渠道', dataIndex: 'channelName',
+      title: '渠道', dataIndex: 'channelName', ellipsis: true,
       render: v => <b style={{ fontWeight: 500 }}>{v}</b>,
     },
     { title: '供应商', dataIndex: 'provider' },
@@ -127,7 +127,6 @@ export default function CompareModal({ open, models, onClose }: Props) {
         dataSource={attrRows}
         columns={attrColumns}
         pagination={false}
-        scroll={{ x: 'max-content' }}
       />
 
       <div
@@ -149,7 +148,6 @@ export default function CompareModal({ open, models, onClose }: Props) {
           dataSource={offerRows}
           columns={offerColumns}
           pagination={false}
-          scroll={{ x: 'max-content' }}
         />
       ) : (
         <Empty style={{ padding: '24px 0' }} description="所选模型均未启用供给源" />

@@ -32,7 +32,7 @@
 │   POST /v1/chat/completions · POST /v1/messages · count_tokens · GET /v1/models             │
 │ 中间层:engine 选路(offer/rule/channel health)→ proxy 转发/翻译 → billing 记账 → request_logs │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
-        │候选逐个尝试:渠道按 provider 出站(anthropic-native / openai 兼容 + Azure api-version)
+        │候选逐个尝试:渠道按 egress_proto 出站(anthropic-native / openai 兼容 + Azure api-version)
         ▼
    上游渠道(官方 API / OpenAI 兼容中转 / 聚合订阅),密钥 AES-GCM 加密落库
 ```
@@ -60,8 +60,13 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 
 - `admins(id, username UNIQUE, password_bcrypt, role TEXT DEFAULT 'admin', created_at)` — config 不再承载账号;
   role 分 `admin`(全权)/`user`(仅能管理自己的令牌)。
-- `channels(id, name, provider, base_url, api_key_cipher, key_masked, priority, weight, timeout_ms,
-   tags(json), enabled, max_failures, cooldown_sec, note, created_at, updated_at)`。
+- `channels(id, name, provider, channel_type, egress_proto, base_url, api_key_cipher, key_masked,
+   priority, weight, timeout_ms, tags(json), enabled, max_failures, cooldown_sec,
+   quota_path, quota_shape, note, created_at, updated_at)`。
+  **三个正交字段勿混用**:`provider` = 卖的是谁的模型(真厂商,可空=聚合渠道,前端回落显示渠道类型);
+  `channel_type` = 上游归属(`deepseek`/`commandcode`/`opencode`/`thirdparty`),决定**额度怎么查**;
+  `egress_proto` = 出站线上协议(`openai`/`anthropic`/`azure`),决定**请求怎么发**。
+  `quota_path`/`quota_shape` 仅 `thirdparty` 有意义 —— 这类中转的额度接口没有统一约定,手工配「相对路径 + 响应形状」;
 - `models(id, name UNIQUE, display_name, context_window, capabilities(json), enabled, …)` — `name` 为渠道侧真实模型名;
   `display_name` 为网关统一名称(空=未重命名,对外回落 `name`),非空时唯一(部分索引 `WHERE display_name <> ''`)。
   统一名只作用于网关侧(管理台展示/路由规则匹配/`/v1/models`/日志归因),出站转发仍改回 `name`。
@@ -106,8 +111,9 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
      用规则的 retry/timeout_ms;全败后如有 `fallback_channel_id` 追加一轮。
    - 每次失败记录(RecordFailure/冷却),成功 RecordSuccess;渠道/供给源的 status/latency/successRate
      由近窗口 EWMA 驱动。
-3. 转发:出站协议按 provider(Anthropic → anthropic 原生;OpenAI/Azure/DeepSeek/通义/智谱/Moonshot/聚合
-   中转 → openai 兼容;Azure 补 api-version)。跨协议 → translate(a2o / o2a),非流式整包 + 流式 SSE 逐块翻译。
+3. 转发:出站协议按 `egress_proto`(anthropic → anthropic 原生;openai → openai 兼容;azure → openai 兼容
+   补 api-version)。**与 `provider` 无关** —— 同一家的模型可以走不同协议的上游。
+   跨协议 → translate(a2o / o2a),非流式整包 + 流式 SSE 逐块翻译。
    **一旦开始回 2xx 流即不可换上游**(failover 窗口 = 首字节前)。
    出站 client 按 (proxy, skipTLS, 请求超时) 三元组缓存复用 Transport(连接池不再每请求重建);
    该超时只作**响应头阶段**硬上限(`ResponseHeaderTimeout`),流式拿到响应头后交给看门狗。
@@ -188,6 +194,36 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 > `backfillReasoning` 里的注入注掉,该测试立刻红,失败现场就是线上那条——assistant 消息只剩 `tool_calls`、
 > 没有 `reasoning_content`。
 
+### 5.3 上游额度获取(`GET /channels/{id}/quota`)
+
+用**该渠道自己的 Key** 只读问上游「还剩多少额度」,按 `channel_type` 分发到四套完全不同的协议
+(`internal/proxy/quota*.go`)。全部走 6s 超时,失败不影响转发,前端灰色占位 + tooltip 给原因。
+
+| `channel_type` | 请求 | 形状 |
+|---|---|---|
+| `commandcode` | `GET https://api.commandcode.ai/alpha/billing/credits`(host 固定,不看 base_url) | `credits.*` 之和 = **剩余**;`windowLimits.{fiveHour,weekly}` 给 `used/cap/resetAt`,resetAt 是 epoch **毫秒** |
+| `opencode` | `GET {apiRoot(base_url)}/v1/usage` | `{usage:{rolling,weekly,monthly:{status,percent,resetsAt}}}`,resetsAt 是 ISO-8601 |
+| `deepseek` | `GET {apiRoot(base_url)}/user/balance`(**非 `/v1`**) | `{is_available, balance_infos:[{currency,total_balance,…}]}`,金额是**字符串**、无百分比 |
+| `thirdparty` | 手工配 `quota_path` + `quota_shape` | 见下 |
+
+第三方中转没有统一约定,故手工配置。形状三选一(`quotaShapes`):`usage`(通用信封,同 opencode)、
+`oneapi`(`/v1/dashboard/billing/subscription` 取 `hard_limit_usd`,再 `/v1/dashboard/billing/usage` 取
+`total_usage` 美分,剩余 = 前者 − 后者/100)、`newapi_user`(`/api/user/self` 取 `{data:{quota,used_quota}}`)。
+
+两条必须当**失败**处理的回包,否则前端会显示「额度 0%」这种假好消息:
+- 这类中转查不到 key 时常回 **HTTP 200 带 `{"error":{…}}`**(`relayErrorBody`);
+- 路由不存在时可能回 **200 的 SPA HTML**(`ensureJSON` 要求 body 以 `{` 开头)。
+
+`quota_path` 是用户输入、且请求会带上明文 Key,**故当 SSRF 面处理**(`ValidateQuotaPath`):只接受相对路径,
+拒绝 `://`、反斜杠、`//` 开头、空白/控制字符,长度 ≤512,且 `url.Parse` 不得解析出 Host/Scheme ——
+即 Key 只可能发往该渠道自己的 base_url 主机。
+
+窗口百分比 `percent` 是**已用**;`QuotaWindow` 另带可选的 `used`/`cap`/`resetAt` 原始信息
+(`resetAt` 上游给 ms 或 ISO 都归一成 RFC3339)。余额型上游(deepseek/one-api)填 `QuotaBalance`,
+**按上游原币种原样展示,不折算** —— 汇率是官方价用的、手工维护的,不该拿去当余额前提。
+`channel_type` 为空按 `thirdparty` 处理(老行/未回填);第三方没配路径时明确回「未配置额度查询路径」,
+前端 `useQueries` 的 `enabled` 也据此不发起请求。
+
 ### 关键坑位(实现时对照)
 - 管理端 PATCH 是**全量替换**(Update* 仓库方法会清零未传字段)。前端启停类操作用「先取全量快照再整包提交」
   (services/api.ts 的 toggle*/offerDraft 帮助器),勿发部分 body。
@@ -214,6 +250,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `GET/POST /users` · `PATCH /users/{id}/password` · `DELETE /users/{id}` | 用户管理(仅 admin):建号/列号/重置密码/删号 |
 | `GET/POST /channels` · `GET/PATCH/DELETE /channels/{id}` | 渠道 CRUD(改时 apiKey 留空=保持) |
 | `POST /channels/{id}/test` · `/sync-models` | 连通探测 `{ok,latencyMs}`;拉 `/v1/models` 补目录+停用 offer |
+| `GET /channels/{id}/quota` | 用该渠道自己的 Key 问上游额度(按 `channel_type` 分发,见 §5.3) |
 | `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(`name`=统一名、`originalName`=真实名)/新增/改(全量,`displayName` 非传=不变)/删;GET 全站可读 |
 | `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删 |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |
@@ -239,7 +276,9 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 会话守卫:`App.tsx` 启动 `GET /auth/me` 恢复会话;未登录渲染 `Login`(内含首启「创建管理员」态)。
 - 数据层:react-query(重试 0);mutation 成功后 invalidate 对应 queryKey(`['channels']/['models']/['rules']/
   ['tokens']/['logs',filters,page]/['usage',dim,days]/['overview']/['settings']/['model-usage',id]`)。
-- 展示词表(providers/capabilities 标签)属前端常量,与后端枚举一致;不作为运行时数据。
+- 展示词表(providers/channelTypes/egressProtos/quotaShapes/capabilities 标签)属前端常量,与后端枚举一致;
+  不作为运行时数据。渠道的展示名/徽标统一走 `utils/channel.ts` 的 `channelLabel`/`channelMark`
+  (有厂商显示厂商,聚合渠道回落渠道类型),勿在页面里直接渲染 `ch.provider`(为空会显示空白)。
 
 ## 8. 运行与联调
 
@@ -278,4 +317,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - v1 老库 `gateway.db`(upstreams/api_keys/request_log 等 v1 表)**整文件原样留档、不做迁移**;v2 用默认新库
   `gateway-v2.db`。二者混用同一文件会产生语义错乱的旧表残留,务必分开。
 - v1 概念(统一 key 兼管、`upstreams`/`keys`/`pricing`/`quota`、旧 `/api/v1/upstreams` 面、旧 `web/` 前端)已在演进中退役删除。
+- m0011 把渠道的「厂商 / 渠道类型 / 出站协议」拆成三列并回填老行:`provider` 收窄为真厂商
+  (`Azure`→`OpenAI` + `egress_proto='azure'`,`聚合中转`→`''`);`channel_type` 按 base_url/provider 推断
+  (`commandcode.ai`→`commandcode`、`opencode.ai`→`opencode`、`provider='DeepSeek'`→`deepseek`,其余 `thirdparty`)。
+  迁移是追加式的,老库直接起新版本即可,无需手工干预。
 - 渠道 api_key 密文依赖主密钥;换主密钥会解不开旧密文 → 保留原密钥即可回放。

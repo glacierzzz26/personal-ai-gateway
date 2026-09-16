@@ -1,0 +1,14 @@
+[Unit]
+Description=AI 网关自更新(轮询 ghcr :latest,digest 变了才重建)
+Documentation=file:%h/ai-gateway/README.md
+# 注:用户单元看不到系统级 docker.service,无法与它排序 —— 脚本自身对
+# docker 不可用是容错的(pull 失败 → 下轮再试),故不强行排序。
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/ai-gateway
+# 端点/镜像名如需覆盖,写进 ~/ai-gateway/updater.env(KEY=VALUE,可选)。
+EnvironmentFile=-%h/ai-gateway/updater.env
+ExecStart=/bin/bash %h/ai-gateway/update-from-ghcr.sh

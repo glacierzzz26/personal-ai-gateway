@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Input, Select, Table } from 'antd';
+import { Button, Input, Select, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import { Block as BlockCard, Blocks } from '@/components/Block';
@@ -58,8 +58,9 @@ export default function Logs() {
       return <StatusDot status="" text="中断" tone="aux" />;
     }
     if (okCode(v)) return <StatusDot status="" text="成功" tone="ok" />;
+    // 失败原因徽章换行显示 —— 与圆点同列上下叠放,避免撑宽整列
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+      <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
         <StatusDot status="" text={r.error ? '失败' : String(v)} tone="err" />
         {r.error && <span className="gw-badge">{FAIL_LABEL[classifyError(r.error)]}</span>}
       </span>
@@ -68,28 +69,31 @@ export default function Logs() {
 
   const columns: ColumnsType<RequestLogItem> = [
     {
-      title: '时间', dataIndex: 'ts', width: 160,
+      title: '时间', dataIndex: 'ts', width: 138,
       render: v => <span className="gw-mono">{v}</span>,
     },
-    { title: '状态', dataIndex: 'statusCode', width: 160, render: statusCell },
-    { title: '模型', dataIndex: 'model', render: v => <span className="gw-mono">{v}</span> },
+    { title: '状态', dataIndex: 'statusCode', width: 88, render: statusCell },
     {
-      title: '渠道', dataIndex: 'channelName', width: 150, ellipsis: true,
+      title: '模型', dataIndex: 'model', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
+    },
+    {
+      title: '渠道', dataIndex: 'channelName', width: 98, ellipsis: true,
       render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span>,
     },
     {
-      title: '令牌', dataIndex: 'tokenName', width: 140, ellipsis: true,
+      title: '令牌', dataIndex: 'tokenName', width: 92, ellipsis: true,
       render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span>,
     },
-    { title: '输入', dataIndex: 'inTokens', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '输出', dataIndex: 'outTokens', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '输入', dataIndex: 'inTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '输出', dataIndex: 'outTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     {
-      title: '缓存', dataIndex: 'cacheReadTokens', align: 'right', width: 90,
+      title: '缓存', dataIndex: 'cacheReadTokens', align: 'right', width: 70,
       render: v => (v ? <span className="gw-num">{fmt.k(v)}</span> : <span style={{ color: 'var(--gw-text-3)' }}>—</span>),
     },
-    { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 90, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
-    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
+    { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 70, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
+    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 82, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
+    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 86, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
   ];
 
   const errorText = error instanceof Error ? error.message : String(error ?? '加载失败');
@@ -169,7 +173,6 @@ export default function Logs() {
             loading={(isLoading || isFetching) && logs.length === 0}
             dataSource={logs}
             columns={columns}
-            scroll={{ x: 1420 }}
             locale={{
               emptyText: isError ? (
                 <ErrorState

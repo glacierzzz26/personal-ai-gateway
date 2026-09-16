@@ -94,4 +94,13 @@ func b2i(b bool) int {
 	return 0
 }
 
+// nullFloatPtr 把可空 float64 指针转为驱动可写入的值:nil → SQL NULL(表示「未设」,
+// 与显式 0 区分)。用于模型级售价倍率等「未设 = 回落默认」的列。
+func nullFloatPtr(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
 func lower(s string) string { return strings.ToLower(s) }

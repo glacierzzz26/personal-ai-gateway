@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { NAV_ITEMS } from '@/layout/nav';
+import { visibleNav } from '@/layout/nav';
+import { useSession } from '@/stores/session';
 import { useUi } from '@/stores/ui';
 
 /**
@@ -12,16 +13,19 @@ export default function CmdK() {
   const open = useUi(s => s.cmdkOpen);
   const setOpen = useUi(s => s.setCmdkOpen);
   const navigate = useNavigate();
+  const isAdmin = useSession(s => s.admin?.role === 'admin');
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
 
+  // 与侧栏同一份可见性规则:普通用户看不到管理面页面,面板里也不该出现。
   const items = useMemo(() => {
+    const nav = visibleNav(isAdmin);
     const s = q.trim().toLowerCase();
-    if (!s) return NAV_ITEMS;
-    return NAV_ITEMS.filter(it => it.label.toLowerCase().includes(s) || it.group.toLowerCase().includes(s));
-  }, [q]);
+    if (!s) return nav;
+    return nav.filter(it => it.label.toLowerCase().includes(s) || it.group.toLowerCase().includes(s));
+  }, [q, isAdmin]);
 
   // 全局快捷键（含打开态下的方向键）
   useEffect(() => {

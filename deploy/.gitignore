@@ -6,3 +6,4 @@ data/
 *.key
 *.csr
 *.srl
+failover.env

@@ -127,3 +127,5 @@ deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gatew
 - 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
 - 证书 SAN 含局域网 IP 与公网 IP,两条路径共用同一私钥 CA;客户端导入一次 `deploy/certs/ca.crt` 即可验真。
 - 两面物理隔离:数据面口只认 `/healthz` 与 `/v1/*`,管理台口只认 `/healthz`、`/api/v1/*` 与 SPA;错面访问 404。
+- **灾备(家主机断电 / 云入口故障):** 方案与分阶段落地见 [`deploy/DR.md`](deploy/DR.md)(异地加密快照 + 云冷备同 IP 接管,RPO ≤15min / RTO ≤2min,客户端零改动)。
+- **改造方向(个人网关 → 中转站):** 角色/定价/钱包/可见面的方案见 [`PLAN.md`](PLAN.md)(admin=自己、user=客户;售价 = 官方价 × 倍率、成本仅自己可见;用户级钱包)。**尚未实施。**

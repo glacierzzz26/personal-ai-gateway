@@ -1,0 +1,86 @@
+# release: 把 main / tag 编译打包成镜像推到 ghcr。lab 侧 gw-updater 轮询 :latest
+# 的 digest,变了才 pull + compose up —— 部署路径上没有编译。方案见 deploy/CI.md。
+#
+#   push main       → ghcr.io/<repo>:<sha> 与 :latest
+#   push tag v*     → ghcr.io/<repo>:<sha> 与 :<tag>(latest 只跟 main)
+#   workflow_dispatch → 同上按分支处理(打 :<sha> + :latest)
+#
+# 推送用仓库内置 GITHUB_TOKEN(packages: write),无需自建 PAT。
+
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch: {}
+
+# 同一 ref 的发布串行;新 push 覆盖旧的在途发布即可(镜像按 sha 打 tag,幂等)。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # ghcr 要求全小写全名;这里直接写死(仓库已改名/改 owner 时需同步改这里)。
+  IMAGE: ghcr.io/glacierzzz26/personal-ai-gateway
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 取全史 + tags,git describe 需要
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web-v2/package-lock.json
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 版本号 = 短 sha,与 /healthz、git describe --always 口径一致。
+      - name: Resolve version
+        id: ver
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend
+        run: cd web-v2 && npm ci --no-audit --no-fund && npm run build
+
+      # 复用 build.sh:GETFRONT=0 跳过它内部的 npm(上面已构建),只做 Go 交叉编译
+      # + 组装上下文 + docker build。镜像名走 IMAGE(ghcr 全名)。
+      - name: Build image
+        env:
+          VER: ${{ steps.ver.outputs.sha }}
+          GETFRONT: '0'
+        run: bash deploy/scripts/build.sh
+
+      - name: Log in to ghcr
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Tag and push
+        env:
+          VER: ${{ steps.ver.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            docker tag "$IMAGE:$VER" "$IMAGE:${GITHUB_REF_NAME}"
+            docker push "$IMAGE:$VER"
+            docker push "$IMAGE:${GITHUB_REF_NAME}"
+          else
+            docker push "$IMAGE:$VER"
+            docker push "$IMAGE:latest"
+          fi
+          echo "已推送 $IMAGE ($VER)"

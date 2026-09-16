@@ -4,12 +4,14 @@ import { App, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
+import AnnouncementModal from '@/components/AnnouncementModal';
 import CmdK from '@/layout/CmdK';
 import { IconFold } from '@/components/icons';
 import { NAV_GROUPS, crumbOf, visibleNav } from '@/layout/nav';
 import { useUi } from '@/stores/ui';
 import { useSession } from '@/stores/session';
 import { api } from '@/services/api';
+import { queryClient } from '@/main';
 
 const SIDER_W = 248;
 const SIDER_COLLAPSED_W = 64;
@@ -101,6 +103,8 @@ export default function AppLayout() {
     } catch {
       /* 会话可能已失效，照样回登录页 */
     }
+    // 清空查询缓存:部分响应按角色收敛(如 /models),留着会被下一个登录的账号读到(见 App.tsx 同名处理)。
+    queryClient.clear();
     setAdmin(null);
     message.success('已退出登录');
   };
@@ -367,6 +371,9 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* 全站公告:登录后自动拉取未读公告并弹窗(见 AnnouncementModal) */}
+      <AnnouncementModal />
 
       {/* 用户菜单：自己定位，避免 antd Dropdown 的默认阴影与圆角 */}
       {userMenuOpen && (

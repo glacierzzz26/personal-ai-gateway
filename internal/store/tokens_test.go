@@ -22,13 +22,13 @@ func TestTokenLifecycleCharge(t *testing.T) {
 		t.Errorf("allowed models mismatch: %+v", tk.AllowedModels)
 	}
 
-	// 扣减:0.6 成功,再 0.6 超额度被拒,且 used 保持不变
+	// 扣减:结算一律累加、不设上限(额度是否够由入口预检查判定);
+	// 越过 quota 也照记,否则「剩余不足一笔」会变成无限白跑(issue #8 / PLAN §1)。
 	mustNoErr(t, st.ChargeToken(tk.ID, 0.6), "charge 0.6")
-	err = st.ChargeToken(tk.ID, 0.6)
-	mustErrIs(t, err, ErrQuotaExceeded, "charge over quota")
+	mustNoErr(t, st.ChargeToken(tk.ID, 0.6), "charge over quota still settles")
 	read, _ := st.GetToken(tk.ID)
-	if read.UsedUsd < 0.599 || read.UsedUsd > 0.601 {
-		t.Errorf("used = %v, want ~0.6", read.UsedUsd)
+	if read.UsedUsd < 1.199 || read.UsedUsd > 1.201 {
+		t.Errorf("used = %v, want ~1.2 (over quota)", read.UsedUsd)
 	}
 	if read.LastUsedAt == nil {
 		t.Error("lastUsedAt should be set after charge")

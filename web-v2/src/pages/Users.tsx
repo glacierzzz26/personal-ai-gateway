@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { App, Button, Form, Input, Modal, Select, Space, Table } from 'antd';
+import { App, Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
@@ -8,6 +9,7 @@ import PageHeader from '@/components/PageHeader';
 import { EmptyState, ErrorState } from '@/components/States';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
+import { fmt } from '@/utils/format';
 import type { Role, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
@@ -124,12 +126,132 @@ function ResetPasswordModal(props: {
   );
 }
 
+/** 充值/扣减弹窗(正数充值,负数扣减调整)。 */
+function TopupModal(props: {
+  user: UserAccount | null;
+  onCancel: () => void;
+  onSubmit: (id: number, amount: number, note?: string) => Promise<void>;
+}) {
+  const { user, onCancel, onSubmit } = props;
+  const { message } = App.useApp();
+  const [form] = Form.useForm<{ amount: number; note?: string }>();
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const v = await form.validateFields();
+    if (!user) return;
+    setSaving(true);
+    try {
+      await onSubmit(user.id, v.amount, v.note?.trim() || undefined);
+      form.resetFields();
+    } catch (e) {
+      message.error(`充值失败:${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={user ? `调整「${user.username}」的余额` : '调整余额'}
+      open={!!user}
+      onCancel={onCancel}
+      onOk={submit}
+      confirmLoading={saving}
+      okText="提交"
+      cancelText="取消"
+      destroyOnHidden
+      width={440}
+    >
+      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ amount: 100 }}>
+        {user && (
+          <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
+            当前余额:<b className="gw-num" style={{ color: 'var(--gw-text)' }}>{fmt.usd(user.balanceUsd)}</b>
+          </div>
+        )}
+        <Form.Item
+          name="amount" label="金额(正=充值,负=扣减)"
+          rules={[{ required: true, message: '请输入金额' }]}
+        >
+          <InputNumber style={{ width: '100%' }} precision={2} step={100} placeholder="例如 100 或 -50" />
+        </Form.Item>
+        <Form.Item name="note" label="备注(可选)">
+          <Input placeholder="例如:微信转账 / 试用额度" maxLength={120} />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+/** 令牌上限弹窗:限制该客户自建令牌能授权的额度/RPM 上限(0 = 不限)。 */
+function CeilingModal(props: {
+  user: UserAccount | null;
+  onCancel: () => void;
+  onSubmit: (id: number, quotaUsd: number, rpmLimit: number) => Promise<void>;
+}) {
+  const { user, onCancel, onSubmit } = props;
+  const { message } = App.useApp();
+  const [form] = Form.useForm<{ quotaUsd: number; rpmLimit: number }>();
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const v = await form.validateFields();
+    if (!user) return;
+    setSaving(true);
+    try {
+      await onSubmit(user.id, v.quotaUsd ?? 0, v.rpmLimit ?? 0);
+      form.resetFields();
+    } catch (e) {
+      message.error(`保存失败:${errMsg(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={user ? `设置「${user.username}」的令牌上限` : '令牌上限'}
+      open={!!user}
+      onCancel={onCancel}
+      onOk={submit}
+      confirmLoading={saving}
+      okText="保存"
+      cancelText="取消"
+      destroyOnHidden
+      width={440}
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark={false}
+        preserve={false}
+        initialValues={{ quotaUsd: 0, rpmLimit: 0 }}
+      >
+        <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
+          该客户自助创建的令牌不得超过此上限(0 = 不限)。真正常住闸门是余额,这里是令牌子预算的天花板。
+        </div>
+        <Form.Item
+          name="quotaUsd" label="令牌额度上限"
+          extra="单位同计价币种;0 = 不限"
+        >
+          <InputNumber min={0} precision={2} step={10} style={{ width: '100%' }} placeholder="0 = 不限" />
+        </Form.Item>
+        <Form.Item name="rpmLimit" label="令牌 RPM 上限" extra="0 = 不限">
+          <InputNumber min={0} max={100000} style={{ width: '100%' }} placeholder="0 = 不限" />
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
 export default function Users() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const me = useSession(s => s.admin);
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserAccount | null>(null);
+  const [topupUser, setTopupUser] = useState<UserAccount | null>(null);
+  const [ceilingUser, setCeilingUser] = useState<UserAccount | null>(null);
 
   const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] });
@@ -147,6 +269,20 @@ export default function Users() {
     await api.resetUserPassword(id, newPassword);
     message.success('密码已重置');
     setResetting(null);
+  };
+
+  const topup = async (id: number, amount: number, note?: string) => {
+    await api.topupUser(id, amount, note);
+    message.success(amount >= 0 ? '已充值' : '已扣减');
+    setTopupUser(null);
+    refresh();
+  };
+
+  const saveCeiling = async (id: number, quotaUsd: number, rpmLimit: number) => {
+    await api.setUserCeiling(id, quotaUsd, rpmLimit);
+    message.success('令牌上限已保存');
+    setCeilingUser(null);
+    refresh();
   };
 
   const remove = useMutation({
@@ -168,34 +304,76 @@ export default function Users() {
 
   const columns: ColumnsType<UserAccount> = [
     { title: '用户名', dataIndex: 'username', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
-    { title: '角色', dataIndex: 'role', width: 140, render: v => <RoleBadge role={v} /> },
-    { title: 'Key 数量', dataIndex: 'keyCount', width: 110, align: 'right', render: v => <span className="gw-num">{v}</span> },
+    { title: '角色', dataIndex: 'role', width: 96, render: v => <RoleBadge role={v} /> },
     {
-      title: '创建时间', dataIndex: 'createdAt', width: 200,
+      title: '余额', dataIndex: 'balanceUsd', width: 116, align: 'right',
+      render: (v: number, r) =>
+        r.role !== 'user' ? (
+          <span style={{ color: 'var(--gw-text-3)' }}>—</span>
+        ) : (
+          <span className="gw-num" style={{ color: v <= 0 ? 'var(--gw-err)' : undefined }}>{fmt.usd(v)}</span>
+        ),
+    },
+    {
+      title: '令牌上限', key: 'ceiling', width: 110, align: 'right',
+      render: (_, r) => {
+        if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
+        if (r.tokenQuotaCeiling <= 0 && r.tokenRpmCeiling <= 0) {
+          return <span style={{ color: 'var(--gw-text-3)' }}>不限</span>;
+        }
+        return (
+          <Tooltip title={`RPM 上限 ${r.tokenRpmCeiling > 0 ? r.tokenRpmCeiling : '不限'}`}>
+            <span className="gw-num">
+              {r.tokenQuotaCeiling > 0 ? fmt.usd(r.tokenQuotaCeiling) : 'RPM 限'}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
+    { title: 'Key 数量', dataIndex: 'keyCount', width: 90, align: 'right', render: v => <span className="gw-num">{v}</span> },
+    {
+      title: '创建时间', dataIndex: 'createdAt', width: 150,
       render: v => {
         const d = dayjs(v);
         return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
     {
-      title: '操作', align: 'right', width: 200,
+      // 高频（充值/倍率）外露，低频（令牌上限/重置密码/删除）收进「更多」
+      title: '操作', align: 'right', width: 160,
       render: (_, r) => {
         const isSelf = r.id === me?.id;
         const isLastAdmin = r.role === 'admin' && adminCount <= 1;
+        const isUser = r.role === 'user';
         return (
           <Space size={4}>
-            <Button size="small" disabled={isSelf} title={isSelf ? '不能重置自己的密码，请用右上角菜单' : undefined}
-              onClick={() => setResetting(r)}>
-              重置密码
+            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无钱包'}
+              onClick={() => setTopupUser(r)}>
+              充值
             </Button>
-            <Button
-              size="small" danger
-              disabled={isSelf || isLastAdmin}
-              title={isSelf ? '不能删除自己' : isLastAdmin ? '不能删除最后一个管理员' : undefined}
-              onClick={() => confirmDelete(r)}
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'ceiling', label: '令牌上限', disabled: !isUser },
+                  { key: 'password', label: '重置密码', disabled: isSelf },
+                  { type: 'divider' as const },
+                  { key: 'delete', label: '删除', danger: true, disabled: isSelf || isLastAdmin },
+                ],
+                onClick: ({ key, domEvent }) => {
+                  domEvent.stopPropagation();
+                  if (key === 'ceiling') setCeilingUser(r);
+                  else if (key === 'password') setResetting(r);
+                  else if (key === 'delete') confirmDelete(r);
+                },
+              }}
             >
-              删除
-            </Button>
+              <Button
+                type="text" size="small" icon={<MoreOutlined />}
+                aria-label={`更多操作 ${r.username}`}
+                title={isLastAdmin ? '最后一个管理员不可删除' : undefined}
+              />
+            </Dropdown>
           </Space>
         );
       },
@@ -228,7 +406,7 @@ export default function Users() {
               dataSource={users}
               columns={columns}
               pagination={false}
-              scroll={{ x: 820 }}
+              tableLayout="fixed"
               locale={{
                 emptyText: (
                   <EmptyState
@@ -245,6 +423,8 @@ export default function Users() {
 
       <CreateUserModal open={creating} onCancel={() => setCreating(false)} onSubmit={create} />
       <ResetPasswordModal user={resetting} onCancel={() => setResetting(null)} onSubmit={resetPw} />
+      <TopupModal user={topupUser} onCancel={() => setTopupUser(null)} onSubmit={topup} />
+      <CeilingModal user={ceilingUser} onCancel={() => setCeilingUser(null)} onSubmit={saveCeiling} />
     </div>
   );
 }

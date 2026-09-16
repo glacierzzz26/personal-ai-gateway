@@ -129,3 +129,19 @@ export const IconPricing = (p: IconProps) => (
     <path d="M16 8h.01" />
   </Svg>
 );
+
+export const IconWallet = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="6" width="18" height="13" rx="2.5" />
+    <path d="M3 10h18" />
+    <path d="M16.5 14.5h1.5" />
+  </Svg>
+);
+
+export const IconMegaphone = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 11v2a1 1 0 0 0 1 1h2l6 4V6L6 10H4a1 1 0 0 0-1 1Z" />
+    <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+    <path d="M18 6a8.5 8.5 0 0 1 0 12" />
+  </Svg>
+);

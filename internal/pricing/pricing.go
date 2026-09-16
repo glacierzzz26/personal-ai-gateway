@@ -28,7 +28,7 @@ import (
 // 触发抓取时显式返回此错误,绝不悄悄跳过或返回空集冒充成功。
 var ErrManualOnly = errors.New("该厂商官方计费页为动态渲染,无法稳定抓取;请在管理台手工录入官方参考价")
 
-// ErrNoOfficialSource 该 provider 根本没有官方单价来源(OpenAI/Anthropic/Azure/聚合中转 等)。
+// ErrNoOfficialSource 该 provider 根本没有官方单价来源(或者 provider 为空 = 非单一厂商)。
 var ErrNoOfficialSource = errors.New("该厂商无受支持的官方单价页面")
 
 // quote 一条解析结果(内部;原币种 / 百万 token)。
@@ -49,11 +49,18 @@ type scraper struct {
 	URL string
 	// ManualOnly 该 provider 无稳定可抓页面,只能手工录入。
 	ManualOnly bool
+	// ManualCurrency 手工录入时的默认原币种(空 = CNY)。抓取路径由 parse 返回的币种决定,
+	// 与这里无关;此字段只影响 ManualOnly 条目的录入默认值(Anthropic/OpenAI 官网以美元标价)。
+	ManualCurrency domain.Currency
 	// parse 从页面正文解析。空 → ManualOnly。
 	parse func(body []byte) ([]quote, domain.Currency, domain.BillingShape, error)
 }
 
 // scrapers provider → 官方来源。未列出的 provider 视为无官方来源。
+//
+// ManualOnly 条目(Hosts 为空、parse 为空)表示「有官方价、但页面不可稳定抓取,只能手工录入」:
+// 它们不进抓取路径(Fetch 在 ManualOnly 分支直接返回 ErrManualOnly,不会用到 Hosts),
+// 仅用于让 Supports 放行、让管理台出现手工录入入口(issue #8:Claude/GPT 官方价录不进)。
 var scrapers = map[domain.Provider]scraper{
 	domain.ProviderDeepSeek: {
 		Hosts: []string{"api-docs.deepseek.com"},
@@ -69,6 +76,24 @@ var scrapers = map[domain.Provider]scraper{
 		Hosts:      []string{"bigmodel.cn"},
 		URL:        "https://bigmodel.cn/pricing",
 		ManualOnly: true,
+	},
+	// Anthropic / OpenAI 官方定价页为 JS 渲染(Anthropic 实测,见 PLAN.md §8),抓取大概率白做;
+	// 官方价靠手工录入 + 来源 URL 留证。这是 S3「官方价 × 倍率」对 Claude/GPT 生效的前置。
+	domain.ProviderAnthropic: {
+		URL:            "https://www.anthropic.com/pricing",
+		ManualOnly:     true,
+		ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderOpenAI: {
+		URL:            "https://openai.com/api/pricing/",
+		ManualOnly:     true,
+		ManualCurrency: domain.CurrencyUSD,
+	},
+	// Moonshot 官网定价为动态渲染,只能手工录入。
+	domain.ProviderMoonshot: {
+		URL:            "https://platform.moonshot.cn/docs/pricing",
+		ManualOnly:     true,
+		ManualCurrency: domain.CurrencyCNY,
 	},
 }
 

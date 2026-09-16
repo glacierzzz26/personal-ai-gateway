@@ -62,10 +62,11 @@ func (s *Store) AdminByID(id int64) (admin domain.AdminUser, passwordBcrypt stri
 	return admin, passwordBcrypt, err
 }
 
-// ListUsers 全部账号(附各自名下令牌数),新建在前。
+// ListUsers 全部账号(附各自名下令牌数 + 钱包余额),新建在前。
 func (s *Store) ListUsers() ([]domain.UserRead, error) {
 	rows, err := s.db.Query(`SELECT a.id, a.username, a.role, a.created_at,
-		(SELECT COUNT(*) FROM tokens t WHERE t.owner_id = a.id)
+		(SELECT COUNT(*) FROM tokens t WHERE t.owner_id = a.id),
+		a.balance_usd, a.token_quota_ceiling, a.token_rpm_ceiling
 		FROM admins a ORDER BY a.id DESC`)
 	if err != nil {
 		return nil, err
@@ -75,7 +76,8 @@ func (s *Store) ListUsers() ([]domain.UserRead, error) {
 	for rows.Next() {
 		var u domain.UserRead
 		var role, created string
-		if err := rows.Scan(&u.ID, &u.Username, &role, &created, &u.KeyCount); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &role, &created, &u.KeyCount,
+			&u.BalanceUsd, &u.TokenQuotaCeiling, &u.TokenRpmCeiling); err != nil {
 			return nil, err
 		}
 		u.Role = domain.Role(role)

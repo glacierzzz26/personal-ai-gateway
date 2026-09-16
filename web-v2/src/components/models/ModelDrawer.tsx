@@ -16,6 +16,7 @@ import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { capabilities as ALL_CAPS } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
+import { channelLabel, channelMark } from '@/utils/channel';
 import type { EChartsOption } from 'echarts';
 import type { Capability, Channel, ModelCatalogItem, ModelDraft, ModelOffer, OfferDraft } from '@/types';
 
@@ -31,6 +32,8 @@ interface BasicFormValues {
   displayName?: string;
   contextWindow: number;
   capabilities: Capability[];
+  /** 售价倍率;undefined/空 = 跟随全局 settings.priceMultiplier */
+  rateOverride?: number | null;
 }
 
 /* —— 供给源 添加/编辑 弹窗 —— */
@@ -166,7 +169,7 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
               placeholder="选择渠道"
               options={candidateChannels.map(c => ({
                 value: c.id,
-                label: `${c.name} · ${c.provider}${c.enabled ? '' : '（渠道已停用）'}`,
+                label: `${c.name} · ${channelLabel(c)}${c.enabled ? '' : '（渠道已停用）'}`,
               }))}
               showSearch
               optionFilterProp="label"
@@ -261,6 +264,9 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   };
 
   const { data: channels = [] } = useQuery({ queryKey: ['channels'], queryFn: api.getChannels });
+  // 全局倍率:作「留空即跟随全局」的参照文案,只读展示,不在此处改动。
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const globalRate = settings?.priceMultiplier ?? 1;
   const usageQuery = useQuery({
     queryKey: ['model-usage', model?.id, 7],
     queryFn: () => api.getModelUsage(model!.id, 7),
@@ -279,6 +285,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
           displayName: model.displayName ?? '',
           contextWindow: model.contextWindow,
           capabilities: model.capabilities,
+          rateOverride: model.rateOverride ?? null,
         });
       }
     }
@@ -344,6 +351,8 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
         contextWindow: v.contextWindow ?? model.contextWindow,
         capabilities: (v.capabilities ?? model.capabilities) as Capability[],
         enabled: model.enabled,
+        // 空 = 清空覆盖(回落全局);null 显式传回让后端区分「清空」与「未传」。
+        rateOverride: v.rateOverride == null ? null : Number(v.rateOverride),
       },
     });
   };
@@ -419,11 +428,14 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     },
     {
       title: '供应商', dataIndex: 'provider',
-      render: v => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <ProviderMark name={v} /> {v}
-        </span>
-      ),
+      render: (_, r) => {
+        const label = channelLabel(r);
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <ProviderMark name={channelMark(r)} /> {label}
+          </span>
+        );
+      },
     },
     {
       title: '上游名', key: 'upstream',
@@ -769,6 +781,22 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                         </Form.Item>
                         <Form.Item name="capabilities" label="能力">
                           <Checkbox.Group options={ALL_CAPS.map(x => ({ label: CAP_LABEL[x], value: x }))} />
+                        </Form.Item>
+                        <Form.Item
+                          name="rateOverride"
+                          label="售价倍率"
+                          extra={
+                            <>
+                              本站价 = 官方价 × 倍率，全站同一模型对所有客户同一价。
+                              留空则跟随全局倍率（当前 <b className="gw-num">×{globalRate}</b>）。
+                              未录官方价的模型回落「成本 × 倍率」。
+                            </>
+                          }
+                        >
+                          <InputNumber
+                            style={{ width: '100%' }} min={0.01} step={0.1} precision={2}
+                            placeholder={`留空=用全局倍率（×${globalRate}）`}
+                          />
                         </Form.Item>
                       </Form>
                       <div style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>

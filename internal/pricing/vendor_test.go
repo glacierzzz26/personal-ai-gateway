@@ -21,13 +21,17 @@ func TestInferVendor(t *testing.T) {
 		{"glm-4.6", domain.ProviderZhipu},
 		{"chatglm3", domain.ProviderZhipu},
 		{"zhipu/glm-4", domain.ProviderZhipu},
+		// S4:厂商白名单放开后,Claude/GPT 名也参与推断(聚合渠道直接沿用厂商名)。
+		{"claude-sonnet-5", domain.ProviderAnthropic},
+		{"claude-3-5-sonnet", domain.ProviderAnthropic},
+		{"gpt-4o", domain.ProviderOpenAI},
+		{"gpt-5.1-mini", domain.ProviderOpenAI},
 		// 判不出 / 无官方来源 → 空(交由模型级显式绑定兜底)。
 		{"", ""},
-		{"gpt-4o", ""},
-		{"claude-3-5-sonnet", ""},
 		{"moonshot-v1-8k", ""},
 		{"openai/deepseek-chat", ""}, // 只看首段:聚合商前缀优先,刻意保守
 		{"glmx", ""},                 // 匹配词后紧跟字母不算命中
+		{"gptx", ""},                 // 同理,防 "gpt" 命中 "gptx"
 	}
 	for _, c := range cases {
 		if got := InferVendor(c.model); got != c.want {
@@ -38,8 +42,10 @@ func TestInferVendor(t *testing.T) {
 
 func TestVendors(t *testing.T) {
 	vs := Vendors()
-	if len(vs) != 3 {
-		t.Fatalf("Vendors() len = %d, want 3: %+v", len(vs), vs)
+	// S4 后:DeepSeek/通义(可抓)+ 智谱/Anthropic/OpenAI/Moonshot(仅手工)= 6。
+	// (Azure 已从 provider 枚举移除 —— 按区域部署定价,不是厂商。)
+	if len(vs) != 6 {
+		t.Fatalf("Vendors() len = %d, want 6: %+v", len(vs), vs)
 	}
 	// 字典序稳定输出。
 	for i := 1; i < len(vs); i++ {
@@ -54,8 +60,19 @@ func TestVendors(t *testing.T) {
 		}
 		byP[v.Provider] = v
 	}
-	if !byP[domain.ProviderZhipu].ManualOnly {
-		t.Error("智谱 should be manual-only")
+	// 仅手工厂商:抓不了,但支持手工录入,且带出默认原币。
+	for p, cur := range map[domain.Provider]domain.Currency{
+		domain.ProviderZhipu:     domain.CurrencyCNY,
+		domain.ProviderAnthropic: domain.CurrencyUSD,
+		domain.ProviderOpenAI:    domain.CurrencyUSD,
+		domain.ProviderMoonshot:  domain.CurrencyCNY,
+	} {
+		if !byP[p].ManualOnly {
+			t.Errorf("%s should be manual-only", p)
+		}
+		if byP[p].ManualCurrency != cur {
+			t.Errorf("%s manualCurrency = %q, want %q", p, byP[p].ManualCurrency, cur)
+		}
 	}
 	for _, p := range []domain.Provider{domain.ProviderDeepSeek, domain.ProviderQwen} {
 		if byP[p].ManualOnly {

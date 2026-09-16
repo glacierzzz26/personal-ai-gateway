@@ -19,16 +19,19 @@
   --gw-text-2: #475569;
   --gw-text-3: #94a3b8;
 
-  /* 主色 + 浅主色底 */
-  --gw-primary: #0e7490;
-  --gw-primary-hover: #155e75;
-  --gw-primary-50: #ecfeff;
-  --gw-primary-100: #cffafe;
+  /* 主色 + 浅主色底（靛蓝 Indigo） */
+  --gw-primary: #4f46e5;
+  --gw-primary-hover: #4338ca;
+  --gw-primary-50: #eef2ff;
+  --gw-primary-100: #c7d2fe;
 
-  /* 图表四段同色相 */
-  --gw-c1: #0891b2;
-  --gw-c2: #22d3ee;
-  --gw-c3: #a5f3fc;
+  /* 图表分类色板（多色相，系列间一眼可分） */
+  --gw-c1: #4f46e5; /* 靛蓝 */
+  --gw-c2: #06b6d4; /* 青 */
+  --gw-c3: #8b5cf6; /* 紫 */
+  --gw-c4: #f59e0b; /* 琥珀 */
+  --gw-c5: #ec4899; /* 玫红 */
+  --gw-c6: #10b981; /* 翠绿 */
 
   /* 语义色 */
   --gw-ok: #10b981;
@@ -351,30 +354,55 @@ body {
   color: var(--gw-text-3);
 }
 
-/* ============================================================
-   轻量表格（区块内嵌，非分页数据表）
-   与 antd Table 分开：这里只做对齐与分隔线，不需要排序/选择列。
-   ============================================================ */
+/* 轻量表格 (区块内嵌, 非分页数据表) — 只做对齐与分隔线，不需要排序/选择列。 */
 .gw-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+  /* 内嵌在窄区块里(如 Dashboard 左栏),1366 下横向空间约 700px。
+     fixed 布局 + 单元格截断:列宽由表头首行的 width 决定,超长内容以省略号收尾
+     (悬浮 title 显示全文),故表格永不超过容器宽度,不产生横向滚动框。
+     通道名列吃 30%,其余 6 列均分剩余 70%。 */
+  table-layout: fixed;
 }
 .gw-table th {
   text-align: left;
   font-weight: 500;
   font-size: 13px;
   color: var(--gw-text-3);
-  padding: 10px 20px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--gw-border);
-  white-space: nowrap;
+  /* 表头可折行 —— fixed 布局下列宽固定,nowrap 表头会溢出单元格 */
+  white-space: normal;
   background: var(--gw-card);
 }
 .gw-table td {
-  padding: 12px 20px;
+  padding: 12px 12px;
   border-bottom: 1px solid var(--gw-border);
   color: var(--gw-text-2);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 首列(渠道名)最可能超长,分给更多宽度;宽度须落在表头首行才生效 */
+.gw-table th:first-child {
+  width: 30%;
+}
+/*
+ * 首末列留白:区块 body 无 padding,首列若也贴边,文字会直接顶到卡片边框上。
+ * 补到 16px(antd 大表默认内边距,而非自造数值),首末各一份:
+ * 只加首末列(而非每列),宽度预算 = 2×增量,而非 2×增量×列数 —— 表格本就
+ * nowrap 且列多,每列都加会在 1366 笔记本下撑出横向滚动条。
+ * 16 而非 20:卡片头/正文是 20px,但 /tokens 八列在 1366 下已零余量,
+ * 20px 会溢出 3px;16px 全站安全,且与 antd 表格自身的节奏一致。
+ */
+.gw-table th:first-child,
+.gw-table td:first-child {
+  padding-left: 16px;
+}
+.gw-table th:last-child,
+.gw-table td:last-child {
+  padding-right: 16px;
 }
 .gw-table tbody tr:last-child td {
   border-bottom: 0;
@@ -566,7 +594,7 @@ body {
   word-break: break-all;
 }
 
-/* 代码块 */
+/* 代码块:长行折行显示,不出现横向滚动框 */
 .gw-pre {
   font-family: var(--gw-mono);
   font-size: 13px;
@@ -575,8 +603,8 @@ body {
   border: 1px solid var(--gw-border);
   border-radius: var(--gw-r-card);
   padding: 15px;
-  overflow-x: auto;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
   margin: 0;
   color: var(--gw-text);
 }
@@ -757,9 +785,8 @@ tr.gw-drop-after > td {
 .gw-palette input::placeholder {
   color: var(--gw-text-3);
 }
+/* 结果列表:页面数量有界(见 nav.tsx),让其自然撑开,不出现纵向滚动框 */
 .gw-p-list {
-  max-height: 340px;
-  overflow-y: auto;
   padding: 7px;
 }
 .gw-p-item {
@@ -900,6 +927,27 @@ tr.gw-drop-after > td {
 .ant-table-wrapper .ant-table-container {
   border-start-start-radius: var(--gw-r-card);
   border-start-end-radius: var(--gw-r-card);
+}
+
+/*
+ * 首末列留白:卡片内表格贴边很难看。antd 主题的 cellPaddingInline 只作用于
+ * size="large",middle/small 走的是 cellPaddingInline*SM 另一套 token,
+ * 改主题够不着,故在此按「首末列」补足到 16px:
+ *   - 只加首末列(而非每列),宽度预算 = 2×增量,而非 2×增量×列数 ——
+ *     表格本就 nowrap 且列多,每列都加会在 1366 笔记本下撑出横向滚动条;
+ *   - small 本身内边距更小,同样补到 16,避免同一页两种表格边缘不齐。
+ */
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-tbody > tr > td:first-child,
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-thead > tr > th:first-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-tbody > tr > td:first-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-thead > tr > th:first-child {
+  padding-left: 16px;
+}
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-tbody > tr > td:last-child,
+.ant-table-wrapper .ant-table.ant-table-middle .ant-table-thead > tr > th:last-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-tbody > tr > td:last-child,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-thead > tr > th:last-child {
+  padding-right: 16px;
 }
 
 /* 偏好减少动效时关闭全部过渡 */

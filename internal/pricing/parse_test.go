@@ -98,6 +98,19 @@ func TestParseQwenOfficialSample(t *testing.T) {
 	if mx.Detail["effectiveDefault"] != "first-tier" {
 		t.Errorf("effectiveDefault = %v, want first-tier", mx.Detail["effectiveDefault"])
 	}
+	// 第三方转售小节必须剔除:百炼同页转售 glm/deepseek/kimi/minimax 等,模型名与
+	// 通义无关、价格也是阿里转售价 —— 并入会把「glm-4.5」错记成通义千问官方价。
+	for _, foreign := range []string{"glm-4.5", "glm-4.6", "deepseek-v3", "kimi-k2.5", "MiniMax-M2.1", "ZHIPU/GLM-5"} {
+		if _, leaked := byName[foreign]; leaked {
+			t.Errorf("第三方模型 %q 不应出现在通义千问官方价里", foreign)
+		}
+	}
+	// 通义自家(含 farui/gui 等)必须保留,不能因过滤误伤。
+	for _, own := range []string{"qwen3.8-max", "qwen-max"} {
+		if _, ok := byName[own]; !ok {
+			t.Errorf("通义自家模型 %q 被误删", own)
+		}
+	}
 }
 
 // 页面改版(结构变化)必须解析失败,绝不能静默给出错误值。
@@ -177,8 +190,43 @@ func TestManualOnlyProviders(t *testing.T) {
 	if ManualOnly(domain.ProviderDeepSeek) || ManualOnly(domain.ProviderQwen) {
 		t.Error("DeepSeek/通义 不应是仅手工")
 	}
-	if Supports(domain.ProviderOpenAI) {
-		t.Error("OpenAI 无受支持官方来源")
+	// S4:Claude/GPT 官方价录不进 → 放开为「仅手工录入」(issue #8)。页面 JS 渲染,抓取不做。
+	if !Supports(domain.ProviderAnthropic) || !ManualOnly(domain.ProviderAnthropic) {
+		t.Error("Anthropic 应为仅手工录入(官方价需手工录入才能用上)")
+	}
+	if !Supports(domain.ProviderOpenAI) || !ManualOnly(domain.ProviderOpenAI) {
+		t.Error("OpenAI 应为仅手工录入")
+	}
+	// 中转站不是厂商,始终无官方来源。
+	if Supports(domain.Provider("示例中转站")) {
+		t.Error("中转站无官方来源")
+	}
+}
+
+func TestManualDefaultCurrency(t *testing.T) {
+	if c := ManualDefaultCurrency(domain.ProviderAnthropic); c != domain.CurrencyUSD {
+		t.Errorf("Anthropic 手工录入默认原币应为 USD, got %q", c)
+	}
+	if c := ManualDefaultCurrency(domain.ProviderOpenAI); c != domain.CurrencyUSD {
+		t.Errorf("OpenAI 手工录入默认原币应为 USD, got %q", c)
+	}
+	if c := ManualDefaultCurrency(domain.ProviderZhipu); c != domain.CurrencyCNY {
+		t.Errorf("智谱手工录入默认原币应为 CNY, got %q", c)
+	}
+	// 非仅手工厂商无默认(币种由抓取解析决定)。
+	if c := ManualDefaultCurrency(domain.ProviderDeepSeek); c != "" {
+		t.Errorf("DeepSeek 非仅手工,不应有默认原币, got %q", c)
+	}
+	// 缺省币种按厂商落地:Anthropic 录入不填币种 → USD 而非 CNY。
+	row, err := BuildManual(domain.OfficialPriceInput{
+		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+		SourceURL: "https://www.anthropic.com/pricing", InputPrice: 3, OutputPrice: 15,
+	})
+	if err != nil {
+		t.Fatalf("manual anthropic: %v", err)
+	}
+	if row.Currency != domain.CurrencyUSD {
+		t.Errorf("缺省币种应为 USD, got %q", row.Currency)
 	}
 }
 
@@ -189,9 +237,9 @@ func TestBuildManualValidates(t *testing.T) {
 	}); err == nil {
 		t.Error("missing sourceUrl should fail")
 	}
-	// 无官方来源的 provider → 拒绝。
+	// 无官方来源的 provider → 拒绝(中转站不是厂商,其价只能来自所转厂商)。
 	if _, err := BuildManual(domain.OfficialPriceInput{
-		Provider: domain.ProviderOpenAI, ModelName: "gpt", SourceURL: "https://openai.com/pricing", InputPrice: 1, OutputPrice: 2,
+		Provider: domain.Provider("示例中转站"), ModelName: "gpt", SourceURL: "https://openai.com/pricing", InputPrice: 1, OutputPrice: 2,
 	}); err == nil {
 		t.Error("unsupported provider should fail")
 	}

@@ -6,11 +6,13 @@
  * 这里统一除以 100 还原为 0..1 小数供 UI(fmt.pct)使用;errorRate 本身即小数。
  */
 import type {
-  AdminMe, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
+  AdminMe, BalanceLogItem, BalanceResp, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
+  AnnouncementDraft, AnnouncementItem,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
-  OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, SyncResult, TokenCreateResult,
-  TokenDraft, UsageDim, UsageRow, UserAccount,
+  OverviewData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, StatRangeQuery, SyncResult,
+  TokenCreateResult,
+  TokenDraft, TokenProbeResp, UsageDim, UsageRow, UserAccount, UserModelItem,
 } from '@/types';
 import { http } from './http';
 
@@ -51,9 +53,42 @@ export const api = {
     return http.patch(`/users/${id}/password`, { newPassword });
   },
   deleteUser(id: number): Promise<unknown> { return http.del(`/users/${id}`); },
+  /** 给客户充值(正=充值,负=扣减调整);仅普通用户有钱包 */
+  topupUser(id: number, amount: number, note?: string): Promise<BalanceLogItem> {
+    return http.post(`/users/${id}/topup`, { amount, note });
+  },
+  /** 设客户名下令牌的额度/RPM 上限(0 = 不限);用户自助建令牌不得超过此值 */
+  setUserCeiling(id: number, quotaUsd: number, rpmLimit: number): Promise<unknown> {
+    return http.patch(`/users/${id}/ceiling`, { quotaUsd, rpmLimit });
+  },
+  /** 某客户的账变流水(管理员审计) */
+  userBalanceLogs(id: number, limit = 50): Promise<BalanceLogItem[]> {
+    return http.get(`/users/${id}/balance-logs${qs({ limit })}`);
+  },
+
+  /* —— 用户自助面(登录态即可,作用域锁本人) —— */
+  myBalance(limit = 50): Promise<BalanceResp> {
+    return http.get(`/me/balance${qs({ limit })}`);
+  },
+  /** 我的用量:dim=model|token(用户侧不暴露渠道);range 决定统计窗口 */
+  getMyUsage(dim: 'model' | 'token', range: StatRangeQuery = { days: 7 }): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
+    return http.get(`/me/usage${qs({ dim, ...range })}`);
+  },
+  /** 我的请求日志(自动限定为本人名下令牌) */
+  getMyLogs(filters: LogFilters = {}, page = 1, size = 20): Promise<LogPage> {
+    const p = {
+      model: filters.model, token: filters.token, status: filters.status, kw: filters.kw,
+      page, size,
+    };
+    return http.get(`/me/logs${qs(p)}`);
+  },
+  /** 我能用的模型与价格(role=user 时 /models 返回收敛清单:无渠道/上游/来源/成本) */
+  getMyModels(): Promise<UserModelItem[]> { return http.get('/models'); },
 
   /* —— 概览 —— */
-  getOverview(): Promise<OverviewData> { return http.get('/overview'); },
+  getOverview(range: StatRangeQuery = { days: 7 }): Promise<OverviewData> {
+    return http.get(`/overview${qs({ ...range })}`);
+  },
 
   /* —— 渠道 —— */
   async getChannels(): Promise<Channel[]> {
@@ -189,6 +224,10 @@ export const api = {
   updateToken(id: number, body: TokenDraft): Promise<GatewayToken> { return http.patch(`/tokens/${id}`, body); },
   deleteToken(id: number): Promise<unknown> { return http.del(`/tokens/${id}`); },
   getClaudeConfig(id: number): Promise<ClaudeConfig> { return http.get(`/tokens/${id}/claude-config`); },
+  /** 令牌自检:不访问上游、不计费地判定「这个 key 能否用某模型」 */
+  probeToken(id: number, model: string): Promise<TokenProbeResp> {
+    return http.post(`/tokens/${id}/probe`, { model });
+  },
 
   /* —— 路由规则 —— */
   getRules(): Promise<RouteRule[]> { return http.get('/rules'); },
@@ -215,13 +254,28 @@ export const api = {
   clearLogs(): Promise<unknown> { return http.del('/logs'); },
 
   /* —— 用量 —— */
-  getUsage(dim: UsageDim, days: number): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
-    return http.get(`/usage${qs({ dim, days })}`);
+  getUsage(dim: UsageDim, range: StatRangeQuery = { days: 7 }): Promise<{ rows: UsageRow[]; days: MetricPoint[] }> {
+    return http.get(`/usage${qs({ dim, ...range })}`);
   },
 
   /* —— 设置 —— */
   getSettings(): Promise<Settings> { return http.get('/settings'); },
   updateSettings(body: Settings): Promise<Settings> { return http.patch('/settings', body); },
+
+  /* —— 通知/公告 —— */
+  /** 管理员:全部公告(附已读计数) */
+  listAnnouncements(): Promise<AnnouncementItem[]> { return http.get('/announcements'); },
+  createAnnouncement(body: AnnouncementDraft): Promise<AnnouncementItem> { return http.post('/announcements', body); },
+  updateAnnouncement(id: number, body: AnnouncementDraft): Promise<AnnouncementItem> {
+    return http.patch(`/announcements/${id}`, body);
+  },
+  deleteAnnouncement(id: number): Promise<unknown> { return http.del(`/announcements/${id}`); },
+  /** 我最新一条未确认公告;无则 null */
+  myAnnouncement(): Promise<{ announcement: AnnouncementItem | null }> {
+    return http.get('/me/announcement');
+  },
+  /** 「我已知晓」:此后该公告不再对我弹出 */
+  ackAnnouncement(id: number): Promise<unknown> { return http.post(`/me/announcement/${id}/ack`); },
 };
 
 export type { MatchMode };

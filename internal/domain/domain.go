@@ -6,29 +6,149 @@
 package domain
 
 import (
+	"encoding/json"
 	"time"
 )
 
+// OptionalFloat 三分态可空 float64:区分「未传」(键缺席 → 保持原值)、
+// 「显式 null」(清空覆盖)与「设值」。仅用于「null 与未传语义不同」的字段
+// (如 ModelInput.RateOverride);其余字段沿用 *T(nil 与未传同义)。
+type OptionalFloat struct {
+	Set   bool
+	Clear bool
+	Value float64
+}
+
+// UnmarshalJSON 记录键是否出现:出现即 Set,值为 null 则 Clear。
+func (o *OptionalFloat) UnmarshalJSON(b []byte) error {
+	o.Set = true
+	if string(b) == "null" {
+		o.Clear = true
+		return nil
+	}
+	return json.Unmarshal(b, &o.Value)
+}
+
+// SetFloat 构造「设值」态。
+func SetFloat(v float64) OptionalFloat { return OptionalFloat{Set: true, Value: v} }
+
+// ClearFloat 构造「显式清空」态。
+func ClearFloat() OptionalFloat { return OptionalFloat{Set: true, Clear: true} }
+
+// Ptr 转为存储用的 *float64:未设或清空 → nil(SQL NULL),否则指向值。
+func (o OptionalFloat) Ptr() *float64 {
+	if !o.Set || o.Clear {
+		return nil
+	}
+	v := o.Value
+	return &v
+}
+
+// Apply 在「保持原值」基础上套用本三态:未传 → cur 原样;清空 → nil;设值 → 新值。
+func (o OptionalFloat) Apply(cur *float64) *float64 {
+	if !o.Set {
+		return cur
+	}
+	return o.Ptr()
+}
+
 // ---------- 枚举 ----------
 
-// Provider 渠道供应商。字符串即前端 ProviderMark 展示名,勿改。
+// Provider 渠道供应商 —— **只留真厂商**(卖的是谁的模型)。字符串即前端 ProviderMark 展示名,勿改。
+// 「怎么连上去」由 EgressProto 承载;「上游是哪家、怎么查额度」由 ChannelType 承载。
+// 非厂商渠道(聚合/中转,如 command code)该字段为空,徽标回落显示渠道类型。
 type Provider string
 
 const (
-	ProviderOpenAI     Provider = "OpenAI"
-	ProviderAzure      Provider = "Azure"
-	ProviderAnthropic  Provider = "Anthropic"
-	ProviderDeepSeek   Provider = "DeepSeek"
-	ProviderQwen       Provider = "通义千问"
-	ProviderZhipu      Provider = "智谱"
-	ProviderMoonshot   Provider = "Moonshot"
-	ProviderOpenRouter Provider = "聚合中转"
+	ProviderOpenAI    Provider = "OpenAI"
+	ProviderAnthropic Provider = "Anthropic"
+	ProviderDeepSeek  Provider = "DeepSeek"
+	ProviderQwen      Provider = "通义千问"
+	ProviderZhipu     Provider = "智谱"
+	ProviderMoonshot  Provider = "Moonshot"
 )
 
-// Providers 前端「新建渠道」下拉的可选集合(与 web-v2 mock providers 一致)。
+// ProviderNone 「不是单一厂商」(多厂家中转/区域部署)。空串即此语义 —— 用常量而非裸 ""
+// 是为了让 Go 代码与测试有明确的书写对象,不代表它是 Providers 里的一个可选值。
+const ProviderNone Provider = ""
+
+// Providers 前端「新建渠道」下拉的可选集合(与 web-v2 constants.providers 一致)。
 var Providers = []Provider{
-	ProviderOpenAI, ProviderAnthropic, ProviderAzure, ProviderDeepSeek,
-	ProviderQwen, ProviderZhipu, ProviderMoonshot, ProviderOpenRouter,
+	ProviderOpenAI, ProviderAnthropic, ProviderDeepSeek,
+	ProviderQwen, ProviderZhipu, ProviderMoonshot,
+}
+
+// ChannelType 渠道类型 —— 决定**上游额度怎么查**(各家问法完全不同),与 Provider 正交:
+// 同一类型可卖多家厂商的模型,同一厂商的模型也可来自多种类型。
+type ChannelType string
+
+const (
+	ChannelTypeDeepSeek    ChannelType = "deepseek"    // DeepSeek 官方直连
+	ChannelTypeCommandCode ChannelType = "commandcode" // command code 订阅
+	ChannelTypeOpenCode    ChannelType = "opencode"    // opencode zen
+	ChannelTypeThirdParty  ChannelType = "thirdparty"  // 其它中转站(额度路径手工配置)
+)
+
+// ChannelTypes 前端「渠道类型」下拉的可选集合,与 web-v2 constants.channelTypes 一致。
+var ChannelTypes = []ChannelType{
+	ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeThirdParty,
+}
+
+// Valid 是否为受支持的渠道类型。
+func (t ChannelType) Valid() bool {
+	switch t {
+	case ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeThirdParty:
+		return true
+	}
+	return false
+}
+
+// EgressProto 出站协议 —— 「怎么把请求发上去」。原先由 provider 反推(OutProto),
+// 但聚合渠道卖别家模型却仍走 OpenAI 协议,两者必须解耦。
+type EgressProto string
+
+const (
+	EgressAnthropic EgressProto = "anthropic"
+	EgressOpenAI    EgressProto = "openai"
+	EgressAzure     EgressProto = "azure" // OpenAI 兼容 + api-version 查询参数
+)
+
+// EgressProtos 前端「出站协议」下拉的可选集合。
+var EgressProtos = []EgressProto{EgressOpenAI, EgressAnthropic, EgressAzure}
+
+// Valid 是否为受支持的出站协议。
+func (p EgressProto) Valid() bool {
+	switch p {
+	case EgressAnthropic, EgressOpenAI, EgressAzure:
+		return true
+	}
+	return false
+}
+
+// QuotaShape 第三方渠道额度接口的响应形状(路径手工填,形状从这里选)。
+type QuotaShape string
+
+const (
+	// ShapeUsage 通用额度信封:路径返回 {usage:{rolling,weekly,monthly:{status,percent,resetsAt}}}。
+	// 网关原生的 /v1/usage 协议,opencode zen 与部分中转站同形 —— 默认形状。
+	ShapeUsage QuotaShape = "usage"
+	// ShapeOneAPI one-api / new-api / veloera 的计费接口:
+	// /v1/dashboard/billing/subscription → {hard_limit_usd},配 /v1/dashboard/billing/usage → {total_usage}(美分)。
+	ShapeOneAPI QuotaShape = "oneapi"
+	// ShapeNewAPIUser new-api 的 /api/user/self → {data:{quota(剩余),used_quota(已用)}}(额度单位制,无币种)。
+	ShapeNewAPIUser QuotaShape = "newapi_user"
+)
+
+// QuotaShapes 前端「额度形状」下拉的可选集合(与 web-v2 constants.quotaShapes 一致)。
+var QuotaShapes = []QuotaShape{ShapeUsage, ShapeOneAPI, ShapeNewAPIUser}
+
+// Valid 是否为受支持的额度形状。
+func (s QuotaShape) Valid() bool {
+	switch s {
+	case ShapeUsage, ShapeOneAPI, ShapeNewAPIUser:
+		return true
+	}
+	return false
 }
 
 // HealthStatus 渠道/供给源健康态(读接口计算)。
@@ -96,14 +216,33 @@ const (
 // Valid 是否为受支持的角色值。
 func (r Role) Valid() bool { return r == RoleAdmin || r == RoleUser }
 
+// AnnouncementLevel 公告级别(仅影响展示语义色,不改变可见范围)。
+type AnnouncementLevel string
+
+const (
+	LevelInfo   AnnouncementLevel = "info"   // 常规通知
+	LevelWarn   AnnouncementLevel = "warn"   // 注意(如短时降级)
+	LevelDanger AnnouncementLevel = "danger" // 重要(如停机维护)
+)
+
+// Valid 是否为受支持的级别值。
+func (l AnnouncementLevel) Valid() bool {
+	return l == LevelInfo || l == LevelWarn || l == LevelDanger
+}
+
 // ---------- 渠道 ----------
 
 // ChannelInput 创建/更新渠道的请求体。apiKey 留空表示不改/不设置。
 type ChannelInput struct {
-	Name        string   `json:"name"`
-	Provider    Provider `json:"provider"`
-	BaseURL     string   `json:"baseUrl"`
-	APIKey      string   `json:"apiKey,omitempty"`
+	Name        string      `json:"name"`
+	Provider    Provider    `json:"provider"`    // 真厂商;非厂商渠道留空
+	ChannelType ChannelType `json:"channelType"` // 决定额度协议
+	EgressProto EgressProto `json:"egressProto"` // 决定出站协议
+	BaseURL     string      `json:"baseUrl"`
+	APIKey      string      `json:"apiKey,omitempty"`
+	// QuotaPath/QuotaShape 仅 thirdparty 用:上游额度查询路径 + 响应形状(手工配置)。
+	QuotaPath   string   `json:"quotaPath,omitempty"`
+	QuotaShape  string   `json:"quotaShape,omitempty"`
 	Priority    int      `json:"priority"`
 	Weight      int      `json:"weight"`
 	TimeoutMs   int      `json:"timeoutMs"`
@@ -116,8 +255,17 @@ type ChannelInput struct {
 
 // Defaults 填充请求未显式给出的零值默认,供 handler 调用后写库。
 func (c *ChannelInput) Defaults() {
-	if c.Provider == "" {
-		c.Provider = ProviderOpenAI
+	// Provider 不设默认:留空即「非单一厂商」(聚合渠道),徽标回落显示渠道类型。
+	if c.ChannelType == "" {
+		c.ChannelType = ChannelTypeThirdParty
+	}
+	if c.EgressProto == "" {
+		// 旧客户端只传 provider:按老口径(Anthropic 之外皆 OpenAI 兼容)推。
+		if c.Provider == ProviderAnthropic {
+			c.EgressProto = EgressAnthropic
+		} else {
+			c.EgressProto = EgressOpenAI
+		}
 	}
 	if c.TimeoutMs == 0 {
 		c.TimeoutMs = 60000
@@ -142,6 +290,8 @@ type ChannelRead struct {
 	ID            int64        `json:"id"`
 	Name          string       `json:"name"`
 	Provider      Provider     `json:"provider"`
+	ChannelType   ChannelType  `json:"channelType"`
+	EgressProto   EgressProto  `json:"egressProto"`
 	BaseURL       string       `json:"baseUrl"`
 	Priority      int          `json:"priority"`
 	Weight        int          `json:"weight"`
@@ -157,6 +307,8 @@ type ChannelRead struct {
 	Tags          []string     `json:"tags"`
 	Enabled       bool         `json:"enabled"`
 	Note          string       `json:"note,omitempty"`
+	QuotaPath     string       `json:"quotaPath,omitempty"`
+	QuotaShape    string       `json:"quotaShape,omitempty"`
 	MaxFailures   int          `json:"maxFailures"`
 	CooldownSec   int          `json:"cooldownSec"`
 	CircuitOpen   bool         `json:"circuitOpen,omitempty"`
@@ -167,20 +319,24 @@ type ChannelRead struct {
 
 // ChannelRow 是渠道表的一行(含密文与内部控制字段,仅 store/auth/engine 可见)。
 type ChannelRow struct {
-	ID           int64    `json:"id"`
-	Name         string   `json:"name"`
-	Provider     Provider `json:"provider"`
-	BaseURL      string   `json:"baseUrl"`
-	APIKeyCipher string   `json:"-"`
-	KeyMasked    string   `json:"keyMasked"`
-	Priority     int      `json:"priority"`
-	Weight       int      `json:"weight"`
-	TimeoutMs    int      `json:"timeoutMs"`
-	Tags         []string `json:"tags"`
-	Enabled      bool     `json:"enabled"`
-	MaxFailures  int      `json:"maxFailures"`
-	CooldownSec  int      `json:"cooldownSec"`
-	Note         string   `json:"note"`
+	ID           int64       `json:"id"`
+	Name         string      `json:"name"`
+	Provider     Provider    `json:"provider"`
+	ChannelType  ChannelType `json:"channelType"`
+	EgressProto  EgressProto `json:"egressProto"`
+	BaseURL      string      `json:"baseUrl"`
+	APIKeyCipher string      `json:"-"`
+	KeyMasked    string      `json:"keyMasked"`
+	Priority     int         `json:"priority"`
+	Weight       int         `json:"weight"`
+	TimeoutMs    int         `json:"timeoutMs"`
+	Tags         []string    `json:"tags"`
+	Enabled      bool        `json:"enabled"`
+	QuotaPath    string      `json:"quotaPath"`
+	QuotaShape   string      `json:"quotaShape"`
+	MaxFailures  int         `json:"maxFailures"`
+	CooldownSec  int         `json:"cooldownSec"`
+	Note         string      `json:"note"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -200,6 +356,10 @@ type ModelInput struct {
 	// 用于聚合中转等 provider 非厂商的渠道显示厂商官方价。更新时非 nil 才改动(nil = 不动)。
 	OfficialVendor    *string `json:"officialVendor"`
 	OfficialModelName *string `json:"officialModelName"`
+	// RateOverride 该模型的售价倍率(本站价 = 官方价 × 倍率)。未传 = 保持原值;显式 null = 清空
+	// (回落全局 settings.price_multiplier);数值 = 覆盖。三态(OptionalFloat)区分「未传」与「清空」,
+	// 普通 *float64 无法区分,会让清空退化成 no-op。
+	RateOverride OptionalFloat `json:"rateOverride"`
 }
 
 func (m *ModelInput) Defaults() {
@@ -221,10 +381,13 @@ type ModelRow struct {
 	Capabilities  []Capability `json:"capabilities"`
 	Enabled       bool         `json:"enabled"`
 	// 模型级官方价绑定(空 = 未绑定,走自动匹配)。
-	OfficialVendor    Provider  `json:"officialVendor"`
-	OfficialModelName string    `json:"officialModelName"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	OfficialVendor    Provider `json:"officialVendor"`
+	OfficialModelName string   `json:"officialModelName"`
+	// RateOverride 该模型的售价倍率;nil = 回落全局 settings.price_multiplier。
+	// 定价按模型(全站同模型同价),不再有用户级倍率(见迁移 v9)。
+	RateOverride *float64  `json:"rateOverride,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // PublicName 网关对外统一名:重命名后为 display_name,否则回落真实模型名。
@@ -276,6 +439,8 @@ type OfferRead struct {
 	ChannelID         int64        `json:"channelId"`
 	ChannelName       string       `json:"channelName"`
 	Provider          Provider     `json:"provider"`
+	// ChannelType 所属渠道的类型(provider 为空时前端用它的标签代替供应商展示)。
+	ChannelType       ChannelType  `json:"channelType,omitempty"`
 	InputPriceUsd     float64      `json:"inputPriceUsd"`
 	OutputPriceUsd    float64      `json:"outputPriceUsd"`
 	CacheReadPriceUsd float64      `json:"cacheReadPriceUsd,omitempty"`
@@ -319,6 +484,8 @@ type ModelRead struct {
 	// InferredVendor 由模型名(取首个 '/' 前的段)推断出的厂商;空 = 判不出。
 	// 前端据此在「provider 直连」之外追加一次「推断厂商」官方价匹配(聚合渠道场景)。
 	InferredVendor Provider `json:"inferredVendor,omitempty"`
+	// RateOverride 模型级售价倍率;缺省/nil = 跟随全局 settings.price_multiplier。模型编辑器回显用。
+	RateOverride *float64 `json:"rateOverride,omitempty"`
 }
 
 // ---------- 官方定价(厂商官网) ----------
@@ -404,6 +571,8 @@ type FetchPricingResult struct {
 	Models     []string `json:"models"`
 	Failed     []string `json:"failed,omitempty"`
 	ContentSHA string   `json:"contentSha256,omitempty"`
+	// Removed 本次对账删掉的陈旧行数(该厂商来源页已不再列出的模型)。
+	Removed int64 `json:"removed,omitempty"`
 }
 
 // ApplyPriceReq POST /official-prices/{id}/apply 请求体。
@@ -520,6 +689,10 @@ type TokenRow struct {
 	LastUsedAt    *string
 	Status        TokenStatus
 	OwnerID       *int64
+	// 归属账号的钱包视图(随鉴权一次查出,免数据面每请求再查一次):
+	// 全局 key(OwnerID=nil)时 OwnerRole 为空、余额为 0。
+	OwnerRole    Role
+	OwnerBalance float64
 }
 
 // ---------- 管理员 / 用户与会话 ----------
@@ -553,6 +726,66 @@ type UserRead struct {
 	Role      Role      `json:"role"`
 	KeyCount  int       `json:"keyCount"`
 	CreatedAt time.Time `json:"createdAt"`
+	// BalanceUsd 钱包余额(计价币种金额)。售价倍率按模型存(见 ModelRow.RateOverride),
+	// 不再有用户级倍率(迁移 v9 起)。
+	BalanceUsd float64 `json:"balanceUsd"`
+	// TokenQuotaCeiling 该用户名下令牌的额度上限(0 = 不限);TokenRpmCeiling 同理。
+	// 只约束 role=user 的自助建令牌,管理员不受限。
+	TokenQuotaCeiling float64 `json:"tokenQuotaCeiling"`
+	TokenRpmCeiling   int     `json:"tokenRpmCeiling"`
+}
+
+// CeilingInput PATCH /users/{id}/ceiling 请求体:该用户名下令牌的额度/RPM 上限。
+// 两者 0 = 不限。普通用户建/改令牌时不得超过此值。
+type CeilingInput struct {
+	QuotaUsd float64 `json:"quotaUsd"`
+	RpmLimit int     `json:"rpmLimit"`
+}
+
+// BalanceLogItem GET /users/{id}/balance-logs 与 /me/balance 流水行。
+type BalanceLogItem struct {
+	ID           int64     `json:"id"`
+	Delta        float64   `json:"delta"`
+	BalanceAfter float64   `json:"balanceAfter"`
+	Reason       string    `json:"reason"` // charge | topup | adjust
+	LogID        int64     `json:"logId,omitempty"`
+	Note         string    `json:"note,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// TopupReq POST /users/{id}/topup 请求体:充值金额(正=充值,负=扣减调整)。
+type TopupReq struct {
+	Amount float64 `json:"amount"`
+	Note   string  `json:"note,omitempty"`
+}
+
+// BalanceResp GET /me/balance:余额 + 近期流水(用户自助视角)。
+type BalanceResp struct {
+	BalanceUsd float64          `json:"balanceUsd"`
+	Logs       []BalanceLogItem `json:"logs"`
+	// Currency 计价币种。用户读不到 /settings,前端据此决定余额符号(¥/$)。
+	Currency Currency `json:"currency"`
+	// TokenQuotaCeiling 该账号名下令牌的额度上限(0 = 不限);TokenRpmCeiling 同理。
+	// 供用户建令牌时前端预校验,避免提交后才被拒。
+	TokenQuotaCeiling float64 `json:"tokenQuotaCeiling"`
+	TokenRpmCeiling   int     `json:"tokenRpmCeiling"`
+}
+
+// TokenProbeResp POST /tokens/{id}/probe 返回:该令牌对某模型「能不能用」的静态判定。
+// 只做本地校验(不访问上游、不计费、不消耗 RPM),用于客户自检 —— 今天只能真发一次请求去猜。
+type TokenProbeResp struct {
+	Model string `json:"model"`
+	// Ok 全部检查通过。
+	Ok bool `json:"ok"`
+	// Checks 逐项判定(名称/是否通过/说明),便于前端逐条展示未通过的原因。
+	Checks []ProbeCheck `json:"checks"`
+}
+
+// ProbeCheck 一项自检结果。
+type ProbeCheck struct {
+	Name   string `json:"name"`
+	Ok     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // UserCreateReq POST /users 请求体(管理员建号,设初始密码)。
@@ -585,7 +818,8 @@ type LogItem struct {
 	InTokens     int     `json:"inTokens"`
 	OutTokens    int     `json:"outTokens"`
 	CacheRead    int     `json:"cacheReadTokens,omitempty"`
-	CostUsd      float64 `json:"costUsd"`
+	CostUsd      float64 `json:"costUsd"`   // 成本(你付上游)
+	ChargeUsd    float64 `json:"chargeUsd"` // 售价(客户付你);admin 视角下差额即毛利
 	FirstTokenMs int     `json:"firstTokenMs"`
 	TotalMs      int     `json:"totalMs"`
 	StatusCode   int     `json:"statusCode"`
@@ -601,6 +835,7 @@ type LogRow struct {
 	ChannelName  string
 	TokenID      int64
 	TokenName    string
+	OwnerID      int64 // 归属账号(0 = 无归属/全局 key)
 	ClientTool   string
 	Protocol     string
 	Stream       bool
@@ -609,6 +844,7 @@ type LogRow struct {
 	Completion   int
 	CacheRead    int
 	CostUsd      float64
+	ChargeUsd    float64
 	FirstTokenMs int
 	TotalMs      int
 	IP           string
@@ -621,6 +857,8 @@ type MetricPoint struct {
 	Requests int     `json:"requests"`
 	Errors   int     `json:"errors"`
 	CostUsd  float64 `json:"costUsd"`
+	// ChargeUsd 该桶实际向客户收的钱(售价口径,用户面曲线用);全站口径下为全部请求的售价合计。
+	ChargeUsd float64 `json:"chargeUsd"`
 }
 
 // UsageRow 按模型/渠道/令牌维度聚合的一行。
@@ -630,17 +868,22 @@ type UsageRow struct {
 	InTokens  int     `json:"inTokens"`
 	OutTokens int     `json:"outTokens"`
 	CostUsd   float64 `json:"costUsd"`
+	// ChargeUsd 该维度实际向客户收的钱(= 售价口径,用户面上的「花费」)。
+	// 与 CostUsd(你付上游的成本)不是一回事:定价模型见 PLAN.md §2。
+	ChargeUsd float64 `json:"chargeUsd"`
 	ErrorRate float64 `json:"errorRate"`
 }
 
-// OverviewResp Dashboard 首屏。hours 近24小时、days 近7天。
+// OverviewResp Dashboard 首屏。窗口由前端筛选器决定(1/7/30 天或自定义区间):
+// Points 为窗口内曲线(≤3 天按小时,>3 天按天),汇总同窗口。
 type OverviewResp struct {
-	Hours           []MetricPoint `json:"hours"`
-	Days            []MetricPoint `json:"days"`
+	Points          []MetricPoint `json:"points"`
 	TotalRequests   int           `json:"totalRequests"`
 	TotalErrors     int           `json:"totalErrors"`
 	TotalCostUsd    float64       `json:"totalCostUsd"`
 	AvgFirstTokenMs int64         `json:"avgFirstTokenMs"`
+	Days            int           `json:"days"`
+	Bucket          string        `json:"bucket"`
 }
 
 // ModelUsageResp 模型抽屉「用量」Tab。
@@ -683,6 +926,10 @@ type Settings struct {
 	// 仅当官方价原币种与 DisplayCurrency 不一致时用于折算;0 = 未设置(此时拒绝折算,不臆造汇率)。
 	// 汇率非厂商官方数据,故不自动抓取。
 	USDPerCNY float64 `json:"usdPerCny"`
+	// PriceMultiplier 全局售价倍率(默认基线):本站卖给客户的价格 = 官方价 × 该倍率(见 PLAN.md §2)。
+	// 模型级 ModelRow.RateOverride 非空时覆盖它 —— 倍率按模型定,全站同模型同价。
+	// 默认 1.0(= 不加价)。<=0 视为 1.0。
+	PriceMultiplier float64 `json:"priceMultiplier"`
 	// PublicBaseURL 生成 Claude 配置时对外可见的网关基址(如 https://ai-gateway.lan)。
 	// 留空则按请求的 scheme+host 推断(X-Forwarded-Proto/Host 优先)。
 	PublicBaseURL string `json:"publicBaseUrl,omitempty"`
@@ -697,6 +944,52 @@ func (s *Settings) Defaults() {
 	s.SampleRatePct = 100
 	s.TZOffsetMin = 480
 	s.DisplayCurrency = CurrencyCNY
+	s.PriceMultiplier = 1.0
+}
+
+// ---------- 通知/公告 ----------
+
+// AnnouncementInput 创建/更新公告请求体。
+// PublishAt/ExpiresAt 为 RFC3339 字符串(RFC3339Nano);nil = 立即发布 / 永不过期。
+type AnnouncementInput struct {
+	Title     string            `json:"title"`
+	Body      string            `json:"body"`
+	Level     AnnouncementLevel `json:"level"`
+	Enabled   *bool             `json:"enabled"`
+	PublishAt *string           `json:"publishAt"`
+	ExpiresAt *string           `json:"expiresAt"`
+}
+
+func (a *AnnouncementInput) Defaults() {
+	enabled := true
+	if a.Enabled == nil {
+		a.Enabled = &enabled
+	}
+	if a.Level == "" {
+		a.Level = LevelInfo
+	}
+}
+
+// AnnouncementRow 公告存储结构(用户面弹窗直接渲染它)。
+// ReadCount/UserTotal 不在此结构:仅管理员列表现算,用户面不需要。
+type AnnouncementRow struct {
+	ID        int64             `json:"id"`
+	Title     string            `json:"title"`
+	Body      string            `json:"body"`
+	Level     AnnouncementLevel `json:"level"`
+	Enabled   bool              `json:"enabled"`
+	PublishAt *time.Time        `json:"publishAt"`
+	ExpiresAt *time.Time        `json:"expiresAt"`
+	CreatedAt time.Time         `json:"createdAt"`
+	UpdatedAt time.Time         `json:"updatedAt"`
+}
+
+// AnnouncementRead 管理员列表展示结构:公告 + 已读计数。
+// UserTotal = 站点普通用户总数;ReadCount = 已确认该公告的人数,供站主评估触达。
+type AnnouncementRead struct {
+	AnnouncementRow
+	ReadCount int `json:"readCount"`
+	UserTotal int `json:"userTotal"`
 }
 
 // ---------- 其他小类型 ----------
@@ -727,19 +1020,34 @@ type ClaudeConfigResp struct {
 	Warnings     []string          `json:"warnings,omitempty"`
 }
 
-// QuotaWindow 渠道 /v1/usage 单个窗口(rolling≈近5h/weekly/monthly)。
+// QuotaWindow 渠道额度单个窗口(rolling≈近5h/weekly/monthly)。
 // Status=="ok" 时 Percent 为该窗口已用百分比。
+// Used/Cap/ResetAt 为可选的原始信息:上游给了就带上(不同渠道类型给的不一样),
+// 前端据此在 tooltip 里显示「已用 12/14」与重置时间。
 type QuotaWindow struct {
 	Status  string  `json:"status"`
 	Percent float64 `json:"percent"`
+	Used    float64 `json:"used,omitempty"`    // 上游原始已用量(如 1.24 美元)
+	Cap     float64 `json:"cap,omitempty"`     // 上游原始上限(如 14 美元)
+	ResetAt string  `json:"resetAt,omitempty"` // 窗口重置时间,统一 RFC3339(上游 ms/ISO 都归一)
+}
+
+// QuotaBalance 绝对余额型额度(DeepSeek /user/balance、one-api 等):
+// 这类上游只报「还剩多少钱」,没有窗口百分比。Amount 按**上游原币种**原样展示,不做折算。
+type QuotaBalance struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"` // 上游原币种(CNY/USD),原样展示
 }
 
 // ChannelQuotaResp GET /channels/{id}/quota 返回。windows 仅含 status=ok 的窗口
 // (缺失/非 ok = 该窗口/该渠道不提供额度)。Available=false 时 error 给出原因。
+// Balance 与 Windows 互斥:窗口型上游(rolling/weekly/monthly)用 Windows,
+// 余额型上游(DeepSeek / one-api)用 Balance。
 type ChannelQuotaResp struct {
 	Available bool                   `json:"available"`
 	PlanName  string                 `json:"planName,omitempty"`
 	Windows   map[string]QuotaWindow `json:"windows"`
+	Balance   *QuotaBalance          `json:"balance,omitempty"`
 	LatencyMs int64                  `json:"latencyMs"`
 	Error     string                 `json:"error,omitempty"`
 }

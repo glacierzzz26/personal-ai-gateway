@@ -80,6 +80,11 @@ func (s *Server) HandlerAdmin() http.Handler {
 }
 
 // static 托管管理台构建产物。distDir=<webDir>/dist;文件命中即吐,其余回退 index.html。
+//
+// 缓存策略:Vite 产物带内容哈希(assets/index-<hash>.js),可长缓存 immutable;
+// index.html 及无哈希文件必须 no-cache —— 否则重建后浏览器仍用旧 index.html,
+// 指向已删除的旧资源名(哈希变了),白屏。http.ServeFile 只写 Last-Modified,
+// 不会覆盖这里设的 Cache-Control。
 func (s *Server) static() http.Handler {
 	dist := s.distDir()
 	fileServer := http.FileServer(http.Dir(dist))
@@ -93,11 +98,18 @@ func (s *Server) static() http.Handler {
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p != "" {
 			if f, err := os.Stat(filepath.Join(dist, filepath.FromSlash(p))); err == nil && !f.IsDir() {
+				if strings.HasPrefix(p, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
 				fileServer.ServeHTTP(w, r)
 				return
 			}
 		}
 		if _, err := os.Stat(index); err == nil {
+			// SPA 入口:必须每次回源校验,否则前端发版后旧 index 会被长期命中。
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFile(w, r, index)
 			return
 		}
@@ -173,6 +185,8 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("PATCH /api/v1/tokens/{id}", s.handleTokensUpdate)
 	m.HandleFunc("DELETE /api/v1/tokens/{id}", s.handleTokensDelete)
 	m.HandleFunc("GET /api/v1/tokens/{id}/claude-config", s.handleTokenClaudeConfig)
+	// 自检:不访问上游、不计费地回答「这个 key 能不能用某模型」(issue #8 P1)
+	m.HandleFunc("POST /api/v1/tokens/{id}/probe", s.handleTokenProbe)
 
 	m.HandleFunc("GET /api/v1/logs", adm(s.handleLogsList))
 	m.HandleFunc("DELETE /api/v1/logs", adm(s.handleLogsClear))
@@ -185,6 +199,23 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("POST /api/v1/users", adm(s.handleUsersCreate))
 	m.HandleFunc("PATCH /api/v1/users/{id}/password", adm(s.handleUserResetPassword))
 	m.HandleFunc("DELETE /api/v1/users/{id}", adm(s.handleUserDelete))
+	// 钱包管理:管理员给客户充值 / 调倍率 / 限额 / 查流水
+	m.HandleFunc("POST /api/v1/users/{id}/topup", adm(s.handleUserTopup))
+	m.HandleFunc("PATCH /api/v1/users/{id}/ceiling", adm(s.handleUserCeiling))
+	m.HandleFunc("GET /api/v1/users/{id}/balance-logs", adm(s.handleUserBalanceLogs))
+
+	// 用户自助面:登录态即可,作用域锁死本人(见 me.go)
+	m.HandleFunc("GET /api/v1/me/balance", s.handleMeBalance)
+	m.HandleFunc("GET /api/v1/me/usage", s.handleMeUsage)
+	m.HandleFunc("GET /api/v1/me/logs", s.handleMeLogs)
+
+	// 公告:管理员发布;已登录用户拉取未读 + 确认已读(作用域锁本人,见 me_announcements.go)
+	m.HandleFunc("GET /api/v1/announcements", adm(s.handleAnnouncementsList))
+	m.HandleFunc("POST /api/v1/announcements", adm(s.handleAnnouncementsCreate))
+	m.HandleFunc("PATCH /api/v1/announcements/{id}", adm(s.handleAnnouncementsUpdate))
+	m.HandleFunc("DELETE /api/v1/announcements/{id}", adm(s.handleAnnouncementsDelete))
+	m.HandleFunc("GET /api/v1/me/announcement", s.handleMeAnnouncement)
+	m.HandleFunc("POST /api/v1/me/announcement/{id}/ack", s.handleMeAnnouncementAck)
 
 	return m
 }

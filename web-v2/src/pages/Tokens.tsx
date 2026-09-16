@@ -1,21 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  App, Button, Checkbox, DatePicker, Form, Input, InputNumber, Modal,
+  App, Button, Checkbox, DatePicker, Dropdown, Form, Input, InputNumber, Modal,
   Radio, Select, Space, Switch, Table, Tooltip,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
+import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs, { type Dayjs } from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import StatusDot from '@/components/StatusDot';
-import { EmptyState, ErrorState, NoResultState } from '@/components/States';
+import { EmptyState, ErrorState, NoResultState, SkBlock } from '@/components/States';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { copyText } from '@/utils/clipboard';
 import { fmt } from '@/utils/format';
 import { TOKENS } from '@/styles/tokens';
-import type { GatewayToken, ModelCatalogItem, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
+import type { GatewayToken, ProbeCheck, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
 
@@ -37,17 +39,24 @@ interface TokenFormValues {
   ownerId?: number;
 }
 
-/** 新建/编辑令牌弹窗。允许模型走「允许全部 / 指定名单」二选一;管理员可指定归属用户。 */
+/**
+ * 新建/编辑令牌弹窗。允许模型走「允许全部 / 指定名单」二选一;管理员可指定归属用户。
+ *
+ * models 只用到名字:同一端点 /models 对管理员返回全量、对普通用户返回收敛清单,
+ * 两者取 name 的写法一致,故这里收窄为 { name } 而不是 ModelCatalogItem。
+ */
 function TokenModal(props: {
   open: boolean;
   initial: GatewayToken | null;
-  models: ModelCatalogItem[];
+  models: { name: string }[];
   isAdmin: boolean;
   users: UserAccount[];
+  /** 普通用户建令牌的额度/RPM 上限(0 = 不限);由 /me/balance 带回 */
+  ceiling: { quotaUsd: number; rpmLimit: number };
   onCancel: () => void;
   onSubmit: (draft: TokenDraft, id?: number) => Promise<void>;
 }) {
-  const { open, initial, models, isAdmin, users, onCancel, onSubmit } = props;
+  const { open, initial, models, isAdmin, users, ceiling, onCancel, onSubmit } = props;
   const { message } = App.useApp();
   const [form] = Form.useForm<TokenFormValues>();
   const [saving, setSaving] = useState(false);
@@ -174,18 +183,36 @@ function TokenModal(props: {
 
         <Space size={16} style={{ display: 'flex' }} align="start">
           <Form.Item
-            name="quotaUsd" label="额度上限(USD)"
-            extra="0 表示不限额；达到上限后网关将拒绝请求(HTTP 402)"
+            name="quotaUsd"
+            label="额度上限"
+            extra={
+              !isAdmin && ceiling.quotaUsd > 0
+                ? `管理员限制你最高可设 ${fmt.usd(ceiling.quotaUsd)}(必须填正数)`
+                : '0 表示不限额；达到上限后网关将拒绝请求(HTTP 402)'
+            }
             style={{ flex: 1 }}
           >
-            <InputNumber min={0} step={0.1} precision={2} style={{ width: '100%' }} placeholder="0 = 不限额" />
+            <InputNumber
+              min={!isAdmin && ceiling.quotaUsd > 0 ? 0.01 : 0}
+              step={0.1} precision={2} style={{ width: '100%' }} placeholder="0 = 不限额"
+              max={!isAdmin && ceiling.quotaUsd > 0 ? ceiling.quotaUsd : undefined}
+            />
           </Form.Item>
           <Form.Item
-            name="rpmLimit" label="限速(RPM)"
-            extra="每分钟请求上限，0 表示不限速"
+            name="rpmLimit"
+            label="限速(RPM)"
+            extra={
+              !isAdmin && ceiling.rpmLimit > 0
+                ? `管理员限制你最高可设 ${ceiling.rpmLimit}(必须填正数)`
+                : '每分钟请求上限，0 表示不限速'
+            }
             style={{ flex: 1 }}
           >
-            <InputNumber min={0} max={100000} style={{ width: '100%' }} placeholder="默认 60" />
+            <InputNumber
+              min={!isAdmin && ceiling.rpmLimit > 0 ? 1 : 0}
+              max={!isAdmin && ceiling.rpmLimit > 0 ? ceiling.rpmLimit : 100000}
+              style={{ width: '100%' }} placeholder="默认 60"
+            />
           </Form.Item>
         </Space>
 
@@ -257,7 +284,7 @@ function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => v
         把下面整段合并进 <span className="gw-mono">~/.claude/settings.json</span> 的顶层(已有 <span className="gw-mono">env</span> 则合并其键值),然后重启 Claude Code。
       </div>
       <div style={{ position: 'relative' }}>
-        <pre className="gw-pre" style={{ maxHeight: 360, overflow: 'auto' }}>
+        <pre className="gw-pre">
           {isLoading ? '生成中…' : (data?.settingsJson ?? '')}
         </pre>
         <Button
@@ -273,6 +300,90 @@ function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => v
   );
 }
 
+/** 「自检」弹窗:不产生真实调用地回答「这个 key 现在能不能用某模型」。 */
+function ProbeModal(props: { token: GatewayToken | null; models: { name: string }[]; onClose: () => void }) {
+  const { token, models, onClose } = props;
+  const [model, setModel] = useState('');
+  const { data, isFetching, isError, error, refetch } = useQuery({
+    queryKey: ['token-probe', token?.id, model],
+    queryFn: () => api.probeToken(token!.id, model),
+    enabled: !!token && !!model,
+    retry: false,
+  });
+
+  // 关闭时清掉模型选择,下次打开不残留上次结果。
+  useEffect(() => {
+    if (!token) setModel('');
+  }, [token]);
+
+  return (
+    <Modal
+      title={token ? `自检 · ${token.name}` : '令牌自检'}
+      open={!!token}
+      onCancel={onClose}
+      footer={<Button type="primary" onClick={onClose}>关闭</Button>}
+      destroyOnHidden
+      width={560}
+    >
+      <div className="gw-note" style={{ marginBottom: 14 }}>
+        <span>选择模型后核查「状态 / 有效期 / 授权 / 可用性 / 额度 / 余额」,<b>不访问上游、不计费、不消耗限速</b>。</span>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <Select
+          style={{ width: '100%' }}
+          showSearch
+          placeholder="选择要自检的模型"
+          value={model || undefined}
+          onChange={setModel}
+          optionFilterProp="label"
+          options={models.map(m => ({ value: m.name, label: m.name }))}
+        />
+      </div>
+      {!model ? (
+        <div style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>请先选择一个模型。</div>
+      ) : isFetching ? (
+        <SkBlock />
+      ) : isError ? (
+        <ErrorState
+          title="自检失败"
+          desc={(error as Error)?.message || '无法完成自检,请稍后重试。'}
+          onRetry={() => void refetch()}
+        />
+      ) : data ? (
+        <Table<ProbeCheck>
+          rowKey="name"
+          size="small"
+          dataSource={data.checks}
+          pagination={false}
+          columns={[
+            {
+              title: '检查项', dataIndex: 'name', width: 110,
+              render: v => <span style={{ color: 'var(--gw-text-2)' }}>{v}</span>,
+            },
+            {
+              title: '结果', dataIndex: 'ok', width: 90,
+              render: (v: boolean) => (
+                <StatusDot status="" text={v ? '通过' : '未通过'} tone={v ? 'ok' : 'err'} />
+              ),
+            },
+            {
+              title: '说明', dataIndex: 'detail',
+              render: (v: string) => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span>,
+            },
+          ]}
+        />
+      ) : null}
+      {data && (
+        <div style={{ marginTop: 12, fontSize: 13 }}>
+          {data.ok
+            ? <span style={{ color: TOKENS.ok }}>✓ 该令牌可用「{data.model}」发起调用。</span>
+            : <span style={{ color: TOKENS.err }}>✗ 该令牌当前不能使用「{data.model}」,请按上表逐项处理。</span>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export default function Tokens() {
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
@@ -280,11 +391,23 @@ export default function Tokens() {
   const [editor, setEditor] = useState<{ open: boolean; initial: GatewayToken | null }>({ open: false, initial: null });
   const [created, setCreated] = useState<TokenCreateResult | null>(null);
   const [configToken, setConfigToken] = useState<GatewayToken | null>(null);
+  const [probeToken, setProbeToken] = useState<GatewayToken | null>(null);
   const [ownerFilter, setOwnerFilter] = useState<number | 'all'>('all');
 
   const { data: tokens = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
-  const { data: models = [] } = useQuery({ queryKey: ['models'], queryFn: api.getModels });
+  /*
+   * 令牌的「允许模型」候选:按角色选端点。
+   * /models 两种形状 —— 管理员是全量(含 offers),普通用户是收敛清单。
+   * api.getModels() 会把返回值按 ModelCatalogItem 归一(reading offers),普通用户调用会抛。
+   * 本页只用到模型名,故按角色各取各的;queryKey 区分,避免同键存两种形状互相覆盖。
+   */
+  const { data: models = [] } = useQuery({
+    queryKey: isAdmin ? ['models'] : ['models', 'user'],
+    queryFn: isAdmin ? api.getModels : api.getMyModels,
+  });
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, enabled: isAdmin });
+  // 普通用户的钱包余额:令牌额度只是子预算,真正卡住调用的是余额(见 /me/balance)。
+  const { data: wallet } = useQuery({ queryKey: ['me', 'balance'], queryFn: () => api.myBalance(1), enabled: !isAdmin });
 
   // 管理员可按归属过滤(数据量小,客户端过滤即可)
   const view = useMemo(
@@ -360,22 +483,28 @@ export default function Tokens() {
   };
 
   const columns: ColumnsType<GatewayToken> = useMemo(() => [
-    { title: '名称', dataIndex: 'name', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
-    ...(isAdmin
-      ? [{
-          title: '归属', dataIndex: 'ownerName', width: 130,
-          render: (_: unknown, r: GatewayToken) =>
-            r.ownerId == null
-              ? <span style={{ color: 'var(--gw-text-3)' }}>全局</span>
-              : <span className="gw-badge">{r.ownerName}</span>,
-        }] as ColumnsType<GatewayToken>
-      : []),
     {
-      title: 'Key', dataIndex: 'keyMasked', width: 200,
-      render: v => <span className="gw-mono" style={{ color: 'var(--gw-text-3)' }}>{v}</span>,
+      // 名称 / 归属 / Key 三合一 —— 都是「这个令牌是谁的、长什么样」
+      // 弹性列(不设 width),配合表格 tableLayout="fixed" 吸收剩余宽度,不横向溢出
+      title: '令牌', dataIndex: 'name',
+      render: (v, r) => (
+        <div style={{ minWidth: 0, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Tooltip title={v}>
+              <b style={{ fontWeight: 500, color: 'var(--gw-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{v}</b>
+            </Tooltip>
+            {isAdmin && (r.ownerId == null
+              ? <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5, flexShrink: 0 }}>全局</span>
+              : <span className="gw-badge" style={{ flexShrink: 0 }}>{r.ownerName}</span>)}
+          </div>
+          <div className="gw-mono" style={{ fontSize: 12, color: 'var(--gw-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {r.keyMasked}
+          </div>
+        </div>
+      ),
     },
     {
-      title: '可用模型', dataIndex: 'allowedModels', width: 200,
+      title: '可用模型', dataIndex: 'allowedModels', width: 140,
       render: v => {
         const list = v as string[];
         if (list.length === 1 && list[0] === '*') return <span className="gw-badge tint">不限</span>;
@@ -393,10 +522,10 @@ export default function Tokens() {
         );
       },
     },
-    { title: '额度使用', key: 'quota', width: 210, render: (_, r) => quotaCell(r) },
-    { title: 'RPM', dataIndex: 'rpmLimit', align: 'right', width: 90, render: v => <span className="gw-num">{v || '不限'}</span> },
+    { title: '额度使用', key: 'quota', width: 158, render: (_, r) => quotaCell(r) },
+    { title: 'RPM', dataIndex: 'rpmLimit', align: 'right', width: 72, render: v => <span className="gw-num">{v || '不限'}</span> },
     {
-      title: '过期时间', dataIndex: 'expiresAt', width: 140,
+      title: '过期时间', dataIndex: 'expiresAt', width: 108,
       render: v => {
         if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>永不过期</span>;
         const d = dayjs(v);
@@ -405,27 +534,44 @@ export default function Tokens() {
       },
     },
     {
-      title: '最后使用', dataIndex: 'lastUsedAt', width: 160,
+      title: '最后使用', dataIndex: 'lastUsedAt', width: 120,
       render: v => {
         if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>从未使用</span>;
         const d = dayjs(v);
         return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
-    { title: '状态', dataIndex: 'status', width: 100, render: v => <StatusDot status={v} /> },
+    { title: '状态', dataIndex: 'status', width: 78, render: v => <StatusDot status={v} /> },
     {
-      title: '操作', align: 'right', width: 210,
-      render: (_, r) => (
-        <Space size={4}>
-          <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
-            <Button size="small" disabled={!r.keyRetrievable} onClick={() => setConfigToken(r)}>
-              生成配置
-            </Button>
-          </Tooltip>
-          <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
-          <Button size="small" danger onClick={() => confirmDelete(r)}>删除</Button>
-        </Space>
-      ),
+      // 高频（生成配置/编辑）外露，低频（自检/删除）收进「更多」
+      title: '操作', align: 'right', width: 172,
+      render: (_, r) => {
+        const menu: MenuProps = {
+          items: [
+            { key: 'probe', label: '自检' },
+            { type: 'divider' as const },
+            { key: 'delete', label: '删除', danger: true },
+          ],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            if (key === 'probe') setProbeToken(r);
+            else if (key === 'delete') confirmDelete(r);
+          },
+        };
+        return (
+          <Space size={4}>
+            <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
+              <Button size="small" disabled={!r.keyRetrievable} onClick={() => setConfigToken(r)}>
+                生成配置
+              </Button>
+            </Tooltip>
+            <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
+            <Dropdown menu={menu} trigger={['click']}>
+              <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`更多操作 ${r.name}`} />
+            </Dropdown>
+          </Space>
+        );
+      },
     },
   ], [isAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -466,6 +612,24 @@ export default function Tokens() {
       />
 
       <Blocks>
+        {!isAdmin && wallet && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+              fontSize: 13.5, color: 'var(--gw-text-2)',
+            }}
+          >
+            <span style={{ color: 'var(--gw-text-3)' }}>账户余额</span>
+            <b className="gw-num" style={{ color: wallet.balanceUsd <= 0 ? TOKENS.err : 'var(--gw-text)' }}>
+              {fmt.usd(wallet.balanceUsd)}
+            </b>
+            <span style={{ color: 'var(--gw-text-3)' }}>
+              {wallet.balanceUsd <= 0
+                ? '余额不足，调用已被拒绝，请联系管理员充值'
+                : '每次调用按本站售价从余额扣除；令牌额度为单令牌上限'}
+            </span>
+          </div>
+        )}
         <BlockCard>
           <Table<GatewayToken>
             rowKey="id"
@@ -473,7 +637,7 @@ export default function Tokens() {
             loading={isLoading && tokens.length === 0}
             dataSource={view}
             columns={columns}
-            scroll={{ x: 1420 }}
+            tableLayout="fixed"
             pagination={false}
             locale={{ emptyText: emptyNode }}
           />
@@ -486,11 +650,13 @@ export default function Tokens() {
         models={models}
         isAdmin={isAdmin}
         users={users}
+        ceiling={{ quotaUsd: wallet?.tokenQuotaCeiling ?? 0, rpmLimit: wallet?.tokenRpmCeiling ?? 0 }}
         onCancel={() => setEditor({ open: false, initial: null })}
         onSubmit={saveToken}
       />
 
       <ClaudeConfigModal token={configToken} onClose={() => setConfigToken(null)} />
+      <ProbeModal token={probeToken} models={models} onClose={() => setProbeToken(null)} />
 
       <Modal
         open={!!created}

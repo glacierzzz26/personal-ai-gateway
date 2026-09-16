@@ -161,6 +161,78 @@ func TestSetModelOffersEnabled(t *testing.T) {
 	}
 }
 
+// TestModelRateOverrideTristate 售价倍率的三态语义:未传保持、显式 null 清空、数值覆盖。
+// 倍率按模型存(迁移 v9),「清空回落全局」必须可用 —— 早期用 *float64 时 null 与未传同义,
+// 清空会静默失效,故用 domain.OptionalFloat 区分。
+func TestModelRateOverrideTristate(t *testing.T) {
+	st := newTestStore(t)
+	m, err := st.CreateModel(domain.ModelInput{Name: "gpt-rate"})
+	mustNoErr(t, err, "create model")
+	if m.RateOverride != nil {
+		t.Fatalf("new model rate should be nil, got %v", *m.RateOverride)
+	}
+
+	// 设值
+	up, err := st.UpdateModel(m.ID, domain.ModelInput{Name: "gpt-rate", RateOverride: domain.SetFloat(2.5)})
+	mustNoErr(t, err, "set rate")
+	if up.RateOverride == nil || *up.RateOverride != 2.5 {
+		t.Fatalf("set rate not applied: %+v", up.RateOverride)
+	}
+
+	// 未传(零值 OptionalFloat)→ 保持原值
+	up, err = st.UpdateModel(m.ID, domain.ModelInput{Name: "gpt-rate"})
+	mustNoErr(t, err, "omit rate keeps value")
+	if up.RateOverride == nil || *up.RateOverride != 2.5 {
+		t.Fatalf("omitted rate should keep 2.5, got %+v", up.RateOverride)
+	}
+
+	// 显式清空 → nil(回落全局)
+	up, err = st.UpdateModel(m.ID, domain.ModelInput{Name: "gpt-rate", RateOverride: domain.ClearFloat()})
+	mustNoErr(t, err, "clear rate")
+	if up.RateOverride != nil {
+		t.Fatalf("cleared rate should be nil, got %v", *up.RateOverride)
+	}
+
+	// 清零也走「设值」态,不与清空混同
+	up, err = st.UpdateModel(m.ID, domain.ModelInput{Name: "gpt-rate", RateOverride: domain.SetFloat(0)})
+	mustNoErr(t, err, "set zero rate")
+	if up.RateOverride == nil || *up.RateOverride != 0 {
+		t.Fatalf("zero rate should persist as 0, got %+v", up.RateOverride)
+	}
+}
+
+// TestUsableModelIDs 用户可见模型 = 启用 ∩ 有启用 offer ∩ 渠道启用(与数据面同源)。
+func TestUsableModelIDs(t *testing.T) {
+	st := newTestStore(t)
+	ch := mkChannel(t, st, "A")
+	chDead := mkChannel(t, st, "Dead")
+	mOK, _ := st.CreateModel(domain.ModelInput{Name: "ok"})
+	mNoOffer, _ := st.CreateModel(domain.ModelInput{Name: "no-offer"})
+	mDeadCh, _ := st.CreateModel(domain.ModelInput{Name: "dead-ch"})
+	mDisabled, _ := st.CreateModel(domain.ModelInput{Name: "disabled"})
+
+	_, _ = st.CreateOffer(mOK.ID, domain.OfferInput{ChannelID: ch})
+	_, _ = st.CreateOffer(mDeadCh.ID, domain.OfferInput{ChannelID: chDead})
+	_, _ = st.CreateOffer(mDisabled.ID, domain.OfferInput{ChannelID: ch})
+	mustNoErr(t, st.SetChannelEnabled(chDead, false), "disable channel")
+	mustNoErr(t, st.SetModelEnabled(mDisabled.ID, false), "disable model")
+
+	usable, err := st.UsableModelIDs()
+	mustNoErr(t, err, "usable model ids")
+	if !usable[mOK.ID] {
+		t.Error("model with live offer+channel should be usable")
+	}
+	if usable[mNoOffer.ID] {
+		t.Error("model without offers should not be usable")
+	}
+	if usable[mDeadCh.ID] {
+		t.Error("model on disabled channel should not be usable")
+	}
+	if usable[mDisabled.ID] {
+		t.Error("disabled model should not be usable")
+	}
+}
+
 func boolPtrStore(b bool) *bool { return &b }
 
 func errorsIsNotFound(err error) bool { return err == ErrNotFound }

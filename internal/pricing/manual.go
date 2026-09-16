@@ -32,7 +32,13 @@ func BuildManual(in domain.OfficialPriceInput) (domain.OfficialPriceRow, error) 
 		return domain.OfficialPriceRow{}, fmt.Errorf("sourceUrl 必须是完整 http(s) URL")
 	}
 	if in.Currency == "" {
-		in.Currency = domain.CurrencyCNY // 智谱等国内厂商默认人民币
+		// 默认原币随厂商:国内厂商(智谱/Moonshot)官网标人民币,Anthropic/OpenAI/Azure 标美元。
+		// 不写死 CNY —— 否则录入 Claude 官方价时会按 ¥ 落库,汇率折算方向整个反过来。
+		if cur := ManualDefaultCurrency(in.Provider); cur != "" {
+			in.Currency = cur
+		} else {
+			in.Currency = domain.CurrencyCNY
+		}
 	}
 	if !in.Currency.Valid() {
 		return domain.OfficialPriceRow{}, fmt.Errorf("currency 必须是 CNY 或 USD")

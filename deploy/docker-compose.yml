@@ -1,9 +1,12 @@
 # 生产网关:Go 自身终止 TLS 双口(数据面 17080 / 管理台 17090),无边缘反代。
-# 用法:deploy/scripts/deploy.sh(本地构建镜像 → docker save 推送目标主机 → compose up)。
+# 用法(常规,ghcr 链路):lab 上 GW_IMAGE_TAG=<sha> docker compose up -d;镜像自 ghcr.io。
+# 用法(应急/回滚,本地链路):deploy/scripts/deploy.sh —— 它显式设 GW_IMAGE=ai-gateway
+#   (本地短名)并把镜像 docker save 推过去,覆盖下方缺省值。
 # 密钥/证书不入 git;镜像自带 config.yaml 与前端产物,compose 只提供端口/证书/DB 挂载。
 services:
   gateway:
-    image: ai-gateway:${GW_IMAGE_TAG:-latest}
+    # 缺省走 ghcr 全名(lab 匿名可拉);deploy.sh 用 GW_IMAGE=ai-gateway 覆盖为本地短名。
+    image: ${GW_IMAGE:-ghcr.io/glacierzzz26/personal-ai-gateway}:${GW_IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env                      # GW_MASTER_KEY(渠道密钥主密钥;不换 key 则勿删)
     ports:

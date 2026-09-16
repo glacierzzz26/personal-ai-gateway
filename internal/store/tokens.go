@@ -82,16 +82,21 @@ func (s *Store) TokenKeyCipher(id int64) (string, error) {
 	return cipher, err
 }
 
-// LookupTokenBySHA256 模型面鉴权用:按密钥哈希精确查。
+// LookupTokenBySHA256 模型面鉴权用:按密钥哈希精确查,并顺带带出归属账号的钱包
+// (角色/余额/倍率覆盖)——数据面每请求都要判断余额门禁与算售价,避免再查一次。
 func (s *Store) LookupTokenBySHA256(sha string) (domain.TokenRow, error) {
 	var tk domain.TokenRow
 	var allowed string
-	var expires, lastUsed sql.NullString
+	var expires, lastUsed, ownerID sql.NullString
+	var ownerRole string
 	var created, updated string
-	err := s.db.QueryRow(`SELECT id,name,sha256,key_masked,allowed_models,quota_usd,used_usd,
-		rpm_limit,expires_at,status,last_used_at FROM tokens WHERE sha256=?`, sha).
+	err := s.db.QueryRow(`SELECT t.id,t.name,t.sha256,t.key_masked,t.allowed_models,t.quota_usd,t.used_usd,
+		t.rpm_limit,t.expires_at,t.status,t.last_used_at,t.owner_id,
+		COALESCE(a.role,''), COALESCE(a.balance_usd,0)
+		FROM tokens t LEFT JOIN admins a ON a.id = t.owner_id WHERE t.sha256=?`, sha).
 		Scan(&tk.ID, &tk.Name, &tk.SHA256, &tk.KeyMasked, &allowed, &tk.QuotaUsd, &tk.UsedUsd,
-			&tk.RpmLimit, &expires, &tk.Status, &lastUsed)
+			&tk.RpmLimit, &expires, &tk.Status, &lastUsed, &ownerID,
+			&ownerRole, &tk.OwnerBalance)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.TokenRow{}, ErrNotFound
 	}
@@ -99,6 +104,8 @@ func (s *Store) LookupTokenBySHA256(sha string) (domain.TokenRow, error) {
 		return domain.TokenRow{}, err
 	}
 	tk.AllowedModels = decodeStringList(allowed)
+	tk.OwnerID = nullInt64Ptr(ownerID)
+	tk.OwnerRole = domain.Role(ownerRole)
 	if expires.Valid {
 		v := expires.String
 		tk.ExpiresAt = &v
@@ -162,22 +169,25 @@ func (s *Store) DeleteToken(id int64) error {
 	return nil
 }
 
-// ChargeToken 请求结束扣减额度并刷新 last_used_at。quota_usd<=0 视为不限。
-// 原子条件更新,避免并发超扣;超出返回 ErrQuotaExceeded。
+// ChargeToken 请求结束累加用量并刷新 last_used_at。quota_usd<=0 视为不限。
+//
+// 只累加、不设上限:额度是否够由入口预检查(tokenGateErr)判定,结算一律落账。
+// 若这里也带上限条件,当「剩余额度 < 一笔成本」时 UPDATE 会命中 0 行 —— 而调用方无法
+// 把它转成真正的拒绝(响应已发出),只会让 used_usd 永远不前进,变成无限白跑。故此处
+// 允许 used_usd 越过 quota_usd(透支至多一笔),由入口在下一笔请求上稳定返回 402。
 func (s *Store) ChargeToken(id int64, costUsd float64) error {
 	if costUsd < 0 {
 		return nil
 	}
 	now := formatRFC3339(s.nowUTC())
 	res, err := s.db.Exec(`UPDATE tokens SET used_usd = used_usd + ?, last_used_at = ?, updated_at = ?
-		WHERE id=? AND status='active'
-		  AND (quota_usd <= 0 OR used_usd + ? <= quota_usd + 0.0000001)`,
-		costUsd, now, now, id, costUsd)
+		WHERE id=? AND status='active'`,
+		costUsd, now, now, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrQuotaExceeded
+		return ErrNotFound
 	}
 	return nil
 }

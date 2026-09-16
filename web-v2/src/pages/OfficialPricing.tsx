@@ -86,16 +86,19 @@ export default function OfficialPricing() {
     onSuccess: r => {
       qc.invalidateQueries({ queryKey: ['official-prices'] });
       const failed = r.failed?.length ?? 0;
+      const removed = r.removed ?? 0;
       message.success({
         content: (
           <>
             已抓取 {r.upserted} 个模型
             {failed > 0 && `,${failed} 个失败`}
+            {/* 对账删除:官方页已下架的行被清掉,提示一下免得管理员以为数据丢了 */}
+            {removed > 0 && `,清理陈旧行 ${removed} 条`}
             {' · '}
             <a href={r.sourceUrl} target="_blank" rel="noreferrer">官方来源 ↗</a>
           </>
         ),
-        duration: 6,
+        duration: removed > 0 ? 8 : 6,
       });
     },
     onError: (e: Error) => message.error(e.message || '获取失败'),
@@ -159,11 +162,11 @@ export default function OfficialPricing() {
       ),
     },
     {
-      title: '模型名(官方页)', dataIndex: 'modelName',
-      render: v => <span className="gw-mono">{v}</span>,
+      title: '模型名(官方页)', dataIndex: 'modelName', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
     },
     {
-      title: '原币价(每百万)', key: 'native', align: 'right', width: 200,
+      title: '原币价(每百万)', key: 'native', align: 'right', width: 176,
       render: (_, r) => (
         <div className="gw-num">
           {curOf(r.currency)}{r.inputPrice} / {curOf(r.currency)}{r.outputPrice}
@@ -174,7 +177,7 @@ export default function OfficialPricing() {
       ),
     },
     {
-      title: '计价金额(每百万)', key: 'converted', align: 'right', width: 190,
+      title: '计价金额(每百万)', key: 'converted', align: 'right', width: 168,
       render: (_, r) => (r.rateSet ? (
         <div className="gw-num">
           {fmt.price(r.inputPriceUsd)} / {fmt.price(r.outputPriceUsd)}
@@ -197,7 +200,7 @@ export default function OfficialPricing() {
       ),
     },
     {
-      title: '来源', key: 'src', width: 160,
+      title: '来源', key: 'src', width: 148,
       render: (_, r) => (
         <div style={{ fontSize: 12 }}>
           <a href={r.sourceUrl} target="_blank" rel="noreferrer" className="gw-mono">官方页面 ↗</a>
@@ -334,8 +337,8 @@ export default function OfficialPricing() {
                 size="middle"
                 dataSource={list}
                 columns={cols}
+                tableLayout="fixed"
                 pagination={list.length > 30 ? { pageSize: 30, showSizeChanger: false } : false}
-                scroll={{ x: 1180 }}
               />
             )}
           </div>

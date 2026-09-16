@@ -80,6 +80,22 @@ func (e *e2eEnv) addModelOffer(model string, channelID int64, prio int) int64 {
 	return m.ID
 }
 
+// setModelRate 给模型设售价倍率(定价按模型,不再是用户级)。
+func (e *e2eEnv) setModelRate(modelID int64, rate float64) {
+	e.t.Helper()
+	m, err := e.st.GetModel(modelID)
+	if err != nil {
+		e.t.Fatalf("get model %d: %v", modelID, err)
+	}
+	_, err = e.st.UpdateModel(modelID, domain.ModelInput{
+		Name: m.Name, ContextWindow: m.ContextWindow, Capabilities: m.Capabilities,
+		Enabled: boolPtr(m.Enabled), RateOverride: domain.SetFloat(rate),
+	})
+	if err != nil {
+		e.t.Fatalf("set model rate: %v", err)
+	}
+}
+
 // addToken 建高额令牌返回明文(请求鉴权头用)。
 func (e *e2eEnv) addToken(name string, allowed []string, quota float64) string {
 	e.t.Helper()
@@ -209,6 +225,63 @@ func firstText(data []byte) string {
 }
 
 // TestE2EOpenAIIdentity openai 入站 → openai 渠道直通。
+// TestE2EWalletChargeAndGate 归属客户(user)的令牌:按售价扣钱包、记 charge 流水;
+// 余额耗尽后下一笔在入口被 402(insufficient_balance)挡住。
+func TestE2EWalletChargeAndGate(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	mid := e.addModelOffer("m-w", chID, 1)
+
+	u, err := e.st.CreateAdmin("cust", "h", domain.RoleUser)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	// 倍率 2.0(按模型):售价 = 成本 × 2。
+	e.setModelRate(mid, 2.0)
+	// 先只给一点点余额,让一笔就扣穿。
+	if _, err := e.st.TopupBalance(u.ID, 0.00002, "seed"); err != nil {
+		t.Fatalf("topup: %v", err)
+	}
+	plain, hashed, _ := auth.NewModelKey()
+	if _, err := e.st.CreateToken("cust-key", &u.ID, "", []string{"*"}, 0, 1000, nil, hashed, domain.MaskKey(plain)); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	code, body := e.post("/v1/chat/completions", plain, false, fmt.Sprintf(chatBody, "m-w"))
+	if code != http.StatusOK {
+		t.Fatalf("first request should succeed, got %d %s", code, body)
+	}
+	bal, err := e.st.GetBalance(u.ID)
+	if err != nil {
+		t.Fatalf("balance: %v", err)
+	}
+	if bal >= 0.00002 {
+		t.Fatalf("balance should have decreased, got %v", bal)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 || logs[0].ChargeUsd <= 0 {
+		t.Fatalf("charge not recorded: %+v", logs)
+	}
+	// 售价应为成本的 2 倍。
+	if d := logs[0].ChargeUsd - 2*logs[0].CostUsd; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge %v should be 2x cost %v", logs[0].ChargeUsd, logs[0].CostUsd)
+	}
+	recs, err := e.st.ListBalanceLogs(u.ID, 10)
+	if err != nil || len(recs) == 0 {
+		t.Fatalf("balance logs: %v (%d)", err, len(recs))
+	}
+	if recs[0].Reason != "charge" {
+		t.Fatalf("latest balance log reason = %s, want charge", recs[0].Reason)
+	}
+
+	// 余额已扣成负数 → 下一笔 402。
+	code, body = e.post("/v1/chat/completions", plain, false, fmt.Sprintf(chatBody, "m-w"))
+	if code != http.StatusPaymentRequired {
+		t.Fatalf("second request should be 402, got %d %s", code, body)
+	}
+}
+
 func TestE2EOpenAIIdentity(t *testing.T) {
 	e := newE2E(t)
 	up := openaiUpstream(t, "pong-openai", http.StatusOK)
@@ -411,8 +484,36 @@ func TestE2EQuotaAndAllowed(t *testing.T) {
 	}
 }
 
-// TestE2ERetryRepeatsCandidates 配置的 retry 轮数应真的重跑候选(此前 Plan.Retry 算了没人读)。
-// 单渠道、上游前两次 500、第三次 200,默认 maxRetries=2 → 序列 [ch,ch,ch],第三次成功。
+// TestE2EQuotaOverrunChargesAndRejects 额度不足以覆盖一笔成本时的终态:
+// 该笔照常成功并记账(used 越过 quota),下一笔在入口稳定 402 —— 不再无限白跑。
+// 回归点:ChargeToken 若带「不超上限」条件 + 调用方吞错,used 永不前进 → 每笔都 200。
+func TestE2EQuotaOverrunChargesAndRejects(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	e.addModelOffer("m-ok", chID, 1)
+	// 每笔成本 ≈ 2.0*12/1e6 + 4.0*8/1e6 = 0.000056;额度设 0.00001(不足一笔)。
+	key := e.addToken("cli", []string{"m-ok"}, 0.00001)
+
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, "m-ok"))
+	if code != http.StatusOK {
+		t.Fatalf("first request should succeed (quota not yet exhausted), got %d %s", code, body)
+	}
+	tk, err := e.st.ListTokens(nil)
+	if err != nil || len(tk) != 1 {
+		t.Fatalf("list tokens: %v (%d)", err, len(tk))
+	}
+	if tk[0].UsedUsd <= tk[0].QuotaUsd {
+		t.Fatalf("used=%v should exceed quota=%v after settle", tk[0].UsedUsd, tk[0].QuotaUsd)
+	}
+
+	code, body = e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, "m-ok"))
+	if code != http.StatusPaymentRequired {
+		t.Fatalf("second request should be 402, got %d %s", code, body)
+	}
+}
+
+// TestE2ERetryRepeatsCandidates 配置的 retry 轮数应真的重跑候选(此前 Plan.Retry 算了没人读)。// 单渠道、上游前两次 500、第三次 200,默认 maxRetries=2 → 序列 [ch,ch,ch],第三次成功。
 func TestE2ERetryRepeatsCandidates(t *testing.T) {
 	e := newE2E(t)
 	var hits int32
@@ -476,5 +577,100 @@ func TestE2ETranslationErrorNotChannelFailure(t *testing.T) {
 	}
 	if open, _ := e.gw.eng.CircuitOpen(ch.ID); open {
 		t.Fatalf("翻译失败被误记为渠道故障:渠道已熔断")
+	}
+}
+
+// bindOfficial 把模型绑定到一条官方价,并返回该官方价行。
+func (e *e2eEnv) bindOfficial(model string, p domain.Provider, officialName string, q domain.OfficialPriceRow) {
+	e.t.Helper()
+	q.Provider, q.ModelName = p, officialName
+	if _, err := e.st.UpsertOfficialPrice(q); err != nil {
+		e.t.Fatalf("upsert official price: %v", err)
+	}
+	vendor, name := string(p), officialName
+	m, err := e.st.GetModelByName(model)
+	if err != nil {
+		e.t.Fatalf("get model %s: %v", model, err)
+	}
+	if _, err := e.st.UpdateModel(m.ID, domain.ModelInput{OfficialVendor: &vendor, OfficialModelName: &name}); err != nil {
+		e.t.Fatalf("bind official: %v", err)
+	}
+}
+
+// TestE2ERetailPriceBilledFromOfficial 有官方价绑定时,客户付的是「官方价 × 倍率」,
+// 而不是成本 × 倍率 —— 定价模型的 A 口径(见 PLAN.md §2)。
+func TestE2ERetailPriceBilledFromOfficial(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	model := "claude-sonnet-5"
+	e.addModelOffer(model, chID, 1) // 成本固定 2.0 / 4.0 每百万
+
+	// 官方价 USD 3/15;计价币种 CNY,汇率 0.1 → ¥30/¥150 每百万。
+	e.bindOfficial(model, domain.ProviderAnthropic, "claude-sonnet-5-20250929", domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15,
+	})
+	settings, err := e.st.GetSettings()
+	if err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	settings.DisplayCurrency = domain.CurrencyCNY
+	settings.USDPerCNY = 0.1
+	settings.PriceMultiplier = 0.5
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 假上游固定 usage:prompt=12, completion=8。
+	// 官方价 ¥30/¥150 × 0.5 = ¥15/¥75 每百万 → 12×15/1e6 + 8×75/1e6 = 0.00078。
+	const wantCharge = 0.00078
+	if d := logs[0].ChargeUsd - wantCharge; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge = %v, want %v(官方价 × 倍率)", logs[0].ChargeUsd, wantCharge)
+	}
+	// 成本口径(prompt 12 × 2 + completion 8 × 4)/1e6 = 0.000056,与售价不同 ——
+	// 这正是「成本 ≠ 售价」的证明。
+	if d := logs[0].CostUsd - 0.000056; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want 0.000056", logs[0].CostUsd)
+	}
+}
+
+// TestE2ENoOfficialFallsBackToCost 未绑定官方价的模型照常按「成本 × 倍率」计费,不漏收。
+func TestE2ENoOfficialFallsBackToCost(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("oa", domain.ProviderOpenAI, up.URL, "sk-up", 1)
+	model := "m-nopricing"
+	e.addModelOffer(model, chID, 1)
+
+	settings, _ := e.st.GetSettings()
+	settings.PriceMultiplier = 2.0
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 成本 (12×2 + 8×4)/1e6 = 0.000056 → ×2 = 0.000112。
+	const want = 0.000112
+	if d := logs[0].ChargeUsd - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge = %v, want %v(回落成本 × 倍率)", logs[0].ChargeUsd, want)
 	}
 }
