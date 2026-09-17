@@ -546,6 +546,33 @@ type OfficialPriceRow struct {
 	UpdatedAt      time.Time      `json:"updatedAt"`
 }
 
+// CostRatioRow 一条「渠道 × 厂商」成本系数:该渠道消耗该厂商模型时,成本 = 官方价 × Ratio。
+//
+// 按 (渠道, 厂商) 而非按模型:credit 型套餐($10 买 $60 额度)对所有模型同倍率,
+// 按模型是 O(渠道×模型) 个格子,按厂商是 O(渠道×厂商)。见迁移 m0012。
+type CostRatioRow struct {
+	ChannelID int64    `json:"channelId"`
+	Vendor    Provider `json:"vendor"` // 取值同 official_prices.provider(即 models.official_vendor)
+	Ratio     float64  `json:"ratio"`  // 成本 = 官方价 × ratio;1.0 = 不折扣
+	Note      string   `json:"note,omitempty"`
+	UpdatedAt string   `json:"updatedAt,omitempty"`
+}
+
+// CostRatioInput 写入一条系数(PUT 全量替换该渠道的系数行)。
+type CostRatioInput struct {
+	Vendor Provider `json:"vendor"`
+	Ratio  float64  `json:"ratio"`
+	Note   string   `json:"note,omitempty"`
+}
+
+// OfficialBindingFill 回填结果的一行(模型 → 官方价绑定)。
+type OfficialBindingFill struct {
+	ModelID      int64    `json:"modelId"`
+	ModelName    string   `json:"modelName"`
+	Vendor       Provider `json:"vendor"`
+	OfficialName string   `json:"officialName"`
+}
+
 // OfficialPriceView 官方价 + 与现有 offer 的比对(读接口填充)。
 type OfficialPriceView struct {
 	OfficialPriceRow
