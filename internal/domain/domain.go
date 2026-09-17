@@ -402,21 +402,27 @@ func (m ModelRow) PublicName() string {
 //
 // PriceSourceURL/PriceFetchedAt/PriceCurrency/PriceNativeText 为「官方价来源留证」,
 // 由应用官方定价时写入;管理端编辑报价时必须原样回传,否则会被清空(全量替换语义)。
+//
+// 三价 (InputPriceUsd/OutputPriceUsd/CacheReadPriceUsd) 的语义已收窄为**手填兜底成本**
+// (每百万 token,计价币种):模型绑定了官方价时成本由「官方价 × 渠道系数」派生,这三列
+// 不参与计费,只在派生不可用时回落。生产里 74 个无官方价来源的模型走的就是这一档。
 type OfferInput struct {
 	ChannelID         int64   `json:"channelId"`
 	InputPriceUsd     float64 `json:"inputPriceUsd"`
 	OutputPriceUsd    float64 `json:"outputPriceUsd"`
 	CacheReadPriceUsd float64 `json:"cacheReadPriceUsd"`
-	OverridePrice     bool    `json:"overridePrice"`
-	RateLimitRpm      int     `json:"rateLimitRpm"`
-	TimeoutMs         *int    `json:"timeoutMs"`
-	Enabled           *bool   `json:"enabled"`
-	Priority          *int    `json:"priority"`
-	Note              string  `json:"note"`
-	PriceSourceURL    string  `json:"priceSourceUrl,omitempty"`
-	PriceFetchedAt    string  `json:"priceFetchedAt,omitempty"`
-	PriceCurrency     string  `json:"priceCurrency,omitempty"`
-	PriceNativeText   string  `json:"priceNativeText,omitempty"`
+	// OverridePrice 标记「这三价是手工维护的兜底值,重抓官方价不要覆盖」。
+	// 派生路径根本不读它,故它现在只影响「应用官方价」时的二次确认闸门。
+	OverridePrice   bool   `json:"overridePrice"`
+	RateLimitRpm    int    `json:"rateLimitRpm"`
+	TimeoutMs       *int   `json:"timeoutMs"`
+	Enabled         *bool  `json:"enabled"`
+	Priority        *int   `json:"priority"`
+	Note            string `json:"note"`
+	PriceSourceURL  string `json:"priceSourceUrl,omitempty"`
+	PriceFetchedAt  string `json:"priceFetchedAt,omitempty"`
+	PriceCurrency   string `json:"priceCurrency,omitempty"`
+	PriceNativeText string `json:"priceNativeText,omitempty"`
 	// UpstreamModel 本渠道侧真实模型名:非空 = 出站发往本渠道时改写请求体 model 为该值;
 	// 空 = 回落模型级 name。管理端编辑报价时须原样回传(全量替换语义)。
 	UpstreamModel string `json:"upstreamModel,omitempty"`
@@ -644,6 +650,34 @@ type FetchPricingResult struct {
 type ApplyPriceReq struct {
 	OfferID         int64 `json:"offerId"`
 	ConfirmOverride bool  `json:"confirmOverride"` // offer.override_price=true 时须显式确认
+}
+
+// RefreshProviderResult 批量刷新中单个厂商的结果。
+//
+// 逐厂商独立成败:一个厂商抓失败不影响其他厂商(共用一个按钮,单点网络抖动
+// 不该让另外两个的更新白跑)。Error 非空即该厂商失败,其余字段无意义。
+type RefreshProviderResult struct {
+	Provider  Provider `json:"provider"`
+	Upserted  int      `json:"upserted"`
+	Removed   int64    `json:"removed,omitempty"`
+	SourceURL string   `json:"sourceUrl,omitempty"`
+	Error     string   `json:"error,omitempty"`
+	// ErrorType 失败类别(unsupported/fetch_failed/manual_only/store_error),前端据此分列。
+	ErrorType string `json:"errorType,omitempty"`
+}
+
+// RefreshPricingResp POST /official-prices/refresh 返回。
+//
+// 抓完顺带回填模型绑定并把新增的绑定回给前端 —— re-fetch 之后模型仍未绑定,
+// 成本就仍然派生不出来,回填是这次点击真正生效的最后一环。
+type RefreshPricingResp struct {
+	Results []RefreshProviderResult `json:"results"`
+	// Bound 本次新绑定的模型(模型 → 官方价)。已绑定的不重复出现。
+	Bound []OfficialBindingFill `json:"bound"`
+	// BackfillError 回填失败的原因(抓取结果不受影响,价已入库是有效事实)。
+	BackfillError string `json:"backfillError,omitempty"`
+	TotalUpserted int    `json:"totalUpserted"`
+	TotalRemoved  int64  `json:"totalRemoved,omitempty"`
 }
 
 // ---------- 路由规则 ----------
