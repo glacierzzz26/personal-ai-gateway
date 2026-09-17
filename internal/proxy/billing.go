@@ -22,16 +22,15 @@ import (
 // 同一 at、同一行官方价、同一档位判定,所以毛利恒为 官方价 × (rate − ratio),
 // 不会出现「按峰价收费、按谷价记成本」的假毛利。
 
-// CostSource 该笔成本的口径,落 request_logs.cost_source 供事后核对账面。
-type CostSource string
-
+// 成本口径三档(domain.CostSource):展示面与管理面共用同一套取值,
+// 计费热路径与读路径不会各造一套字符串。
 const (
 	// CostFromOfficial 官方价 × 渠道系数 —— 唯一随官方价与分时自动更新、可算毛利的来源。
-	CostFromOfficial CostSource = "official"
+	CostFromOfficial = domain.CostFromOfficial
 	// CostFromOffer 回落 model_offers 的手填兜底三价(74 个无官方价来源的模型走这条)。
-	CostFromOffer CostSource = "offer"
+	CostFromOffer = domain.CostFromOffer
 	// CostUnknown 无任何成本依据(兜底三价全 0)→ 毛利不可计算,展示面必须藏起来。
-	CostUnknown CostSource = "unknown"
+	CostUnknown = domain.CostUnknown
 )
 
 // tokenCost 三价 × token 数(每百万)。与 costUsd 同式,提出单点是让单价口径只有一处。
@@ -50,14 +49,14 @@ func windowName(isPeak bool) string {
 
 // billing 一次请求的计费定稿。
 type billing struct {
-	At      time.Time  // 基准时刻(见 resolveBilling 说明)
-	Cost    float64    // 你付上游
-	Charge  float64    // 客户付你
-	Wallet  bool       // 是否扣归属客户钱包(仅 role=user 的归属)
-	CostSrc CostSource // 成本口径
-	IsPeak  bool       // 该时刻是否落在高峰档
-	Window  string     // "peak" | "offpeak" | ""
-	Warn    string     // 非致命提示(阶梯按首档计 / 系数未设 / 汇率缺失)—— 未落库,由调用方记日志
+	At      time.Time         // 基准时刻(见 resolveBilling 说明)
+	Cost    float64           // 你付上游
+	Charge  float64           // 客户付你
+	Wallet  bool              // 是否扣归属客户钱包(仅 role=user 的归属)
+	CostSrc domain.CostSource // 成本口径
+	IsPeak  bool              // 该时刻是否落在高峰档
+	Window  string            // "peak" | "offpeak" | ""
+	Warn    string            // 非致命提示(阶梯按首档计 / 系数未设 / 汇率缺失)—— 未落库,由调用方记日志
 }
 
 // resolveBilling 一次算清成本与售价。所有成功与失败路径共用此函数。
@@ -149,4 +148,53 @@ func joinWarn(a, b string) string {
 		return b
 	}
 	return a + ";" + b
+}
+
+// CostQuote 派生一条供给源的成本视图(管理面展示用)。
+//
+// 与 resolveBilling **共用同一套换算**(WholesalePriceAt + costRatio),只是入参来自目录
+// 而非选路计划 —— 两处若各算一套,页面上的成本就会与账面对不上。
+//
+// at 取「此刻」:目录展示答的是「这条供给源现在什么成本」,与计费按请求时刻选价语义不同但都对。
+func (g *Gateway) CostQuote(m domain.ModelRow, offer domain.OfferRead, settings domain.Settings, at time.Time) domain.CostQuote {
+	if m.OfficialVendor != "" && m.OfficialModelName != "" {
+		if q, err := g.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
+			ratio := g.costRatio(offer.ChannelID, m.OfficialVendor)
+			cin, cout, cc, peak, err := pricing.WholesalePriceAt(q, at, settings.TZOffsetMin,
+				settings.DisplayCurrency, settings.USDPerCNY, ratio)
+			if err == nil {
+				c := domain.CostQuote{
+					In: cin, Out: cout, CacheRead: cc,
+					Source: domain.CostFromOfficial, Vendor: m.OfficialVendor, Ratio: ratio,
+				}
+				if q.BillingShape == domain.ShapePeakOff {
+					c.Peak, c.Window = peak, windowName(peak)
+				}
+				if q.BillingShape == domain.ShapeTiered {
+					c.Warn = "阶梯计价:按首档标量计"
+				}
+				if ratio == 1.0 {
+					c.Warn = joinWarn(c.Warn, "渠道成本系数未设,按 1.0 计")
+				}
+				return c
+			}
+			// 汇率缺失等:回落兜底价,把原因带上(否则页面显示个兜底数字却不说为什么)。
+			return offerFallbackQuote(offer, "官方价不可用:"+err.Error())
+		}
+	}
+	return offerFallbackQuote(offer, "未绑定官方价,成本按兜底价计")
+}
+
+// offerFallbackQuote 层 2/3:成本回落 model_offers 手填三价。
+// 三价全 0 → Source=unknown 且三价**保持 0** —— 前端据此隐藏毛利列,
+// 绝不能让「没有成本依据」显示成「成本 0、毛利 100%」。
+func offerFallbackQuote(offer domain.OfferRead, warn string) domain.CostQuote {
+	c := domain.CostQuote{
+		In: offer.InputPriceUsd, Out: offer.OutputPriceUsd, CacheRead: offer.CacheReadPriceUsd,
+		Source: domain.CostFromOffer, Warn: warn,
+	}
+	if c.In == 0 && c.Out == 0 && c.CacheRead == 0 {
+		c.Source = domain.CostUnknown
+	}
+	return c
 }

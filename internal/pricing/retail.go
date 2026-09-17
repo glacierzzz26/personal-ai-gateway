@@ -3,7 +3,6 @@ package pricing
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	"personal-ai-gateway/internal/domain"
 )
@@ -47,15 +46,8 @@ func Convert(price float64, from, to domain.Currency, usdPerCNY float64) (float6
 	}
 }
 
-// RetailPrice 本站价 = 官方价 × 倍率(计价币种,每百万 token)。
-//
-// 倍率 <= 0 视为未设,回落 1.0(不加价)。官方价币种与计价币种不一致且未设汇率时,
-// 按 ErrNoExchangeRate 失败 —— 调用方应把「没有可用官方价」当作可降级的信号。
-//
-// 取价按 at 时刻的形态生效(峰谷分时会选峰/谷价,见 window.go)。at 为零值或
-// 官方价非分时形态时,行为与改造前的单一价口径一致。
-func RetailPrice(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int,
-	display domain.Currency, usdPerCNY, multiplier float64) (in, out, cache float64, err error) {
-	in, out, cache, _, err = RetailPriceAt(q, at, tzOffsetMin, display, usdPerCNY, multiplier)
-	return in, out, cache, err
-}
+// 注:改造前这里还有一个 RetailPrice(不带 at 的旧签名),计费与展示两处都调它。
+// 分时之后「按哪个时刻取价」成了必须显式回答的问题,两个调用点已各自收敛:
+//   - 计费 → RetailPriceAt(q, at, ...)(at 由请求入口取一次,见 proxy.resolveBilling)
+//   - 展示 → 显式分档展示,不再按时刻取单值(见 server/userModelsList 的峰谷并列)
+// 旧签名因此失去调用者被删除,避免有人图省事又调回「按当前时钟取价」。

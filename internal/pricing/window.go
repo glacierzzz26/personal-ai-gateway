@@ -287,6 +287,36 @@ func ShapePrice(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int) (in, o
 	return pi, po, pc, peak, nil
 }
 
+// PriceTriple 一组每百万 token 的三价(官方原币种)。
+type PriceTriple struct{ In, Out, CacheRead float64 }
+
+// PeakOffpeakTriples 分时形态模型的两个档位三价(谷价、峰价),官方原币种。
+//
+// 展示面专用:客户面要**并列**列出谷/峰两价与时段(见 PLAN.md §5),而不是随时间跳动的单值
+// —— 后者随 react-query 缓存过期就变,客户截图对不上账。
+//
+// 仅 peak_offpeak 且 detail 里两档都可解析时 ok=true;其余形态(flat/tiered/折扣)false,
+// 调用方按单一价展示。
+func PeakOffpeakTriples(q domain.OfficialPriceRow) (off, peak PriceTriple, ok bool) {
+	if q.BillingShape != domain.ShapePeakOff {
+		return PriceTriple{}, PriceTriple{}, false
+	}
+	oi, oo, oc, ok1 := peakOffpeakTriple(q.Detail, "offpeak")
+	pi, po, pc, ok2 := peakOffpeakTriple(q.Detail, "peak")
+	if !ok1 || !ok2 {
+		return PriceTriple{}, PriceTriple{}, false
+	}
+	return PriceTriple{In: oi, Out: oo, CacheRead: oc}, PriceTriple{In: pi, Out: po, CacheRead: pc}, true
+}
+
+// PeakHoursText detail 里人读的峰时段说明(厂商原文)。空 = 该行没写。
+func PeakHoursText(q domain.OfficialPriceRow) string {
+	if s, ok := q.Detail["peakHours"].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
 // applyMultiplier 按币种换算并乘系数(成本用渠道系数、售价用倍率),统一 Round6。
 func applyMultiplier(q domain.OfficialPriceRow, display domain.Currency, usdPerCNY, multiplier float64,
 	in, out, cache float64) (float64, float64, float64, error) {

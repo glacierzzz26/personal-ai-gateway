@@ -463,6 +463,44 @@ type OfferRead struct {
 	UpstreamModel string `json:"upstreamModel,omitempty"`
 	// InferredVendor 由上游名/模型名推断出的厂商(空 = 判不出)。供前端做官方价「推断厂商」匹配。
 	InferredVendor Provider `json:"inferredVendor,omitempty"`
+	// Cost 该供给源的成本派生视图(仅管理面填充;用户面结构独立,天然不含此字段)。
+	Cost *CostQuote `json:"cost,omitempty"`
+}
+
+// CostSource 一笔请求的成本口径,落 request_logs.cost_source 供事后核对账面。
+//
+// 分时之后同一个模型每天有两个成本价(峰/谷),没有这列就无法回答「那笔为什么按这个价记」。
+// 也是「毛利可不可信」的开关:unknown 的模型成本是编不出来的,展示面必须藏起毛利。
+type CostSource string
+
+const (
+	// CostFromOfficial 官方价 × 渠道系数 —— 唯一随官方价与分时自动更新、可算毛利的来源。
+	CostFromOfficial CostSource = "official"
+	// CostFromOffer 回落 model_offers 的手填兜底三价(74 个无官方价来源的模型走这条)。
+	CostFromOffer CostSource = "offer"
+	// CostUnknown 无任何成本依据(兜底三价全 0)→ 毛利不可计算,展示面必须藏起来。
+	CostUnknown CostSource = "unknown"
+)
+
+// CostQuote 供给源成本的派生视图(每百万 token,计价币种)。管理面专用。
+//
+// 成本不再存库,而是「官方价 × 渠道系数」现算 —— 官方价一变、系数一改即时生效,
+// 与「本站价现算不落库」的既有约定一致(见 PLAN.md §4)。
+type CostQuote struct {
+	In        float64 `json:"in"`
+	Out       float64 `json:"out"`
+	CacheRead float64 `json:"cacheRead"`
+	// Source 成本口径。**Source == unknown 时三价恒为 0,前端必须据此隐藏毛利列** ——
+	// 否则 74 个无官方价来源的模型会显示「毛利率 100%」,那是假的。
+	Source CostSource `json:"source"`
+	// Vendor/Ratio 仅 Source == official 时有意义(Ratio 为 1.0 表示该渠道未设系数)。
+	Vendor Provider `json:"vendor,omitempty"`
+	Ratio  float64  `json:"ratio,omitempty"`
+	// Peak/Window 该时刻所处的档位(仅分时形态有值)。
+	Peak   bool   `json:"peak,omitempty"`
+	Window string `json:"window,omitempty"`
+	// Warn 非致命提示(阶梯按首档计 / 系数未设 / 未绑定官方价)。
+	Warn string `json:"warn,omitempty"`
 }
 
 // ModelRead 模型目录条目 = models 行 + 关联 offers + 展示字段。
@@ -984,6 +1022,9 @@ type ModelChannelUsage struct {
 	ChannelName string  `json:"channelName"`
 	Requests    int     `json:"requests"`
 	CostUsd     float64 `json:"costUsd"`
+	// ChargeUsd 该渠道实际向客户收的钱。与 CostUsd 相减即该渠道的真实毛利 ——
+	// 同一模型走不同渠道成本不同(渠道系数不同),只看总成本看不出是哪条渠道在赚。
+	ChargeUsd float64 `json:"chargeUsd"`
 }
 
 // LogPage GET /logs 分页返回。
