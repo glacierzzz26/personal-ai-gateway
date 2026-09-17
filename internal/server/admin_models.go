@@ -220,6 +220,7 @@ func mergeSeries(dst, add []domain.MetricPoint) []domain.MetricPoint {
 			dst[i].Requests += p.Requests
 			dst[i].Errors += p.Errors
 			dst[i].CostUsd += p.CostUsd
+			dst[i].ChargeUsd += p.ChargeUsd
 			continue
 		}
 		idx[p.TS] = len(dst)
@@ -238,6 +239,7 @@ func mergeChannelUsage(dst, add []domain.ModelChannelUsage) []domain.ModelChanne
 		if i, ok := idx[c.ChannelName]; ok {
 			dst[i].Requests += c.Requests
 			dst[i].CostUsd += c.CostUsd
+			dst[i].ChargeUsd += c.ChargeUsd
 			continue
 		}
 		idx[c.ChannelName] = len(dst)
@@ -247,6 +249,18 @@ func mergeChannelUsage(dst, add []domain.ModelChannelUsage) []domain.ModelChanne
 }
 
 // ---------------- 供给源 ----------------
+
+// writeOffer 单条供给源读响应(create/update 用):自己补齐成本派生所需的模型行。
+//
+// 查不到模型时按零值模型走 —— 成本会落到「未绑定官方价」的兜底分支,不会漏字段,
+// 而这条路径只在模型刚被并发删除时才会走到。
+func (s *Server) writeOffer(w http.ResponseWriter, v *adminView, of domain.OfferRead) {
+	m, err := s.st.GetModel(of.ModelID)
+	if err != nil {
+		m = domain.ModelRow{}
+	}
+	writeJSON(w, http.StatusOK, s.offerRead(v, m, of))
+}
 
 // handleOffersCreate 为模型挂载供给源。
 func (s *Server) handleOffersCreate(w http.ResponseWriter, r *http.Request) {
@@ -273,7 +287,7 @@ func (s *Server) handleOffersCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, _ := s.buildView()
-	writeJSON(w, http.StatusOK, s.offerRead(v, of))
+	s.writeOffer(w, v, of)
 }
 
 // handleOffersUpdate 改价/启停/限流等。
@@ -293,7 +307,7 @@ func (s *Server) handleOffersUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, _ := s.buildView()
-	writeJSON(w, http.StatusOK, s.offerRead(v, of))
+	s.writeOffer(w, v, of)
 }
 
 // handleOffersDelete 移除供给源。
@@ -330,9 +344,14 @@ func (s *Server) handleOffersReorder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, _ := s.buildView()
+	m, err := s.st.GetModel(modelID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
 	out := make([]domain.OfferRead, 0, len(offers))
 	for _, o := range offers {
-		out = append(out, s.offerRead(v, o))
+		out = append(out, s.offerRead(v, m, o))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -370,7 +389,7 @@ func (s *Server) singleModelRead(id int64) (domain.ModelRead, error) {
 		RateOverride:   m.RateOverride,
 	}
 	for _, o := range offers {
-		mr.Offers = append(mr.Offers, s.offerRead(v, o))
+		mr.Offers = append(mr.Offers, s.offerRead(v, m, o))
 	}
 	if u, ok := today[m.PublicName()]; ok {
 		mr.TodayRequests = u.Requests

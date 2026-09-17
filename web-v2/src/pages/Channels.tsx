@@ -12,6 +12,7 @@ import PageHeader from '@/components/PageHeader';
 import ProviderMark from '@/components/ProviderMark';
 import StatusDot from '@/components/StatusDot';
 import { EmptyState, ErrorState, NoResultState } from '@/components/States';
+import CostRatioModal from '@/components/models/CostRatioModal';
 import { api } from '@/services/api';
 import { channelTypes, egressProtos, providers, quotaShapes } from '@/constants';
 import { channelLabel, channelMark, egressLabel } from '@/utils/channel';
@@ -212,6 +213,9 @@ export default function Channels() {
   const [syncingId, setSyncingId] = useState<number | null>(null);
   const [pricingId, setPricingId] = useState<number | null>(null);
   const [pricingRes, setPricingRes] = useState<PricingRes | null>(null);
+
+  // 成本系数编辑器(成本 = 厂商官方价 × 系数)。
+  const [ratioChannel, setRatioChannel] = useState<Channel | null>(null);
 
   // 新建 / 编辑共享弹窗
   const [editing, setEditing] = useState<Channel | null>(null);
@@ -485,6 +489,7 @@ export default function Channels() {
         const menu: MenuProps = {
           items: [
             { key: 'sync', label: '同步模型', disabled: syncingId === r.id },
+            { key: 'cost', label: '成本系数' },
             ...(canFetch ? [{ key: 'pricing', label: '获取官方定价', disabled: pricingId === r.id }] : []),
             { type: 'divider' as const },
             { key: 'delete', label: '删除', danger: true },
@@ -492,6 +497,7 @@ export default function Channels() {
           onClick: ({ key, domEvent }) => {
             domEvent.stopPropagation();
             if (key === 'sync') handleSyncModels(r);
+            else if (key === 'cost') setRatioChannel(r);
             else if (key === 'pricing') handleFetchPricing(r);
             else if (key === 'delete') handleDelete(r);
           },
@@ -506,7 +512,14 @@ export default function Channels() {
               测试
             </Button>
             <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
-            <Tooltip title={canFetch ? undefined : manualOnly ? '该厂商官方页为动态渲染,无法稳定抓取;请到「官方定价」页手工录入' : undefined}>
+            <Tooltip
+              title={canFetch ? undefined : (
+                <span>
+                  {manualOnly ? '该厂商官方页为动态渲染,无法稳定抓取。' : ''}
+                  聚合渠道请到「官方定价」页按厂商抓取(本渠道的 provider 是上游协议,不是真实厂商)。
+                </span>
+              )}
+            >
               <Dropdown menu={menu} trigger={['click']}>
                 <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`更多操作 ${r.name}`} />
               </Dropdown>
@@ -816,6 +829,9 @@ export default function Channels() {
           </>
         ) : null}
       </Modal>
+
+      {/* 成本系数:成本 = 厂商官方价 × 系数,与售价无关 */}
+      <CostRatioModal open={!!ratioChannel} channel={ratioChannel} onClose={() => setRatioChannel(null)} />
     </div>
   );
 }

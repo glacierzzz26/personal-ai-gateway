@@ -204,10 +204,19 @@ func (s *Server) handleOfficialPriceDelete(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleOfficialPriceApply 把官方价应用到某 offer(写三价 + 来源留证)。
+// handleOfficialPriceApply 把官方价**绑定到模型**(并把三价快照进 offer 作手填兜底)。
 //
-// 手工覆盖价优先:offer.override_price=true 时必须 confirmOverride=true 才放行,
-// 避免自动化把用户手工维护的价悄悄冲掉。原币为 CNY 且未设汇率时无法换算,直接拒绝。
+// 语义在成本改造后收窄了:改造前它的动效是「把官方价写进 offer 三价」,而**那正是**
+// 「成本 = 官方价」这个 bug 的来源(生产里模型 20 的 1.0/4.0/0.02 就是这么来的)。
+// 现在成本是「官方价 × 渠道系数」现算的,写三价进 offer 不再是让成本生效的动作 ——
+// 真正生效的动作是**写 models.official_vendor/official_model_name**。
+//
+// 所以本接口做两件事:
+//  1. 写模型级绑定(成本与售价从此按官方价派生,官方价一变全线跟着变);
+//  2. 顺带快照三价进该模型全部 offer + provenance 四字段留证 —— 仅供派生不可用时兜底。
+//
+// 手工覆盖价优先:模型下任一 offer 的 override_price=true 时必须 confirmOverride=true
+// 才放行,避免自动化把用户手工维护的兜底价悄悄冲掉。原币为 CNY 且未设汇率时无法换算,直接拒绝。
 func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request) {
 	id, ok := paramID(r, "id")
 	if !ok {
@@ -227,15 +236,26 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 		writeStoreErr(w, err)
 		return
 	}
+	// offerId 决定「绑到哪个模型」—— 接口形状对前端保持不变,但语义从「改这条 offer 的价」
+	// 变成「把这个模型绑到这条官方价上」。
 	of, err := s.st.GetOffer(req.OfferID)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
-	if of.OverridePrice && !req.ConfirmOverride {
-		apiErr(w, http.StatusConflict, "override_required",
-			"该供给源已手工覆盖报价(override_price);应用官方价会覆盖手工价,需显式确认")
+	offers, err := s.st.ListModelOffers(of.ModelID)
+	if err != nil {
+		writeStoreErr(w, err)
 		return
+	}
+	if !req.ConfirmOverride {
+		for _, o := range offers {
+			if o.OverridePrice {
+				apiErr(w, http.StatusConflict, "override_required",
+					"该模型下有供给源已手工覆盖报价(override_price);应用官方价会覆盖手工维护的兜底价,需显式确认")
+				return
+			}
+		}
 	}
 	settings, err := s.st.GetSettings()
 	if err != nil {
@@ -247,9 +267,28 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 		apiErr(w, http.StatusBadRequest, "no_rate", err.Error())
 		return
 	}
-	if err := s.st.ApplyOfficialPrice(req.OfferID, q, in, out, cache); err != nil {
+	// ① 绑定到模型 —— 这一步才让派生成本生效。
+	cur, err := s.st.GetModel(of.ModelID)
+	if err != nil {
 		writeStoreErr(w, err)
 		return
+	}
+	vendor, oname := string(q.Provider), q.ModelName
+	if _, err := s.st.UpdateModel(of.ModelID, domain.ModelInput{
+		Name: cur.Name, ContextWindow: cur.ContextWindow, Capabilities: cur.Capabilities,
+		OfficialVendor: &vendor, OfficialModelName: &oname,
+		RateOverride: rateOverrideOf(cur),
+	}); err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	// ② 快照三价进该模型**全部** offer(不只是发起的那条)——
+	// 派生失败时全模型口径一致地回落同一组兜底价。
+	for _, o := range offers {
+		if err := s.st.ApplyOfficialPrice(o.ID, q, in, out, cache); err != nil {
+			writeStoreErr(w, err)
+			return
+		}
 	}
 	updated, err := s.st.GetOffer(req.OfferID)
 	if err != nil {
@@ -257,6 +296,15 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// rateOverrideOf 把模型现有的三态倍率还原成 UpdateModel 入参:
+// UpdateModel 的其余字段按请求体原值写入,不带上就会把倍率清掉。
+func rateOverrideOf(m domain.ModelRow) domain.OptionalFloat {
+	if m.RateOverride == nil {
+		return domain.OptionalFloat{}
+	}
+	return domain.SetFloat(*m.RateOverride)
 }
 
 // convertPrice 官方原币价 → 计价币种金额(每百万 token)。

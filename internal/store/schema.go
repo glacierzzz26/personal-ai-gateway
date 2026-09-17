@@ -30,7 +30,47 @@ var migrations = []string{
 	m0010Announcements,
 	// v11:渠道类型 + 出站协议拆分 + 第三方额度手工配置(见 DESIGN.md §5.3)
 	m0011ChannelQuota,
+	// v12:渠道 × 厂商成本系数 + 成本口径审计(成本从「手填标量」改为「官方价 × 渠道系数」)
+	m0012ChannelVendorCost,
 }
+
+// m0012ChannelVendorCost 把成本从「每供给源手填三个标量」改成「官方价 × 渠道系数」:
+//
+//	channel_vendor_costs            (渠道 × 厂商) 成本系数
+//	request_logs.cost_source        该笔成本的口径:official | offer | unknown
+//	request_logs.price_window       该笔落在哪一档:peak | offpeak(非分时为空)
+//
+// 为什么按厂商而非按模型:credit 型套餐(commandcode 的 $10 买 $60 额度)对所有模型
+// 同倍率 —— 按模型填是 O(渠道×模型) 个格子,按厂商是 O(渠道×厂商)。
+//
+// ⚠️ 查找键是厂商(**models.official_vendor**),不是 channels.provider ——
+// 生产里两个聚合渠道的 provider 都是 OpenAI,而它们实际消耗的是 DeepSeek/通义千问的
+// 官方价。用 channels.provider 当键会让系数永远查不到,成本静默退回 1.0 倍。
+//
+// 缺行 = 1.0(不折扣),这是刻意的方向性选择:高估成本只会让毛利看起来偏低(你会去查),
+// 低估成本会伪造利润(你不会去查)。UI 必须显式显示「未设系数,按 1.0 计」。
+//
+// 本迁移**不 seed 业务数据**:channel_id 因环境而异(测试库/生产库不同),且 $10/$60
+// 是商业事实不是 schema 事实。commandcode → 1/6 由 UI 侧 SuggestedRatio 预填 + admin 确认。
+const m0012ChannelVendorCost = `
+CREATE TABLE IF NOT EXISTS channel_vendor_costs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  vendor     TEXT    NOT NULL,            -- domain.Provider,取值同 official_prices.provider
+  ratio      REAL    NOT NULL,            -- 成本 = 厂商官方价 × ratio
+  note       TEXT    NOT NULL DEFAULT '',
+  created_at TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL,
+  UNIQUE (channel_id, vendor)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_vendor_costs_channel ON channel_vendor_costs (channel_id);
+
+-- 成本口径审计:分时之后同一个模型每天有两个成本价,没有这两列就无法回答
+-- 「三个月前那笔为什么按这个价记」。历史行保持空串(= 迁移前无此信息),新行必须非空。
+ALTER TABLE request_logs ADD COLUMN cost_source  TEXT NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN price_window TEXT NOT NULL DEFAULT '';
+`
 
 // m0010Announcements 增加「通知/公告」能力(见 issue #10):
 //

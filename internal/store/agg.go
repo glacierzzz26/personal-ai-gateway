@@ -68,7 +68,8 @@ func (s *Store) QueryModelSeries(model, bucket string, fromUTC, toUTC time.Time,
 func (s *Store) QueryModelChannels(model string, fromUTC, toUTC time.Time) ([]domain.ModelChannelUsage, error) {
 	rows, err := s.db.Query(`SELECT channel_name,
 			COUNT(*),
-			COALESCE(SUM(cost), 0)
+			COALESCE(SUM(cost), 0),
+			COALESCE(SUM(charge_usd), 0)
 		FROM request_logs
 		WHERE model = ? AND ts >= ? AND ts < ?
 		GROUP BY channel_name ORDER BY COUNT(*) DESC`,
@@ -80,7 +81,7 @@ func (s *Store) QueryModelChannels(model string, fromUTC, toUTC time.Time) ([]do
 	var out []domain.ModelChannelUsage
 	for rows.Next() {
 		var c domain.ModelChannelUsage
-		if err := rows.Scan(&c.ChannelName, &c.Requests, &c.CostUsd); err != nil {
+		if err := rows.Scan(&c.ChannelName, &c.Requests, &c.CostUsd, &c.ChargeUsd); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

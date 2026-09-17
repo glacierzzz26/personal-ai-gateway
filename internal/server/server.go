@@ -153,11 +153,18 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("GET /api/v1/channels/{id}/quota", adm(s.handleChannelQuota))
 	m.HandleFunc("POST /api/v1/channels/{id}/sync-models", adm(s.handleChannelSyncModels))
 
+	// 「渠道 × 厂商」成本系数(成本 = 厂商官方价 × ratio;见迁移 m0012)。
+	// 独立于渠道 PATCH —— 渠道是整体覆盖语义,系数混进去会被「改个名字」误清空。
+	m.HandleFunc("GET /api/v1/channels/{id}/cost-ratios", adm(s.handleChannelCostRatios))
+	m.HandleFunc("PUT /api/v1/channels/{id}/cost-ratios", adm(s.handleChannelCostRatiosReplace))
+	m.HandleFunc("DELETE /api/v1/channels/{id}/cost-ratios", adm(s.handleChannelCostRatioDelete))
+
 	// 官方定价(厂商官网抓取;只采信官方域名,来源可追溯,失败即失败)
 	m.HandleFunc("POST /api/v1/channels/{id}/fetch-pricing", adm(s.handleFetchPricing))
 	m.HandleFunc("GET /api/v1/channels/{id}/official-prices", adm(s.handleChannelOfficialPrices))
 	m.HandleFunc("GET /api/v1/official-prices", adm(s.handleOfficialPricesAll))
 	m.HandleFunc("POST /api/v1/official-prices/fetch", adm(s.handleOfficialPricesFetch))
+	m.HandleFunc("POST /api/v1/official-prices/refresh", adm(s.handleOfficialPricesRefresh))
 	m.HandleFunc("GET /api/v1/official-prices/vendors", adm(s.handleOfficialVendors))
 	m.HandleFunc("POST /api/v1/official-prices/manual", adm(s.handleOfficialPriceManual))
 	m.HandleFunc("POST /api/v1/official-prices/{id}/apply", adm(s.handleOfficialPriceApply))

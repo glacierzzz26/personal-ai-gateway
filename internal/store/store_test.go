@@ -81,14 +81,29 @@ func TestOpenMigratesAndIdempotent(t *testing.T) {
 func TestM0011BackfillsLegacyChannels(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 
-	// 建一个「迁移前」形态的库:只跑到 m0010,手工插入老行,再由 Open 跑完 m0011。
+	// 建一个「迁移前」形态的库:跑到 m0010 为止(手工插入 m0011 之前的渠道老行),
+	// 再由 Open 跑完 m0011 及之后各步。
+	//
+	// ⚠️ 必须按**内容**定位 m0011,不能用 len(migrations)-1 —— 那只在「m0011 恰好是最后一步」
+	// 时成立,追加任何新迁移都会让这条用例静默地测错版本(表现为回填断言全部落空)。
+	const wantThrough = m0011ChannelQuota
+	nThrough := 0
+	for i, step := range migrations {
+		if step == wantThrough {
+			nThrough = i // 0-based:第 i 步(含)之前 = 只跑前 i 步
+			break
+		}
+	}
+	if nThrough == 0 {
+		t.Fatal("未在 migrations 中找到 m0011 —— 断言过时,请更新本用例")
+	}
 	dsn, err := sqliteDSN(path)
 	mustNoErr(t, err, "dsn")
 	db, err := sql.Open("sqlite", dsn)
 	mustNoErr(t, err, "open raw")
 	_, err = db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`)
 	mustNoErr(t, err, "create schema_migrations")
-	for i, step := range migrations[:len(migrations)-1] {
+	for i, step := range migrations[:nThrough] {
 		_, err = db.Exec(step)
 		mustNoErr(t, err, fmt.Sprintf("apply migration %d", i+1))
 		_, err = db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, i+1, nowRFC3339())

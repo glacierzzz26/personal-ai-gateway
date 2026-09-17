@@ -18,6 +18,7 @@ const (
 type adminView struct {
 	now      time.Time
 	tz       int
+	settings domain.Settings
 	chOrder  []domain.ChannelRow // ListChannels 原始序(priority ASC),列表展示照此
 	chByID   map[int64]domain.ChannelRow
 	chRecent map[int64]store.ChannelStat // 近 displayWindow
@@ -55,7 +56,7 @@ func (s *Server) buildView() (*adminView, error) {
 		return nil, err
 	}
 	return &adminView{
-		now: now, tz: settings.TZOffsetMin,
+		now: now, tz: settings.TZOffsetMin, settings: settings,
 		chOrder: order, chByID: byID, chRecent: recent, chToday: today, chModels: counts,
 	}, nil
 }
@@ -123,9 +124,15 @@ func (s *Server) channelRead(v *adminView, ch domain.ChannelRow) domain.ChannelR
 }
 
 // offerRead 组合供给源展示行(健康随其渠道,渠道禁用→disabled)。
-func (s *Server) offerRead(v *adminView, of domain.OfferRead) domain.OfferRead {
+//
+// m 是该 offer 所属模型 —— 成本派生要模型的官方价绑定,故不再是纯装饰函数。
+// 时刻与 settings 取 v 里的(一次读请求一份):一次列表里所有行的成本必须同一时刻,
+// 否则跨峰谷边界的那几毫秒会让同一次响应里两行价格对不上。
+func (s *Server) offerRead(v *adminView, m domain.ModelRow, of domain.OfferRead) domain.OfferRead {
 	// 厂商推断只看该供给源自己的上游名;为空则交给模型级 InferredVendor 兜底(前端逻辑)。
 	of.InferredVendor = pricing.InferVendor(of.UpstreamModel)
+	c := s.gw.CostQuote(m, of, v.settings, v.now)
+	of.Cost = &c
 	ch, ok := v.chByID[of.ChannelID]
 	if !ok {
 		of.Status = domain.StatusDisabled
@@ -162,7 +169,7 @@ func (s *Server) modelsListRead() ([]domain.ModelRead, error) {
 		}
 		decorated := make([]domain.OfferRead, 0, len(offers))
 		for _, o := range offers {
-			decorated = append(decorated, s.offerRead(v, o))
+			decorated = append(decorated, s.offerRead(v, m, o))
 		}
 		mr := domain.ModelRead{
 			ID: m.ID, Name: m.PublicName(), DisplayName: m.DisplayName, OriginalName: m.Name,

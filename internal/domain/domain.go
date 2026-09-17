@@ -402,21 +402,27 @@ func (m ModelRow) PublicName() string {
 //
 // PriceSourceURL/PriceFetchedAt/PriceCurrency/PriceNativeText 为「官方价来源留证」,
 // 由应用官方定价时写入;管理端编辑报价时必须原样回传,否则会被清空(全量替换语义)。
+//
+// 三价 (InputPriceUsd/OutputPriceUsd/CacheReadPriceUsd) 的语义已收窄为**手填兜底成本**
+// (每百万 token,计价币种):模型绑定了官方价时成本由「官方价 × 渠道系数」派生,这三列
+// 不参与计费,只在派生不可用时回落。生产里 74 个无官方价来源的模型走的就是这一档。
 type OfferInput struct {
 	ChannelID         int64   `json:"channelId"`
 	InputPriceUsd     float64 `json:"inputPriceUsd"`
 	OutputPriceUsd    float64 `json:"outputPriceUsd"`
 	CacheReadPriceUsd float64 `json:"cacheReadPriceUsd"`
-	OverridePrice     bool    `json:"overridePrice"`
-	RateLimitRpm      int     `json:"rateLimitRpm"`
-	TimeoutMs         *int    `json:"timeoutMs"`
-	Enabled           *bool   `json:"enabled"`
-	Priority          *int    `json:"priority"`
-	Note              string  `json:"note"`
-	PriceSourceURL    string  `json:"priceSourceUrl,omitempty"`
-	PriceFetchedAt    string  `json:"priceFetchedAt,omitempty"`
-	PriceCurrency     string  `json:"priceCurrency,omitempty"`
-	PriceNativeText   string  `json:"priceNativeText,omitempty"`
+	// OverridePrice 标记「这三价是手工维护的兜底值,重抓官方价不要覆盖」。
+	// 派生路径根本不读它,故它现在只影响「应用官方价」时的二次确认闸门。
+	OverridePrice   bool   `json:"overridePrice"`
+	RateLimitRpm    int    `json:"rateLimitRpm"`
+	TimeoutMs       *int   `json:"timeoutMs"`
+	Enabled         *bool  `json:"enabled"`
+	Priority        *int   `json:"priority"`
+	Note            string `json:"note"`
+	PriceSourceURL  string `json:"priceSourceUrl,omitempty"`
+	PriceFetchedAt  string `json:"priceFetchedAt,omitempty"`
+	PriceCurrency   string `json:"priceCurrency,omitempty"`
+	PriceNativeText string `json:"priceNativeText,omitempty"`
 	// UpstreamModel 本渠道侧真实模型名:非空 = 出站发往本渠道时改写请求体 model 为该值;
 	// 空 = 回落模型级 name。管理端编辑报价时须原样回传(全量替换语义)。
 	UpstreamModel string `json:"upstreamModel,omitempty"`
@@ -463,6 +469,44 @@ type OfferRead struct {
 	UpstreamModel string `json:"upstreamModel,omitempty"`
 	// InferredVendor 由上游名/模型名推断出的厂商(空 = 判不出)。供前端做官方价「推断厂商」匹配。
 	InferredVendor Provider `json:"inferredVendor,omitempty"`
+	// Cost 该供给源的成本派生视图(仅管理面填充;用户面结构独立,天然不含此字段)。
+	Cost *CostQuote `json:"cost,omitempty"`
+}
+
+// CostSource 一笔请求的成本口径,落 request_logs.cost_source 供事后核对账面。
+//
+// 分时之后同一个模型每天有两个成本价(峰/谷),没有这列就无法回答「那笔为什么按这个价记」。
+// 也是「毛利可不可信」的开关:unknown 的模型成本是编不出来的,展示面必须藏起毛利。
+type CostSource string
+
+const (
+	// CostFromOfficial 官方价 × 渠道系数 —— 唯一随官方价与分时自动更新、可算毛利的来源。
+	CostFromOfficial CostSource = "official"
+	// CostFromOffer 回落 model_offers 的手填兜底三价(74 个无官方价来源的模型走这条)。
+	CostFromOffer CostSource = "offer"
+	// CostUnknown 无任何成本依据(兜底三价全 0)→ 毛利不可计算,展示面必须藏起来。
+	CostUnknown CostSource = "unknown"
+)
+
+// CostQuote 供给源成本的派生视图(每百万 token,计价币种)。管理面专用。
+//
+// 成本不再存库,而是「官方价 × 渠道系数」现算 —— 官方价一变、系数一改即时生效,
+// 与「本站价现算不落库」的既有约定一致(见 PLAN.md §4)。
+type CostQuote struct {
+	In        float64 `json:"in"`
+	Out       float64 `json:"out"`
+	CacheRead float64 `json:"cacheRead"`
+	// Source 成本口径。**Source == unknown 时三价恒为 0,前端必须据此隐藏毛利列** ——
+	// 否则 74 个无官方价来源的模型会显示「毛利率 100%」,那是假的。
+	Source CostSource `json:"source"`
+	// Vendor/Ratio 仅 Source == official 时有意义(Ratio 为 1.0 表示该渠道未设系数)。
+	Vendor Provider `json:"vendor,omitempty"`
+	Ratio  float64  `json:"ratio,omitempty"`
+	// Peak/Window 该时刻所处的档位(仅分时形态有值)。
+	Peak   bool   `json:"peak,omitempty"`
+	Window string `json:"window,omitempty"`
+	// Warn 非致命提示(阶梯按首档计 / 系数未设 / 未绑定官方价)。
+	Warn string `json:"warn,omitempty"`
 }
 
 // ModelRead 模型目录条目 = models 行 + 关联 offers + 展示字段。
@@ -546,6 +590,33 @@ type OfficialPriceRow struct {
 	UpdatedAt      time.Time      `json:"updatedAt"`
 }
 
+// CostRatioRow 一条「渠道 × 厂商」成本系数:该渠道消耗该厂商模型时,成本 = 官方价 × Ratio。
+//
+// 按 (渠道, 厂商) 而非按模型:credit 型套餐($10 买 $60 额度)对所有模型同倍率,
+// 按模型是 O(渠道×模型) 个格子,按厂商是 O(渠道×厂商)。见迁移 m0012。
+type CostRatioRow struct {
+	ChannelID int64    `json:"channelId"`
+	Vendor    Provider `json:"vendor"` // 取值同 official_prices.provider(即 models.official_vendor)
+	Ratio     float64  `json:"ratio"`  // 成本 = 官方价 × ratio;1.0 = 不折扣
+	Note      string   `json:"note,omitempty"`
+	UpdatedAt string   `json:"updatedAt,omitempty"`
+}
+
+// CostRatioInput 写入一条系数(PUT 全量替换该渠道的系数行)。
+type CostRatioInput struct {
+	Vendor Provider `json:"vendor"`
+	Ratio  float64  `json:"ratio"`
+	Note   string   `json:"note,omitempty"`
+}
+
+// OfficialBindingFill 回填结果的一行(模型 → 官方价绑定)。
+type OfficialBindingFill struct {
+	ModelID      int64    `json:"modelId"`
+	ModelName    string   `json:"modelName"`
+	Vendor       Provider `json:"vendor"`
+	OfficialName string   `json:"officialName"`
+}
+
 // OfficialPriceView 官方价 + 与现有 offer 的比对(读接口填充)。
 type OfficialPriceView struct {
 	OfficialPriceRow
@@ -579,6 +650,34 @@ type FetchPricingResult struct {
 type ApplyPriceReq struct {
 	OfferID         int64 `json:"offerId"`
 	ConfirmOverride bool  `json:"confirmOverride"` // offer.override_price=true 时须显式确认
+}
+
+// RefreshProviderResult 批量刷新中单个厂商的结果。
+//
+// 逐厂商独立成败:一个厂商抓失败不影响其他厂商(共用一个按钮,单点网络抖动
+// 不该让另外两个的更新白跑)。Error 非空即该厂商失败,其余字段无意义。
+type RefreshProviderResult struct {
+	Provider  Provider `json:"provider"`
+	Upserted  int      `json:"upserted"`
+	Removed   int64    `json:"removed,omitempty"`
+	SourceURL string   `json:"sourceUrl,omitempty"`
+	Error     string   `json:"error,omitempty"`
+	// ErrorType 失败类别(unsupported/fetch_failed/manual_only/store_error),前端据此分列。
+	ErrorType string `json:"errorType,omitempty"`
+}
+
+// RefreshPricingResp POST /official-prices/refresh 返回。
+//
+// 抓完顺带回填模型绑定并把新增的绑定回给前端 —— re-fetch 之后模型仍未绑定,
+// 成本就仍然派生不出来,回填是这次点击真正生效的最后一环。
+type RefreshPricingResp struct {
+	Results []RefreshProviderResult `json:"results"`
+	// Bound 本次新绑定的模型(模型 → 官方价)。已绑定的不重复出现。
+	Bound []OfficialBindingFill `json:"bound"`
+	// BackfillError 回填失败的原因(抓取结果不受影响,价已入库是有效事实)。
+	BackfillError string `json:"backfillError,omitempty"`
+	TotalUpserted int    `json:"totalUpserted"`
+	TotalRemoved  int64  `json:"totalRemoved,omitempty"`
 }
 
 // ---------- 路由规则 ----------
@@ -810,16 +909,21 @@ type PasswordResetReq struct {
 
 // LogItem GET /logs 的单条日志(展示用;ts 已换算成本地时区字符串)。
 type LogItem struct {
-	ID           int64   `json:"id"`
-	TS           string  `json:"ts"`
-	Model        string  `json:"model"`
-	ChannelName  string  `json:"channelName"`
-	TokenName    string  `json:"tokenName"`
-	InTokens     int     `json:"inTokens"`
-	OutTokens    int     `json:"outTokens"`
-	CacheRead    int     `json:"cacheReadTokens,omitempty"`
-	CostUsd      float64 `json:"costUsd"`   // 成本(你付上游)
-	ChargeUsd    float64 `json:"chargeUsd"` // 售价(客户付你);admin 视角下差额即毛利
+	ID          int64   `json:"id"`
+	TS          string  `json:"ts"`
+	Model       string  `json:"model"`
+	ChannelName string  `json:"channelName"`
+	TokenName   string  `json:"tokenName"`
+	InTokens    int     `json:"inTokens"`
+	OutTokens   int     `json:"outTokens"`
+	CacheRead   int     `json:"cacheReadTokens,omitempty"`
+	CostUsd     float64 `json:"costUsd"`   // 成本(你付上游)
+	ChargeUsd   float64 `json:"chargeUsd"` // 售价(客户付你);admin 视角下差额即毛利
+	// CostSource 成本口径:official(官方价×渠道系数)| offer(手填兜底)| unknown(无依据)。
+	// 空串 = 迁移前的历史行。见迁移 m0012。
+	CostSource string `json:"costSource,omitempty"`
+	// PriceWindow 峰谷档位:"peak" | "offpeak";非分时模型为空。见迁移 m0012。
+	PriceWindow  string  `json:"priceWindow,omitempty"`
 	FirstTokenMs int     `json:"firstTokenMs"`
 	TotalMs      int     `json:"totalMs"`
 	StatusCode   int     `json:"statusCode"`
@@ -845,6 +949,11 @@ type LogRow struct {
 	CacheRead    int
 	CostUsd      float64
 	ChargeUsd    float64
+	// CostSource 该笔成本的口径:official(官方价×渠道系数)| offer(手填兜底三价)| unknown。
+	// 见 proxy.CostSource —— 分时之后同一模型每天有两个成本价,没有这列无法事后核对账面。
+	CostSource string
+	// PriceWindow 该笔落在哪一档:"peak" | "offpeak"(非分时模型为空)。
+	PriceWindow  string
 	FirstTokenMs int
 	TotalMs      int
 	IP           string
@@ -947,6 +1056,9 @@ type ModelChannelUsage struct {
 	ChannelName string  `json:"channelName"`
 	Requests    int     `json:"requests"`
 	CostUsd     float64 `json:"costUsd"`
+	// ChargeUsd 该渠道实际向客户收的钱。与 CostUsd 相减即该渠道的真实毛利 ——
+	// 同一模型走不同渠道成本不同(渠道系数不同),只看总成本看不出是哪条渠道在赚。
+	ChargeUsd float64 `json:"chargeUsd"`
 }
 
 // LogPage GET /logs 分页返回。

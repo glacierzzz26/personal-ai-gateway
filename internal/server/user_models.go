@@ -21,6 +21,14 @@ type UserModelView struct {
 	Official *UserPrice `json:"official,omitempty"`
 	// Retail 本站价 = 官方价 × 倍率(客户实付口径);无官方价时为空。
 	Retail *UserPrice `json:"retail,omitempty"`
+	// PeakVaries 该模型分时计价(峰谷两档价不同)。前端据此决定是否渲染第二行价格。
+	PeakVaries bool `json:"peakVaries,omitempty"`
+	// PeakRetail 高峰档本站价;仅 PeakVaries 时有值。客户在页面上同时看到谷/峰两价 ——
+	// 报价是「现在买多少钱」,而计费按请求时刻选档,不并列展示就会出现「看到谷价、
+	// 恰在峰时段请求、被按峰价收费」的争议(见 PLAN.md §5)。
+	PeakRetail *UserPrice `json:"peakRetail,omitempty"`
+	// PeakHours 峰时段的人读说明(厂商原文,如「北京时间周一至周五 9:00-12:00、14:00-18:00」)。
+	PeakHours string `json:"peakHours,omitempty"`
 	// PriceNote 价格不可用时的说明(未录官方价 / 未设汇率),供前端提示。
 	PriceNote string `json:"priceNote,omitempty"`
 }
@@ -70,8 +78,32 @@ func (s *Server) userModelsList(allowed []string) ([]UserModelView, error) {
 		}
 		if q, err := s.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
 			cur := string(settings.DisplayCurrency)
-			in, outP, cache, err := pricing.RetailPrice(q, settings.DisplayCurrency, settings.USDPerCNY, rate)
-			if err != nil {
+			// 分时模型:定价按档位算出「谷价 / 峰价」两行**并列**展示,不让客户只看到谷价
+			// (报价是「多少钱」,计费按请求时刻选档;只给单值会出现「看到谷价、恰在峰时段
+			// 请求被按峰价收费」的争议,事后无法解释)。
+			//
+			// 为什么不用 RetailPrice(此刻):它按当前时钟选档,同一模型同一份列表在
+			// 9:00 和 13:00 刷出两个不同的「本站价」,客户截图对不上账。这里把档位显式拆开,
+			// 展示面不再依赖「什么时候看的」。
+			if off, peak, ok := pricing.PeakOffpeakTriples(q); ok {
+				oi, oo, oc := mustConvert(off.In, q, settings), mustConvert(off.Out, q, settings), mustConvert(off.CacheRead, q, settings)
+				pi, po, pc := mustConvert(peak.In, q, settings), mustConvert(peak.Out, q, settings), mustConvert(peak.CacheRead, q, settings)
+				v.Official = &UserPrice{Input: oi, Output: oo, CacheRead: oc, Currency: cur}
+				v.Retail = &UserPrice{
+					Input: pricing.Round6(oi * rate), Output: pricing.Round6(oo * rate),
+					CacheRead: pricing.Round6(oc * rate), Currency: cur,
+				}
+				v.PeakVaries = true
+				v.PeakRetail = &UserPrice{
+					Input: pricing.Round6(pi * rate), Output: pricing.Round6(po * rate),
+					CacheRead: pricing.Round6(pc * rate), Currency: cur,
+				}
+				v.PeakHours = pricing.PeakHoursText(q)
+				out = append(out, v)
+				continue
+			}
+			// 其余形态(平坦/阶梯/折扣):单一价,取标量三价换算 —— 与改造前逐位一致。
+			if _, err := pricing.Convert(q.InputPrice, q.Currency, settings.DisplayCurrency, settings.USDPerCNY); err != nil {
 				v.PriceNote = "官方价币种与计价币种不一致，请管理员在【系统设置】填写汇率后显示"
 			} else {
 				v.Official = &UserPrice{
@@ -80,7 +112,11 @@ func (s *Server) userModelsList(allowed []string) ([]UserModelView, error) {
 					CacheRead: mustConvert(q.CacheReadPrice, q, settings),
 					Currency:  cur,
 				}
-				v.Retail = &UserPrice{Input: in, Output: outP, CacheRead: cache, Currency: cur}
+				in, outP, cache := v.Official.Input, v.Official.Output, v.Official.CacheRead
+				v.Retail = &UserPrice{
+					Input: pricing.Round6(in * rate), Output: pricing.Round6(outP * rate),
+					CacheRead: pricing.Round6(cache * rate), Currency: cur,
+				}
 			}
 		} else {
 			v.PriceNote = "该模型尚未录入官方参考价，价格待定"

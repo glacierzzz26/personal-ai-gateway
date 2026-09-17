@@ -98,6 +98,33 @@ export interface ModelOffer {
   upstreamModel?: string;
   /** 由上游名/模型名推断出的厂商(空=判不出)。聚合渠道据此匹配厂商官方价 */
   inferredVendor?: Provider;
+  /** 成本派生视图(仅管理面返回;用户面结构独立,天然不含此字段) */
+  cost?: CostQuote;
+}
+
+/** 成本口径。unknown = 无任何成本依据 → **必须隐藏毛利列**,不能显示 0 毛利。 */
+export type CostSource = 'official' | 'offer' | 'unknown';
+
+/**
+ * 供给源成本的派生视图(每百万 token,计价币种)。
+ *
+ * 成本不落库,是「官方价 × 渠道系数」现算的 —— 官方价一变、系数一改即时生效。
+ * source='unknown' 时三价恒为 0,前端据此显示「成本未知」而非「成本 0」。
+ */
+export interface CostQuote {
+  in: number;
+  out: number;
+  cacheRead: number;
+  source: CostSource;
+  /** 仅 source='official' 时有值 */
+  vendor?: Provider;
+  /** 渠道成本系数;1.0 = 未设(带 warn 说明) */
+  ratio?: number;
+  /** 该时刻是否落在高峰档(仅分时形态有值) */
+  peak?: boolean;
+  window?: 'peak' | 'offpeak';
+  /** 非致命提示:阶梯按首档计 / 系数未设 / 未绑定官方价 */
+  warn?: string;
 }
 
 /** 供给源创建/编辑入参 */
@@ -166,8 +193,15 @@ export interface UserModelItem {
   capabilities: Capability[];
   /** 官方价锚(划线原价,计价币种,每百万 token);未录官方价时缺省 */
   official?: UserPrice;
-  /** 本站价 = 官方价 × 倍率(客户实付口径);无官方价时缺省 */
+  /** 本站价 = 官方价 × 倍率(客户实付口径);无官方价时缺省。
+   *  分时模型这里是**空闲档**价(展示面刻意不随当前时钟变,免得截图对不上账) */
   retail?: UserPrice;
+  /** 该模型分时计价(峰谷两档价不同)。true 时下方 peakRetail/peakHours 有值 */
+  peakVaries?: boolean;
+  /** 高峰档本站价;仅 peakVaries 时有值。与 retail 并列展示 */
+  peakRetail?: UserPrice;
+  /** 峰时段人读说明(厂商原文,如「北京时间周一至周五 9:00-12:00、14:00-18:00」) */
+  peakHours?: string;
   /** 价格不可用时的说明(未录官方价 / 未设汇率) */
   priceNote?: string;
 }
@@ -188,6 +222,57 @@ export interface OfficialVendorInfo {
   manualOnly: boolean;
   /** 手工录入时的默认原币种(CNY/USD);仅 manualOnly 厂商有值 */
   manualCurrency?: PriceCurrency;
+}
+
+/**
+ * 一条「渠道 × 厂商」成本系数(GET/PUT /channels/{id}/cost-ratios)。
+ *
+ * 按 (渠道, 厂商) 而非按模型:credit 型套餐($10 买 $60 额度)对所有模型同倍率,
+ * 按模型是 O(渠道×模型) 个格子,按厂商是 O(渠道×厂商)。缺行 = 1.0(不折扣)。
+ */
+export interface CostRatioRow {
+  channelId: number;
+  vendor: Provider;
+  /** 成本 = 该厂商官方价 × ratio;1.0 = 不折扣 */
+  ratio: number;
+  note?: string;
+  updatedAt?: string;
+}
+
+/** PUT /channels/{id}/cost-ratios 的入参:全量替换该渠道的系数行 */
+export interface CostRatioInput {
+  vendor: Provider;
+  ratio: number;
+  note?: string;
+}
+
+/** 批量刷新中单个厂商的结果。逐厂商独立成败:一个失败不影响其他。 */
+export interface RefreshProviderResult {
+  provider: Provider;
+  upserted: number;
+  removed?: number;
+  sourceUrl?: string;
+  error?: string;
+  /** 失败类别(unsupported/fetch_failed/manual_only/store_error) */
+  errorType?: string;
+}
+
+/** 一次「绑定到模型」的回填结果 */
+export interface OfficialBindingFill {
+  modelId: number;
+  modelName: string;
+  vendor: Provider;
+  officialName: string;
+}
+
+/** POST /official-prices/refresh 返回 */
+export interface RefreshPricingResp {
+  results: RefreshProviderResult[];
+  /** 本次新绑定的模型(已绑定的不重复出现) */
+  bound: OfficialBindingFill[];
+  backfillError?: string;
+  totalUpserted: number;
+  totalRemoved?: number;
 }
 
 export interface GatewayToken {
@@ -373,7 +458,9 @@ export interface CustomerFocusData {
 
 export interface ModelUsageData {
   daily: MetricPoint[];
-  byChannel: { channelName: string; requests: number; costUsd: number }[];
+  /** 按渠道用量。chargeUsd 是该渠道实际向客户收的钱 —— 与 costUsd 相减即真实毛利
+   *  (同一模型走不同渠道成本不同:渠道系数不同) */
+  byChannel: { channelName: string; requests: number; costUsd: number; chargeUsd: number }[];
 }
 
 export interface Settings {

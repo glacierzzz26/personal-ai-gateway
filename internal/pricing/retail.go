@@ -46,26 +46,8 @@ func Convert(price float64, from, to domain.Currency, usdPerCNY float64) (float6
 	}
 }
 
-// RetailPrice 本站价 = 官方价 × 倍率(计价币种,每百万 token)。
-//
-// 倍率 <= 0 视为未设,回落 1.0(不加价)。官方价币种与计价币种不一致且未设汇率时,
-// 按 ErrNoExchangeRate 失败 —— 调用方应把「没有可用官方价」当作可降级的信号。
-func RetailPrice(q domain.OfficialPriceRow, display domain.Currency, usdPerCNY, multiplier float64) (in, out, cache float64, err error) {
-	rate := multiplier
-	if rate <= 0 {
-		rate = 1.0
-	}
-	in, err = Convert(q.InputPrice, q.Currency, display, usdPerCNY)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	out, err = Convert(q.OutputPrice, q.Currency, display, usdPerCNY)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	cache, err = Convert(q.CacheReadPrice, q.Currency, display, usdPerCNY)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-	return Round6(in * rate), Round6(out * rate), Round6(cache * rate), nil
-}
+// 注:改造前这里还有一个 RetailPrice(不带 at 的旧签名),计费与展示两处都调它。
+// 分时之后「按哪个时刻取价」成了必须显式回答的问题,两个调用点已各自收敛:
+//   - 计费 → RetailPriceAt(q, at, ...)(at 由请求入口取一次,见 proxy.resolveBilling)
+//   - 展示 → 显式分档展示,不再按时刻取单值(见 server/userModelsList 的峰谷并列)
+// 旧签名因此失去调用者被删除,避免有人图省事又调回「按当前时钟取价」。

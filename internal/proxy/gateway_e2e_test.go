@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"personal-ai-gateway/internal/auth"
 	"personal-ai-gateway/internal/domain"
@@ -638,10 +639,194 @@ func TestE2ERetailPriceBilledFromOfficial(t *testing.T) {
 	if d := logs[0].ChargeUsd - wantCharge; d > 1e-9 || d < -1e-9 {
 		t.Fatalf("charge = %v, want %v(官方价 × 倍率)", logs[0].ChargeUsd, wantCharge)
 	}
-	// 成本口径(prompt 12 × 2 + completion 8 × 4)/1e6 = 0.000056,与售价不同 ——
-	// 这正是「成本 ≠ 售价」的证明。
-	if d := logs[0].CostUsd - 0.000056; d > 1e-9 || d < -1e-9 {
-		t.Fatalf("cost = %v, want 0.000056", logs[0].CostUsd)
+	// 成本口径改造后**派生于官方价**(不再读 offer 标量):该渠道无系数行 → ratio 1.0,
+	// 故成本 = 官方价 ¥30/¥150 × 1.0 = ¥30/¥150 每百万 → 12×30/1e6 + 8×150/1e6 = 0.00156。
+	// 售价(0.00078)是成本的一半 —— 倍率 0.5 < 系数 1.0 就该亏损,账面对得上。
+	const wantCost = 0.00156
+	if d := logs[0].CostUsd - wantCost; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want %v(官方价 × 渠道系数)", logs[0].CostUsd, wantCost)
+	}
+	if logs[0].CostSource != string(CostFromOfficial) {
+		t.Errorf("costSource = %q, want official", logs[0].CostSource)
+	}
+	// flat 形态不该记档位 —— 只有分时模型才有峰谷。
+	if logs[0].PriceWindow != "" {
+		t.Errorf("flat 模型不该有 priceWindow, got %q", logs[0].PriceWindow)
+	}
+}
+
+// TestE2ECostFromOfficialTimesChannelRatio 「成本 = 官方价 × 渠道系数」的核心验收:
+// 同一模型同一官方价,渠道系数 1/6 让成本变成官方价的六分之一(commandcode 的 $10 买 $60)。
+// 同时断言毛利 = (倍率 − 系数) × 官方价,而不是「营收 − 假成本」。
+func TestE2ECostFromOfficialTimesChannelRatio(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("cc", domain.ProviderOpenAI, up.URL, "sk-cc", 1)
+	model := "claude-sonnet-5"
+	e.addModelOffer(model, chID, 1)
+
+	// 官方价 USD 3/15;计价 CNY,汇率 0.1 → ¥30/¥150 每百万。
+	e.bindOfficial(model, domain.ProviderAnthropic, "claude-sonnet-5-20250929", domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15,
+	})
+	// 渠道对 Anthropic 的成本系数 1/6($10 买 $60 额度)。
+	if err := e.st.SetCostRatio(chID, domain.ProviderAnthropic, 1.0/6.0, "$10→$60"); err != nil {
+		t.Fatalf("set cost ratio: %v", err)
+	}
+	settings, _ := e.st.GetSettings()
+	settings.DisplayCurrency = domain.CurrencyCNY
+	settings.USDPerCNY = 0.1
+	settings.PriceMultiplier = 1.0
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 官方 ¥30/¥150:成本 = 官方 × 1/6 = ¥5/¥25 → 12×5/1e6 + 8×25/1e6 = 0.00026。
+	const wantCost = 0.00026
+	if d := logs[0].CostUsd - wantCost; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want %v(官方价 × 1/6)", logs[0].CostUsd, wantCost)
+	}
+	// 售价 = 官方 × 1.0 → 12×30/1e6 + 8×150/1e6 = 0.00156。
+	const wantCharge = 0.00156
+	if d := logs[0].ChargeUsd - wantCharge; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge = %v, want %v(官方价 × 倍率)", logs[0].ChargeUsd, wantCharge)
+	}
+	// 毛利 = (倍率 − 系数) × 官方价 = (1 − 1/6) × 官方价 —— 结构性正确,而非「营收 − 假成本」。
+	if gotRatio := logs[0].CostUsd / logs[0].ChargeUsd; gotRatio < 0.1666 || gotRatio > 0.1667 {
+		t.Errorf("成本/售价 = %v, want 1/6", gotRatio)
+	}
+	if logs[0].CostSource != string(CostFromOfficial) {
+		t.Errorf("costSource = %q, want official", logs[0].CostSource)
+	}
+}
+
+// TestE2EPeakOffpeakSelectedByRequestTime 分时的核心:同一模型、同一渠道,
+// 注入的计费时刻落在高峰 vs 空闲,成本与售价**同步**翻倍(官方高峰价 = 空闲价 × 2)。
+func TestE2EPeakOffpeakSelectedByRequestTime(t *testing.T) {
+	beijing := func(h, mi int) time.Time {
+		return time.Date(2026, time.September, 14, h, mi, 0, 0, time.FixedZone("CST", 8*3600))
+	}
+	cases := []struct {
+		name       string
+		at         time.Time
+		wantWindow string
+		wantCharge float64
+	}{
+		// 周一 10:00 = 高峰:官方高峰 ¥2/¥8 → 12×2/1e6 + 8×8/1e6 = 0.000088。
+		{"高峰时段", beijing(10, 0), "peak", 0.000088},
+		// 周一 13:00 = 午休(空闲):官方空闲 ¥1/¥4 → 12×1/1e6 + 8×4/1e6 = 0.000044。
+		{"空闲时段", beijing(13, 0), "offpeak", 0.000044},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newE2E(t)
+			up := openaiUpstream(t, "pong", http.StatusOK)
+			chID := e.addChannel("cc", domain.ProviderOpenAI, up.URL, "sk-cc", 1)
+			model := "deepseek-flash"
+			e.addModelOffer(model, chID, 1)
+
+			// 官方价 CNY,分时形态,detail 带机器可读 windows(谷 ¥1/¥4,峰 ¥2/¥8)。
+			e.bindOfficial(model, domain.ProviderDeepSeek, "deepseek-flash", domain.OfficialPriceRow{
+				Currency: domain.CurrencyCNY, BillingShape: domain.ShapePeakOff,
+				InputPrice: 1, OutputPrice: 4, CacheReadPrice: 0.02,
+				Detail: map[string]any{
+					"peak":      map[string]any{"in": 2.0, "out": 8.0, "cacheRead": 0.04},
+					"offpeak":   map[string]any{"in": 1.0, "out": 4.0, "cacheRead": 0.02},
+					"peakHours": "北京时间周一至周五 9:00-12:00、14:00-18:00(其余为空闲时段)",
+					"windows": []any{
+						map[string]any{"days": []any{1, 2, 3, 4, 5}, "start": "09:00", "end": "12:00", "tzOffsetMin": 480},
+						map[string]any{"days": []any{1, 2, 3, 4, 5}, "start": "14:00", "end": "18:00", "tzOffsetMin": 480},
+					},
+				},
+			})
+			settings, _ := e.st.GetSettings()
+			settings.DisplayCurrency = domain.CurrencyCNY
+			settings.PriceMultiplier = 1.0
+			if err := e.st.SaveSettings(settings); err != nil {
+				t.Fatalf("save settings: %v", err)
+			}
+			// 计费基准时刻可注入:这正是 at 与 start 分开的价值(不影响耗时统计)。
+			e.gw.nowFn = func() time.Time { return c.at }
+
+			key := e.addToken("cli", []string{"*"}, 100)
+			code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+			if code != http.StatusOK {
+				t.Fatalf("status %d body %s", code, body)
+			}
+			logs := e.logsFor()
+			if len(logs) != 1 {
+				t.Fatalf("logs = %+v", logs)
+			}
+			if logs[0].PriceWindow != c.wantWindow {
+				t.Errorf("priceWindow = %q, want %q", logs[0].PriceWindow, c.wantWindow)
+			}
+			if d := logs[0].ChargeUsd - c.wantCharge; d > 1e-9 || d < -1e-9 {
+				t.Errorf("charge = %v, want %v", logs[0].ChargeUsd, c.wantCharge)
+			}
+			// 成本与售价同步浮动:无系数行 → ratio = 倍率 = 1.0,故两者相等。
+			// 关键断言是「同一档位下两者一起变」,而非某个固定值。
+			if d := logs[0].CostUsd - logs[0].ChargeUsd; d > 1e-9 || d < -1e-9 {
+				t.Errorf("ratio(1.0) == rate(1.0) 时成本应等于售价: cost=%v charge=%v",
+					logs[0].CostUsd, logs[0].ChargeUsd)
+			}
+		})
+	}
+}
+
+// TestE2ETieredPriceIgnoredBySelector 阶梯价必须按标量计,绝不消费 detail["tiers"]。
+// 生产 166 行通义官方价的 tiers 是坏的(重复档位 + 空 range),这条是红线。
+func TestE2ETieredPriceIgnoredBySelector(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("qwen", domain.ProviderOpenAI, up.URL, "sk-qw", 1)
+	model := "qwen3.8-max"
+	e.addModelOffer(model, chID, 1)
+
+	// 标量 ¥1/¥4;detail.tiers 是坏数据(重复档位、空 range)—— 必须被忽略。
+	e.bindOfficial(model, domain.ProviderQwen, "qwen3.8-max", domain.OfficialPriceRow{
+		Currency: domain.CurrencyCNY, BillingShape: domain.ShapeTiered,
+		InputPrice: 1, OutputPrice: 4,
+		Detail: map[string]any{
+			"tiers": []any{
+				map[string]any{"range": "0<Token≤32K", "in": 2.5},
+				map[string]any{"range": "0<Token≤32K", "in": 8.807},
+				map[string]any{"range": "", "in": 99.0},
+			},
+		},
+	})
+	settings, _ := e.st.GetSettings()
+	settings.DisplayCurrency = domain.CurrencyCNY
+	settings.PriceMultiplier = 1.0
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 标量 ¥1/¥4 → 12×1/1e6 + 8×4/1e6 = 0.000044。若误消费 tiers 会算出别的数。
+	const want = 0.000044
+	if d := logs[0].ChargeUsd - want; d > 1e-9 || d < -1e-9 {
+		t.Errorf("charge = %v, want %v(阶梯按首档标量计)", logs[0].ChargeUsd, want)
+	}
+	if logs[0].PriceWindow != "" {
+		t.Errorf("tiered 不该有 priceWindow, got %q", logs[0].PriceWindow)
 	}
 }
 
@@ -672,5 +857,66 @@ func TestE2ENoOfficialFallsBackToCost(t *testing.T) {
 	const want = 0.000112
 	if d := logs[0].ChargeUsd - want; d > 1e-9 || d < -1e-9 {
 		t.Fatalf("charge = %v, want %v(回落成本 × 倍率)", logs[0].ChargeUsd, want)
+	}
+}
+
+// TestE2EChannelRatioDefaultsToOne 未配系数的渠道按 1.0 计 —— 方向性选择:
+// 高估成本只会让毛利看起来偏低(你会去查),低估成本会伪造利润(你不会去查)。
+//
+// 但 1.0 必须**可被察觉**:CostQuote 会带 warn,管理面「成本」列以告警色显示「系数未设」。
+// 少了这个信号,用户看到的毛利会静默偏低而不知为何。
+func TestE2EChannelRatioDefaultsToOne(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("cc", domain.ProviderOpenAI, up.URL, "sk-cc", 1)
+	model := "claude-sonnet-5"
+	e.addModelOffer(model, chID, 1)
+
+	// 绑定官方价,但**不设任何系数行**。
+	e.bindOfficial(model, domain.ProviderAnthropic, "claude-sonnet-5-20250929", domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15,
+	})
+
+	// 计价币种 USD(与官方同币种,不需要汇率)—— 本测试要钉的是**系数缺行**的回落,
+	// 不该被「未设汇率」这条无关的回落盖过去。
+	settings, _ := e.st.GetSettings()
+	settings.DisplayCurrency = domain.CurrencyUSD
+	settings.PriceMultiplier = 1.0
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	// 直接点查热路径的取数口:无行必须报 ErrNotFound(而非悄悄返回 0 或 1.0)——
+	// 「缺行」与「配了 1.0」在业务上不同(后者是主动核对过的不折扣),
+	// 回落到 1.0 是**调用方**(costRatio)的判断,不是 store 的判断。
+	// 两者混起来会让「未设系数」这条 warn 再也发不出来。
+	_, err := e.st.ChannelVendorRatio(chID, domain.ProviderAnthropic)
+	if err != store.ErrNotFound {
+		t.Fatalf("ChannelVendorRatio err = %v, want ErrNotFound(缺行与配 1.0 必须可区分)", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 官方 $3/15,计价币种默认 USD(settings 未改),故派生可用 —— 走 official 档,
+	// 且系数按 1.0 计,于是成本 = 官方价原值。
+	if logs[0].CostSource != string(CostFromOfficial) {
+		t.Fatalf("costSource = %q, want official", logs[0].CostSource)
+	}
+	// 成本 (12×3 + 8×15)/1e6 = 0.000156。这是「按 1.0 计」的直接后果。
+	const wantCost = 0.000156
+	if d := logs[0].CostUsd - wantCost; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want %v(官方价 × 1.0)", logs[0].CostUsd, wantCost)
+	}
+	// 关键:成本不是 0 —— 0 会让毛利永远是假的 100%。
+	if logs[0].CostUsd <= 0 {
+		t.Errorf("成本 = %v,必须为正(0 会伪装成 100%% 毛利)", logs[0].CostUsd)
 	}
 }
