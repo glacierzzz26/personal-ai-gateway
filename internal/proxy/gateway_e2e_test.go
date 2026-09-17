@@ -859,3 +859,64 @@ func TestE2ENoOfficialFallsBackToCost(t *testing.T) {
 		t.Fatalf("charge = %v, want %v(回落成本 × 倍率)", logs[0].ChargeUsd, want)
 	}
 }
+
+// TestE2EChannelRatioDefaultsToOne 未配系数的渠道按 1.0 计 —— 方向性选择:
+// 高估成本只会让毛利看起来偏低(你会去查),低估成本会伪造利润(你不会去查)。
+//
+// 但 1.0 必须**可被察觉**:CostQuote 会带 warn,管理面「成本」列以告警色显示「系数未设」。
+// 少了这个信号,用户看到的毛利会静默偏低而不知为何。
+func TestE2EChannelRatioDefaultsToOne(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	chID := e.addChannel("cc", domain.ProviderOpenAI, up.URL, "sk-cc", 1)
+	model := "claude-sonnet-5"
+	e.addModelOffer(model, chID, 1)
+
+	// 绑定官方价,但**不设任何系数行**。
+	e.bindOfficial(model, domain.ProviderAnthropic, "claude-sonnet-5-20250929", domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15,
+	})
+
+	// 计价币种 USD(与官方同币种,不需要汇率)—— 本测试要钉的是**系数缺行**的回落,
+	// 不该被「未设汇率」这条无关的回落盖过去。
+	settings, _ := e.st.GetSettings()
+	settings.DisplayCurrency = domain.CurrencyUSD
+	settings.PriceMultiplier = 1.0
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	// 直接点查热路径的取数口:无行必须报 ErrNotFound(而非悄悄返回 0 或 1.0)——
+	// 「缺行」与「配了 1.0」在业务上不同(后者是主动核对过的不折扣),
+	// 回落到 1.0 是**调用方**(costRatio)的判断,不是 store 的判断。
+	// 两者混起来会让「未设系数」这条 warn 再也发不出来。
+	_, err := e.st.ChannelVendorRatio(chID, domain.ProviderAnthropic)
+	if err != store.ErrNotFound {
+		t.Fatalf("ChannelVendorRatio err = %v, want ErrNotFound(缺行与配 1.0 必须可区分)", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 官方 $3/15,计价币种默认 USD(settings 未改),故派生可用 —— 走 official 档,
+	// 且系数按 1.0 计,于是成本 = 官方价原值。
+	if logs[0].CostSource != string(CostFromOfficial) {
+		t.Fatalf("costSource = %q, want official", logs[0].CostSource)
+	}
+	// 成本 (12×3 + 8×15)/1e6 = 0.000156。这是「按 1.0 计」的直接后果。
+	const wantCost = 0.000156
+	if d := logs[0].CostUsd - wantCost; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want %v(官方价 × 1.0)", logs[0].CostUsd, wantCost)
+	}
+	// 关键:成本不是 0 —— 0 会让毛利永远是假的 100%。
+	if logs[0].CostUsd <= 0 {
+		t.Errorf("成本 = %v,必须为正(0 会伪装成 100%% 毛利)", logs[0].CostUsd)
+	}
+}
