@@ -9,6 +9,28 @@ import (
 
 func nowUTCForTest() time.Time { return time.Now().UTC() }
 
+// TestSettleRequestPersistsCostAudit 成本审计两列(迁移 m0012)必须落库并可读回:
+// 分时之后同一模型每天有两个成本价,没有这两列无法事后核对「那笔为什么按这个价记」。
+func TestSettleRequestPersistsCostAudit(t *testing.T) {
+	st := newTestStore(t)
+	tk, err := st.CreateToken("k", nil, "", []string{"*"}, 0, 60, nil, "sha-audit", "sk-gw-a…")
+	mustNoErr(t, err, "create token")
+
+	mustNoErr(t, st.SettleRequest(domain.LogRow{
+		TS: nowUTCForTest(), Model: "deepseek-flash", TokenID: tk.ID, TokenName: tk.Name,
+		Status: 200, CostUsd: 0.00026, ChargeUsd: 0.00156,
+		CostSource: "official", PriceWindow: "peak",
+	}, false), "settle")
+
+	items, _, err := st.ListLogs(LogFilter{}, 0)
+	mustNoErr(t, err, "list logs")
+	if len(items) != 1 {
+		t.Fatalf("logs = %+v", items)
+	}
+	mustEqual(t, items[0].CostSource, "official", "costSource 落库")
+	mustEqual(t, items[0].PriceWindow, "peak", "priceWindow 落库")
+}
+
 // TestSettleRequestChargesOwnerWallet 结算事务:落账 + 令牌累加 + 扣钱包 + 流水,原子完成。
 func TestSettleRequestChargesOwnerWallet(t *testing.T) {
 	st := newTestStore(t)

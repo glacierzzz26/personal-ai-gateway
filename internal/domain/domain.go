@@ -837,16 +837,21 @@ type PasswordResetReq struct {
 
 // LogItem GET /logs 的单条日志(展示用;ts 已换算成本地时区字符串)。
 type LogItem struct {
-	ID           int64   `json:"id"`
-	TS           string  `json:"ts"`
-	Model        string  `json:"model"`
-	ChannelName  string  `json:"channelName"`
-	TokenName    string  `json:"tokenName"`
-	InTokens     int     `json:"inTokens"`
-	OutTokens    int     `json:"outTokens"`
-	CacheRead    int     `json:"cacheReadTokens,omitempty"`
-	CostUsd      float64 `json:"costUsd"`   // 成本(你付上游)
-	ChargeUsd    float64 `json:"chargeUsd"` // 售价(客户付你);admin 视角下差额即毛利
+	ID          int64   `json:"id"`
+	TS          string  `json:"ts"`
+	Model       string  `json:"model"`
+	ChannelName string  `json:"channelName"`
+	TokenName   string  `json:"tokenName"`
+	InTokens    int     `json:"inTokens"`
+	OutTokens   int     `json:"outTokens"`
+	CacheRead   int     `json:"cacheReadTokens,omitempty"`
+	CostUsd     float64 `json:"costUsd"`   // 成本(你付上游)
+	ChargeUsd   float64 `json:"chargeUsd"` // 售价(客户付你);admin 视角下差额即毛利
+	// CostSource 成本口径:official(官方价×渠道系数)| offer(手填兜底)| unknown(无依据)。
+	// 空串 = 迁移前的历史行。见迁移 m0012。
+	CostSource string `json:"costSource,omitempty"`
+	// PriceWindow 峰谷档位:"peak" | "offpeak";非分时模型为空。见迁移 m0012。
+	PriceWindow  string  `json:"priceWindow,omitempty"`
 	FirstTokenMs int     `json:"firstTokenMs"`
 	TotalMs      int     `json:"totalMs"`
 	StatusCode   int     `json:"statusCode"`
@@ -872,6 +877,11 @@ type LogRow struct {
 	CacheRead    int
 	CostUsd      float64
 	ChargeUsd    float64
+	// CostSource 该笔成本的口径:official(官方价×渠道系数)| offer(手填兜底三价)| unknown。
+	// 见 proxy.CostSource —— 分时之后同一模型每天有两个成本价,没有这列无法事后核对账面。
+	CostSource string
+	// PriceWindow 该笔落在哪一档:"peak" | "offpeak"(非分时模型为空)。
+	PriceWindow  string
 	FirstTokenMs int
 	TotalMs      int
 	IP           string

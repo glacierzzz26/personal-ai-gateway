@@ -19,7 +19,6 @@ import (
 	"personal-ai-gateway/internal/auth"
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/engine"
-	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/proxy/translate"
 	"personal-ai-gateway/internal/store"
 )
@@ -381,7 +380,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 		}
 		if res.upErr != "" {
 			if clientGone(r.Context(), nil) {
-				g.logDisconnect(in, ch, at.Offer, time.Since(start).Milliseconds(), nil)
+				g.logDisconnect(in, plan, settings, ch, at.Offer, now, time.Since(start).Milliseconds(), nil)
 				return
 			}
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
@@ -434,30 +433,30 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 	total := time.Since(start).Milliseconds()
 	if firstErr == nil {
 		gateError(w, inProto, http.StatusBadGateway, "api_error", "all upstream channels failed")
-		g.logFailure(in, domain.ChannelRow{}, domain.OfferRead{}, http.StatusBadGateway,
+		g.logFailure(in, plan, settings, domain.ChannelRow{}, domain.OfferRead{}, now, http.StatusBadGateway,
 			total, nil, ptrStr("all upstream channels failed"))
 		return
 	}
 	if firstErr.upErr != "" {
 		gateError(w, inProto, http.StatusGatewayTimeout, "api_error", "upstream unavailable: "+firstErr.upErr)
-		g.logFailure(in, firstErr.channel, firstErr.offer, http.StatusGatewayTimeout,
+		g.logFailure(in, plan, settings, firstErr.channel, firstErr.offer, now, http.StatusGatewayTimeout,
 			total, nil, ptrStr("upstream unavailable: "+firstErr.upErr))
 		return
 	}
 	writeTranslatedError(w, inProto, OutProto(firstErr.channel.EgressProto), firstErr.status, firstErr.body)
-	g.logFailure(in, firstErr.channel, firstErr.offer, firstErr.status,
+	g.logFailure(in, plan, settings, firstErr.channel, firstErr.offer, now, firstErr.status,
 		total, &firstErr.ttfbMs, upstreamMsg(firstErr.status, firstErr.body))
 }
 
 // finish 落账+回写:非流成功路径。
 func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq, latencyMs int64, status int, outBody []byte, ch domain.ChannelRow, offer domain.OfferRead, plan *engine.Plan, tok translate.Usage, settings domain.Settings, start, now time.Time) {
-	charge, wallet := g.chargeUsd(in, plan, offer, tok, settings, now)
+	b := g.resolveBilling(in, plan, offer, now, settings, tok)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(outBody)
 	total := time.Since(start).Milliseconds()
 	// 回写优先于结算:客户端已拿到结果,账务失败不应再改状态码(只影响日志完整性)。
-	g.settle(in, ch, offer, status, tok, latencyMs, total, nil, charge, wallet)
+	g.settle(in, ch, status, tok, latencyMs, total, nil, b)
 }
 
 // —— 流式 ——
@@ -486,7 +485,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 		if res.upErr != "" {
 			// 客户端自己走了(按 Esc / 断网):不是渠道故障,别熔断健康渠道。
 			if clientGone(r.Context(), nil) {
-				g.logDisconnect(in, ch, at.Offer, time.Since(start).Milliseconds(), nil)
+				g.logDisconnect(in, plan, settings, ch, at.Offer, now, time.Since(start).Milliseconds(), nil)
 				return
 			}
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
@@ -511,18 +510,18 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 	total := time.Since(start).Milliseconds()
 	if firstErr == nil {
 		gateError(w, inProto, http.StatusBadGateway, "api_error", "all upstream channels failed")
-		g.logFailure(in, domain.ChannelRow{}, domain.OfferRead{}, http.StatusBadGateway,
+		g.logFailure(in, plan, settings, domain.ChannelRow{}, domain.OfferRead{}, now, http.StatusBadGateway,
 			total, nil, ptrStr("all upstream channels failed"))
 		return
 	}
 	if firstErr.upErr != "" {
 		gateError(w, inProto, http.StatusGatewayTimeout, "api_error", "upstream unavailable: "+firstErr.upErr)
-		g.logFailure(in, firstErr.channel, firstErr.offer, http.StatusGatewayTimeout,
+		g.logFailure(in, plan, settings, firstErr.channel, firstErr.offer, now, http.StatusGatewayTimeout,
 			total, nil, ptrStr("upstream unavailable: "+firstErr.upErr))
 		return
 	}
 	writeTranslatedError(w, inProto, OutProto(firstErr.channel.EgressProto), firstErr.status, firstErr.errBody)
-	g.logFailure(in, firstErr.channel, firstErr.offer, firstErr.status,
+	g.logFailure(in, plan, settings, firstErr.channel, firstErr.offer, now, firstErr.status,
 		total, nil, upstreamMsg(firstErr.status, firstErr.errBody))
 }
 
@@ -570,15 +569,15 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 	total := time.Since(start).Milliseconds()
 
 	if streamErr == nil {
-		charge, wallet := g.chargeUsd(in, plan, offer, tok, settings, now)
+		b := g.resolveBilling(in, plan, offer, now, settings, tok)
 		g.reason.Put(in.token.ID, cap) // 只在流正常收尾时记,半截流出错不污染下一轮
-		g.settle(in, ch, offer, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil, charge, wallet)
+		g.settle(in, ch, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil, b)
 		return
 	}
 
 	// 客户端侧断开优先判定:此时 ctx 已取消,底层错误裹的多半就是它。
 	if clientGone(r.Context(), streamErr) {
-		g.logDisconnect(in, ch, offer, total, &tok)
+		g.logDisconnect(in, plan, settings, ch, offer, now, total, &tok)
 		return
 	}
 	if tok.Prompt == 0 && tok.Completion == 0 && tok.CacheRead == 0 {
@@ -595,7 +594,11 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 	if !hw.wrote {
 		gateError(w, inProto, status, "api_error", msg)
 	}
-	g.settle(in, ch, offer, status, tok, res.firstTTFB.Milliseconds(), total, &msg, 0, false)
+	// 流中断:未完整交付,不向客户收费 —— charge 显式清零(既有商业规则,保持不变)。
+	// 成本照记且随分时档位浮动,这正是「成本与售价都分时」的覆盖范围。
+	b := g.resolveBilling(in, plan, offer, now, settings, tok)
+	b.Charge = 0
+	g.settle(in, ch, status, tok, res.firstTTFB.Milliseconds(), total, &msg, b)
 }
 
 // headWriter 记录「是否已向客户端写过字节」,用于判断中断能否补一个错误响应。
@@ -644,41 +647,6 @@ func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 	return pm(offer.InputPriceUsd, tok.Prompt) + pm(offer.OutputPriceUsd, tok.Completion) + pm(offer.CacheReadPriceUsd, tok.CacheRead)
 }
 
-// chargeUsd 算这一笔向客户收的钱(本站价)。
-//
-// 定价模型(PLAN.md §2):本站价 = 官方价 × 倍率 —— 官方价是厂商官网挂牌价,
-// 不是 model_offers 里的成本(成本是你付上游的钱,两者是两回事)。
-// 倍率取模型级 plan.RateOverride,缺省用全局 settings.PriceMultiplier(<=0 → 1.0)。
-// 倍率按模型定:同一模型对所有客户同一价,不再有用户级倍率(迁移 v9)。
-//
-// 官方价按模型级绑定 (vendor, model) 取(见 engine.Plan)。取不到时 —— 模型未绑定官方价、
-// 官方价未录入、或官方币种与计价币种不一致又没设汇率 —— 回落「成本 × 倍率」:
-// 没有官方锚的模型照常能计费,行为与改造前一致,不因缺官方价而漏收。
-//
-// 第二个返回值 wallet 表示是否要向归属客户扣钱包:只有 role=user 的归属才扣;
-// 站主自己(admin)与无归属 key 只记 charge 不扣钱 —— 它们天然免疫余额门禁。
-//
-// now 是计费基准时刻(调用方在请求入口取一次,见 forwardOnceNonStream):官方价按该时刻
-// 选峰/谷档,同一请求内恒定。传零值则等价于「不分时」,与改造前口径一致。
-func (g *Gateway) chargeUsd(in *inboundReq, plan *engine.Plan, offer domain.OfferRead, tok translate.Usage, settings domain.Settings, now time.Time) (charge float64, wallet bool) {
-	wallet = in.token.OwnerRole == domain.RoleUser
-	rate := settings.PriceMultiplier
-	if plan != nil && plan.RateOverride != nil {
-		rate = *plan.RateOverride
-	}
-	if rate <= 0 {
-		rate = 1.0
-	}
-	if official, ok := g.officialFor(plan); ok {
-		inPrice, outPrice, cachePrice, err := pricing.RetailPrice(official, now, settings.TZOffsetMin, settings.DisplayCurrency, settings.USDPerCNY, rate)
-		if err == nil {
-			pm := func(price float64, n int) float64 { return price * float64(n) / 1e6 }
-			return pm(inPrice, tok.Prompt) + pm(outPrice, tok.Completion) + pm(cachePrice, tok.CacheRead), wallet
-		}
-	}
-	return costUsd(offer, tok) * rate, wallet
-}
-
 // officialFor 取该模型绑定的官方价一行;未绑定或查不到时 ok=false(调用方回落成本口径)。
 func (g *Gateway) officialFor(plan *engine.Plan) (domain.OfficialPriceRow, bool) {
 	if plan == nil || plan.OfficialVendor == "" || plan.OfficialModelName == "" {
@@ -692,9 +660,17 @@ func (g *Gateway) officialFor(plan *engine.Plan) (domain.OfficialPriceRow, bool)
 }
 
 // settle 结算并落账:成本/售价 + 令牌累加 + 扣钱包,单事务(见 store.SettleRequest)。
-// wallet=true 表示这笔要向归属客户扣钱(仅成功路径;失败/中断路径 wallet=false,cost 仍记)。
-func (g *Gateway) settle(in *inboundReq, ch domain.ChannelRow, offer domain.OfferRead, status int, tok translate.Usage,
-	firstMs, totalMs int64, errMsg *string, charge float64, wallet bool) {
+//
+// 成本与售价都由调用方传入的 billing 定稿(见 resolveBilling)—— settle 不再自己重算成本:
+// 改造前它按 offer 标量重算,与 chargeUsd 走官方价的算法各算一套,分时之后必然漂移。
+// 失败/中断路径要的「已观测部分成本」由调用方先跑 resolveBilling 得到。
+//
+// b.Wallet=true 表示这笔要向归属客户扣钱(仅成功路径;失败/中断路径 Charge=0、Wallet=false)。
+func (g *Gateway) settle(in *inboundReq, ch domain.ChannelRow, status int, tok translate.Usage,
+	firstMs, totalMs int64, errMsg *string, b billing) {
+	if b.Warn != "" {
+		g.log.Warn("计费提示", "model", in.model, "channel", ch.Name, "costSource", string(b.CostSrc), "warn", b.Warn)
+	}
 	var errField *string
 	if logIsError(status) || errMsg != nil {
 		e := errMsg
@@ -719,13 +695,15 @@ func (g *Gateway) settle(in *inboundReq, ch domain.ChannelRow, offer domain.Offe
 		PromptTokens: tok.Prompt,
 		Completion:   tok.Completion,
 		CacheRead:    tok.CacheRead,
-		CostUsd:      costUsd(offer, tok),
-		ChargeUsd:    charge,
+		CostUsd:      b.Cost,
+		ChargeUsd:    b.Charge,
+		CostSource:   string(b.CostSrc),
+		PriceWindow:  b.Window,
 		FirstTokenMs: int(firstMs),
 		TotalMs:      int(totalMs),
 		IP:           in.ip,
 		Err:          errField,
-	}, wallet)
+	}, b.Wallet)
 }
 
 // ownerIDOf 令牌归属换算成日志冗余 owner_id(无归属 = 0)。
@@ -738,23 +716,32 @@ func ownerIDOf(t domain.TokenRow) int64 {
 
 // logFailure 全候选失败(或网关内部错)时的失败账:供用量/错误率/渠道健康统计。
 // 失败不产生 charge、不扣钱包(cost 仍记,供成本核算)。
-func (g *Gateway) logFailure(in *inboundReq, ch domain.ChannelRow, offer domain.OfferRead, status int, totalMs int64, firstMs *int64, msg *string) {
+//
+// 成本由本函数自行解析:失败路径也可能已观测到部分用量,且成本要随分时档位浮动。
+// 候选为零值 OfferRead{} 时自然得 Cost=0 / CostSrc=unknown。
+func (g *Gateway) logFailure(in *inboundReq, plan *engine.Plan, settings domain.Settings,
+	ch domain.ChannelRow, offer domain.OfferRead, at time.Time, status int, totalMs int64, firstMs *int64, msg *string) {
 	var ft int64
 	if firstMs != nil {
 		ft = *firstMs
 	}
-	g.settle(in, ch, offer, status, translate.Usage{}, ft, totalMs, msg, 0, false)
+	b := g.resolveBilling(in, plan, offer, at, settings, translate.Usage{})
+	b.Charge = 0 // 失败不收费
+	g.settle(in, ch, status, translate.Usage{}, ft, totalMs, msg, b)
 }
 
 // logDisconnect 客户端主动断开(Claude Code 按 Esc / 关窗 / 网络掉):单列一条账,
 // 不写 err 字段、状态码用 499,让聚合口径把它排除在「错误率」之外 —— 它不是任何一方的故障。
-// 中断仍对其已观测用量记成本,但不产生 charge(未完整交付,不向客户收费)。
-func (g *Gateway) logDisconnect(in *inboundReq, ch domain.ChannelRow, offer domain.OfferRead, totalMs int64, tok *translate.Usage) {
+// 中断仍对其已观测用量记成本(且随分时档位浮动),但不产生 charge(未完整交付,不向客户收费)。
+func (g *Gateway) logDisconnect(in *inboundReq, plan *engine.Plan, settings domain.Settings,
+	ch domain.ChannelRow, offer domain.OfferRead, at time.Time, totalMs int64, tok *translate.Usage) {
 	var t translate.Usage
 	if tok != nil {
 		t = *tok
 	}
-	g.settle(in, ch, offer, domain.StatusClientClosed, t, 0, totalMs, nil, 0, false)
+	b := g.resolveBilling(in, plan, offer, at, settings, t)
+	b.Charge = 0 // 未完整交付,不收费
+	g.settle(in, ch, domain.StatusClientClosed, t, 0, totalMs, nil, b)
 }
 
 // logIsError 一条日志是否算「错误」:客户端断开(499)不计入。
