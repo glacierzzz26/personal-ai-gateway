@@ -134,7 +134,7 @@ func parseDeepSeek(body []byte) ([]quote, domain.Currency, domain.BillingShape, 
 			CacheRead:  off[i].inCache,
 			NativeText: fmt.Sprintf("空闲 %s | 高峰 %s", nativeOff[i], nativePeak[i]),
 			Detail: map[string]any{
-				"peakHours": "北京时间周一至周五 9:00-12:00、14:00-18:00(其余为空闲时段)",
+				"peakHours": legacyDeepSeekPeakHours,
 				"peak": map[string]any{
 					"in": peak[i].in, "out": peak[i].out, "cacheRead": peak[i].inCache,
 				},
@@ -142,7 +142,10 @@ func parseDeepSeek(body []byte) ([]quote, domain.Currency, domain.BillingShape, 
 					"in": off[i].in, "out": off[i].out, "cacheRead": off[i].inCache,
 				},
 				"effectiveDefault": "offpeak",
-				"note":             "峰谷分时:网关按单一价计费,应用时取空闲价",
+				"note":             "峰谷分时:计费按请求时刻自动选峰/谷价(成本与售价同步浮动)",
+				// windows 是 peakHours 的机器可读版本,供计费分时选价(见 window.go)。
+				// peakHours 中文串保留不动:展示面仍用它,且旧库行的迁移靠它精确匹配。
+				"windows": windowsToAny(legacyDeepSeekWindows()),
 			},
 		})
 	}

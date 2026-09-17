@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -58,6 +59,27 @@ func TestParseDeepSeekOfficialSample(t *testing.T) {
 	mustClose(t, "peak.out", toF(peak["out"]), 8)
 	if flash.Detail["effectiveDefault"] != "offpeak" {
 		t.Errorf("effectiveDefault = %v, want offpeak", flash.Detail["effectiveDefault"])
+	}
+	// windows 是 peakHours 的机器可读版本,供计费分时选价。必须存在且可还原。
+	ws, ok := WindowsFromDetail(flash.Detail, domain.ShapePeakOff)
+	if !ok {
+		t.Fatalf("windows 缺失或不可解析: %+v", flash.Detail["windows"])
+	}
+	want := legacyDeepSeekWindows()
+	if len(ws) != len(want) {
+		t.Fatalf("windows 条数 = %d, want %d: %+v", len(ws), len(want), ws)
+	}
+	for i := range want {
+		if ws[i].Start != want[i].Start || ws[i].End != want[i].End || ws[i].TZOffsetMin != want[i].TZOffsetMin {
+			t.Errorf("windows[%d] = %+v, want %+v", i, ws[i], want[i])
+		}
+		if !reflect.DeepEqual(ws[i].Days, want[i].Days) {
+			t.Errorf("windows[%d].Days = %v, want %v", i, ws[i].Days, want[i].Days)
+		}
+	}
+	// 向后兼容:中文 peakHours 必须仍在(展示面仍用它,旧库行的映射也靠它精确匹配)。
+	if flash.Detail["peakHours"] != legacyDeepSeekPeakHours {
+		t.Errorf("peakHours = %v, want 中文原串保留", flash.Detail["peakHours"])
 	}
 }
 

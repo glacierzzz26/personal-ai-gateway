@@ -1,6 +1,8 @@
 package server
 
 import (
+	"time"
+
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/pricing"
 )
@@ -70,7 +72,9 @@ func (s *Server) userModelsList(allowed []string) ([]UserModelView, error) {
 		}
 		if q, err := s.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
 			cur := string(settings.DisplayCurrency)
-			in, outP, cache, err := pricing.RetailPrice(q, settings.DisplayCurrency, settings.USDPerCNY, rate)
+			// at 取「此刻」:目录展示答的是「现在买多少钱」(与计费按请求时刻选价语义不同,但都对)。
+			// 分时模型这里只落当前档零售价;峰谷两档的并列展示见 P5 的 UserPrice.Peak。
+			in, outP, cache, err := pricing.RetailPrice(q, time.Now(), settings.TZOffsetMin, settings.DisplayCurrency, settings.USDPerCNY, rate)
 			if err != nil {
 				v.PriceNote = "官方价币种与计价币种不一致，请管理员在【系统设置】填写汇率后显示"
 			} else {

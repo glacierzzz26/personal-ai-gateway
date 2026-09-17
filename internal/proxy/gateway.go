@@ -356,7 +356,11 @@ func (g *Gateway) attemptEnv(at engine.Attempt) (domain.ChannelRow, bool) {
 // —— 非流 ——
 
 func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, settings domain.Settings, inProto string) {
+	// start 是墙钟,只喂 time.Since 做耗时统计;now 是计费基准时刻,可注入以测分时选价。
+	// 两者刻意分开:把 start 换成 g.nowFn() 会让 first_token_ms/total_ms 在测试里归零。
+	// (命名避让下面的 for at := range plan.Attempts —— 同名的 at 会被遮蔽。)
 	start := time.Now()
+	now := g.nowFn()
 	var firstErr *attemptResult // 兜底展示(保留首个错误)
 	for _, at := range plan.Attempts {
 		ch, ok := g.attemptEnv(at)
@@ -423,7 +427,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			// 只在成功且翻译通过时记,供下一轮 a2o 回填 reasoning_content。
 			g.reason.Put(in.token.ID, cap)
 		}
-		g.finish(w, r, in, res.ttfbMs, res.status, outBody, ch, at.Offer, plan, tok, settings, start)
+		g.finish(w, r, in, res.ttfbMs, res.status, outBody, ch, at.Offer, plan, tok, settings, start, now)
 		return
 	}
 	// 全候选失败:回错误前也落一条失败账(供用量/错误率/渠道健康统计)。
@@ -446,8 +450,8 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 }
 
 // finish 落账+回写:非流成功路径。
-func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq, latencyMs int64, status int, outBody []byte, ch domain.ChannelRow, offer domain.OfferRead, plan *engine.Plan, tok translate.Usage, settings domain.Settings, start time.Time) {
-	charge, wallet := g.chargeUsd(in, plan, offer, tok, settings)
+func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq, latencyMs int64, status int, outBody []byte, ch domain.ChannelRow, offer domain.OfferRead, plan *engine.Plan, tok translate.Usage, settings domain.Settings, start, now time.Time) {
+	charge, wallet := g.chargeUsd(in, plan, offer, tok, settings, now)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(outBody)
@@ -460,6 +464,7 @@ func (g *Gateway) finish(w http.ResponseWriter, r *http.Request, in *inboundReq,
 
 func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inboundReq, plan *engine.Plan, settings domain.Settings, inProto string) {
 	start := time.Now()
+	now := g.nowFn() // 计费基准时刻(与 start 分开,见 forwardOnceNonStream 说明)
 	var firstErr *streamOutcome
 	for _, at := range plan.Attempts {
 		ch, ok := g.attemptEnv(at)
@@ -500,7 +505,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 		}
 		// 200:开始向客户端回推;中途失败无法再换渠道。
 		g.eng.RecordSuccess(ch.ID, res.firstTTFB.Milliseconds())
-		g.streamFrom(w, r, in, res, ch, at.Offer, plan, inProto, outProto, settings, start)
+		g.streamFrom(w, r, in, res, ch, at.Offer, plan, inProto, outProto, settings, start, now)
 		return
 	}
 	total := time.Since(start).Milliseconds()
@@ -530,7 +535,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 //
 // 中断时拿不到权威 usage,但上游已生成并计费了这部分 token,故用本地估算兜底落账
 // (只对已观测到的部分计费),否则网关账面上的成本会系统性偏低。
-func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inboundReq, res *streamOutcome, ch domain.ChannelRow, offer domain.OfferRead, plan *engine.Plan, inProto, outProto string, settings domain.Settings, start time.Time) {
+func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inboundReq, res *streamOutcome, ch domain.ChannelRow, offer domain.OfferRead, plan *engine.Plan, inProto, outProto string, settings domain.Settings, start, now time.Time) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	hw := &headWriter{ResponseWriter: w}
@@ -565,7 +570,7 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 	total := time.Since(start).Milliseconds()
 
 	if streamErr == nil {
-		charge, wallet := g.chargeUsd(in, plan, offer, tok, settings)
+		charge, wallet := g.chargeUsd(in, plan, offer, tok, settings, now)
 		g.reason.Put(in.token.ID, cap) // 只在流正常收尾时记,半截流出错不污染下一轮
 		g.settle(in, ch, offer, http.StatusOK, tok, res.firstTTFB.Milliseconds(), total, nil, charge, wallet)
 		return
@@ -652,7 +657,10 @@ func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 //
 // 第二个返回值 wallet 表示是否要向归属客户扣钱包:只有 role=user 的归属才扣;
 // 站主自己(admin)与无归属 key 只记 charge 不扣钱 —— 它们天然免疫余额门禁。
-func (g *Gateway) chargeUsd(in *inboundReq, plan *engine.Plan, offer domain.OfferRead, tok translate.Usage, settings domain.Settings) (charge float64, wallet bool) {
+//
+// now 是计费基准时刻(调用方在请求入口取一次,见 forwardOnceNonStream):官方价按该时刻
+// 选峰/谷档,同一请求内恒定。传零值则等价于「不分时」,与改造前口径一致。
+func (g *Gateway) chargeUsd(in *inboundReq, plan *engine.Plan, offer domain.OfferRead, tok translate.Usage, settings domain.Settings, now time.Time) (charge float64, wallet bool) {
 	wallet = in.token.OwnerRole == domain.RoleUser
 	rate := settings.PriceMultiplier
 	if plan != nil && plan.RateOverride != nil {
@@ -662,7 +670,7 @@ func (g *Gateway) chargeUsd(in *inboundReq, plan *engine.Plan, offer domain.Offe
 		rate = 1.0
 	}
 	if official, ok := g.officialFor(plan); ok {
-		inPrice, outPrice, cachePrice, err := pricing.RetailPrice(official, settings.DisplayCurrency, settings.USDPerCNY, rate)
+		inPrice, outPrice, cachePrice, err := pricing.RetailPrice(official, now, settings.TZOffsetMin, settings.DisplayCurrency, settings.USDPerCNY, rate)
 		if err == nil {
 			pm := func(price float64, n int) float64 { return price * float64(n) / 1e6 }
 			return pm(inPrice, tok.Prompt) + pm(outPrice, tok.Completion) + pm(cachePrice, tok.CacheRead), wallet
