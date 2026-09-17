@@ -23,7 +23,10 @@ export function setUnauthorizedHandler(h: UnauthorizedHandler | null) { onUnauth
 
 interface ApiErrorBody { error?: { type?: string; message?: string } }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** 可选请求参数。timeoutMs 仅用于少数慢接口(批量重抓官方价要逐个厂商出网)。 */
+export interface RequestOpts { timeoutMs?: number }
+
+async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
   const init: RequestInit = {
     method,
     credentials: 'include',
@@ -33,6 +36,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     init.headers = { ...init.headers, 'Content-Type': 'application/json' };
     init.body = JSON.stringify(body);
   }
+  // 不设超时则沿用浏览器默认(通常无限)。批量重抓必须设:后端逐厂商各 45s,前端早断
+  // 会让人以为「点了没反应」,而请求其实还在跑。
+  if (opts?.timeoutMs) init.signal = AbortSignal.timeout(opts.timeoutMs);
   const resp = await fetch(baseURL + path, init);
   const text = await resp.text();
   let data: unknown = null;
@@ -50,7 +56,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const http = {
   get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
+  post: <T>(path: string, body?: unknown, opts?: RequestOpts) => request<T>('POST', path, body, opts),
   patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),

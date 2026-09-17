@@ -18,7 +18,97 @@ import { capabilities as ALL_CAPS } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
 import { channelLabel, channelMark } from '@/utils/channel';
 import type { EChartsOption } from 'echarts';
-import type { Capability, Channel, ModelCatalogItem, ModelDraft, ModelOffer, OfferDraft } from '@/types';
+import type { Capability, Channel, ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft } from '@/types';
+
+/* —— 成本 / 本站价 / 毛利 三列 ——
+ *
+ * 这三列是同一个问题的三个切面。计费侧:
+ *   - 成本  = 官方价 × 渠道系数 ratio (绑定官方价时) / offer 手填三价 (未绑定)
+ *   - 本站价 = 官方价 × 倍率 rate
+ *   - 毛利  = 1 − 成本/售价 = 1 − ratio/rate   (官方价在分子分母里约掉了)
+ *
+ * 最要命的失败模式是把「成本未知」渲染成 0 —— 那会让 91 个无成本依据的模型全都显示毛利率 100%,
+ * 而它们在改造前正是这么显示的(成本被当成 0)。source === 'unknown' 是这一点的显式表达,三列都必须认它。
+ */
+
+/** 成本列:派生值 + 口径标注(官方派生 / 手填兜底 / 未知)。 */
+function CostCell({ r }: { r: ModelOffer }) {
+  const c = r.cost;
+  if (!c || c.source === 'unknown') {
+    return (
+      <Tooltip title="未绑定官方价,且该供给源三价为空 —— 没有成本依据。到「官方定价」页把模型绑定到官方价,或手工填兜底价。">
+        <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>未知</span>
+      </Tooltip>
+    );
+  }
+  const derived = c.source === 'official';
+  return (
+    <Tooltip
+      title={
+        <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+          <div>输入 {fmt.price(c.in)} · 输出 {fmt.price(c.out)}{c.cacheRead ? ` · 缓存 ${fmt.price(c.cacheRead)}` : ''}</div>
+          {derived
+            ? <div>官方价 × {c.ratio}{c.ratio === 1 ? '(未设系数,按 1.0 计 —— 会高估成本)' : `(${c.vendor} 渠道系数)`}</div>
+            : <div>手填兜底价(未绑定官方价)</div>}
+          {c.warn && <div style={{ color: 'var(--gw-warn)' }}>{c.warn}</div>}
+        </div>
+      }
+    >
+      <span className="gw-num" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+        <span>{fmt.price(c.in)}</span>
+        <span style={{ fontSize: 11, color: derived && c.ratio === 1 ? 'var(--gw-warn)' : 'var(--gw-text-3)' }}>
+          {derived ? (c.ratio === 1 ? '系数未设' : `官方×${c.ratio}`) : '手填'}
+        </span>
+      </span>
+    </Tooltip>
+  );
+}
+
+/** 本站价列 = 官方价 × 倍率(与计费同源)。 */
+function RetailCell({ r, rate }: { r: ModelOffer; rate: number }) {
+  const c = r.cost;
+  if (!c || c.source === 'unknown') {
+    return (
+      <Tooltip title="无成本依据,本站价无从对照。左列三价是该供给源手填值。">
+        <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{fmt.price(r.inputPriceUsd)}</span>
+      </Tooltip>
+    );
+  }
+  // 派生:售价 = 官方价 × rate = 成本 ÷ ratio × rate。
+  // 兜底:计费走「成本 × rate」,故直接成本 × rate。
+  const retail = c.source === 'official'
+    ? c.in * (rate / (c.ratio || 1))
+    : c.in * rate;
+  return (
+    <Tooltip title={c.source === 'official'
+      ? `官方价 × 倍率 ${rate}`
+      : `手填成本 × 倍率 ${rate}(未绑定官方价,计费走成本×倍率)`}>
+      <span className="gw-num">{fmt.price(retail)}</span>
+    </Tooltip>
+  );
+}
+
+/** 毛利列 = 1 − 成本/售价。**成本未知时一律不显示** —— 那会伪装成 100% 毛利。 */
+function MarginCell({ r, rate }: { r: ModelOffer; rate: number }) {
+  const c = r.cost;
+  if (!c || c.source === 'unknown') {
+    return (
+      <Tooltip title="没有成本依据,算不出毛利。显示 0 或 100% 都是假的。">
+        <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>—</span>
+      </Tooltip>
+    );
+  }
+  const ratio = c.source === 'official' ? (c.ratio || 1) : 1;
+  // 官方价在 1 − 成本/售价 里约掉了,于是只剩系数与倍率;兜底口径的等价形式是 1 − 1/rate。
+  const m = 1 - ratio / (rate || 1);
+  return (
+    <Tooltip title={c.source === 'official'
+      ? `毛利 = 1 − 系数/倍率 = 1 − ${ratio}/${rate}`
+      : `毛利 = 1 − 1/倍率 = 1 − 1/${rate}(成本为手填值,精确度取决于手填价)`}>
+      <span className="gw-num" style={{ color: m < 0 ? 'var(--gw-err)' : undefined }}>{fmt.pct(m, 1)}</span>
+    </Tooltip>
+  );
+}
 
 interface Props {
   model: ModelCatalogItem | null;
@@ -267,6 +357,12 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   // 全局倍率:作「留空即跟随全局」的参照文案,只读展示,不在此处改动。
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const globalRate = settings?.priceMultiplier ?? 1;
+  /**
+   * 本模型在计费时的实际倍率:模型级覆盖优先,否则跟随全局。
+   * 与 proxy 侧 `rate = plan.RateOverride ?? settings.PriceMultiplier ?? 1.0` 同序,
+   * 否则管理面看到的毛利与实收对不上。倍率挂模型上,同一模型的所有供给源共用。
+   */
+  const rate = model?.rateOverride ?? globalRate;
   const usageQuery = useQuery({
     queryKey: ['model-usage', model?.id, 7],
     queryFn: () => api.getModelUsage(model!.id, 7),
@@ -465,6 +561,20 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
     },
     {
+      // 成本与本站价都贴着左边三列(手填报价)读 —— 他们回答的是同一个问题:
+      // 「这行数字是手填的还是派生的,本站价定得合不合理」。
+      title: '成本', key: 'cost', align: 'right',
+      render: (_, r) => <CostCell r={r} />,
+    },
+    {
+      title: '本站价', key: 'retail', align: 'right',
+      render: (_, r) => <RetailCell r={r} rate={rate} />,
+    },
+    {
+      title: '毛利', key: 'margin', align: 'right',
+      render: (_, r) => <MarginCell r={r} rate={rate} />,
+    },
+    {
       title: '延迟', dataIndex: 'latencyMs', align: 'right',
       render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span>,
     },
@@ -605,8 +715,10 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   };
 
   const totalChReq = byChannel.reduce((a, b) => a + b.requests, 0);
+  const totalChCost = byChannel.reduce((a, b) => a + b.costUsd, 0);
+  const totalChCharge = byChannel.reduce((a, b) => a + b.chargeUsd, 0);
 
-  const byChannelCols: ColumnsType<{ channelName: string; requests: number; costUsd: number }> = [
+  const byChannelCols: ColumnsType<ModelUsageData['byChannel'][number]> = [
     {
       title: '渠道', dataIndex: 'channelName',
       render: v => <b style={{ fontWeight: 500 }}>{v}</b>,
@@ -616,8 +728,44 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       render: v => <span className="gw-num">{fmt.n(v)}</span>,
     },
     {
-      title: '花费', dataIndex: 'costUsd', align: 'right',
-      render: v => <span className="gw-num">{fmt.usd(v)}</span>,
+      title: '成本', dataIndex: 'costUsd', align: 'right',
+      render: v => (
+        <Tooltip title={totalChCost ? `占本模型成本 ${((v / totalChCost) * 100).toFixed(1)}%` : undefined}>
+          <span className="gw-num">{fmt.usd(v)}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      // 营收 = 实际向客户收的钱。历史窗口里站主自用的行 charge_usd=0(未计费),
+      // 与成本并列时毛利会显得是负的 —— 毛利列对这种情况显式标注「含未计费流量」。
+      title: '营收', dataIndex: 'chargeUsd', align: 'right',
+      render: (v, r) => (
+        <span className="gw-num">
+          {fmt.usd(v)}
+          {v === 0 && r.costUsd > 0 && (
+            <Tooltip title="该渠道本时段没有计费收入(站主自用流量不计费,或历史数据早于计费改造)">
+              <span style={{ color: 'var(--gw-warn)', marginLeft: 4 }}>*</span>
+            </Tooltip>
+          )}
+        </span>
+      ),
+    },
+    {
+      title: '毛利', key: 'margin', align: 'right',
+      render: (_, r) => {
+        if (r.costUsd <= 0) {
+          return <Tooltip title="该渠道无成本依据(未绑官方价且手填三价为空),算不出毛利。"><span style={{ color: 'var(--gw-text-3)' }}>—</span></Tooltip>;
+        }
+        const m = (r.chargeUsd - r.costUsd) / r.chargeUsd;
+        if (r.chargeUsd <= 0) {
+          return <Tooltip title="无营收,无法算毛利率(成本仍照记)。"><span style={{ color: 'var(--gw-text-3)' }}>—</span></Tooltip>;
+        }
+        return (
+          <Tooltip title={`毛利 = (营收 ${fmt.usd(r.chargeUsd)} − 成本 ${fmt.usd(r.costUsd)}) / 营收`}>
+            <span className="gw-num" style={{ color: m < 0 ? 'var(--gw-err)' : undefined }}>{fmt.pct(m, 1)}</span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: '占比', key: 'share', align: 'right',
@@ -639,6 +787,9 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       ),
     },
   ];
+
+  /** 本模型本时段的合计:成本 / 营收 / 毛利,与按渠道表同源(求和即得)。 */
+  const periodMargin = totalChCharge > 0 ? (totalChCharge - totalChCost) / totalChCharge : null;
 
   const overviewStats: [string, string][] = [
     ['今日调用', fmt.k(model?.todayRequests ?? 0)],
@@ -912,7 +1063,21 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                     <Card title="近 7 日趋势" style={{ marginBottom: 16 }}>
                       <Chart option={dailyOption} height={260} />
                     </Card>
-                    <Card title="按渠道用量">
+                    <Card
+                      title="按渠道用量"
+                      extra={
+                        // 合计行口径与表内一致:有营收时给毛利率,无营收时不给(算出来是 −∞ 或 100%,都没意义)。
+                        totalChCharge > 0 ? (
+                          <span style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>
+                            本时段 成本 <b className="gw-num">{fmt.usd(totalChCost)}</b> · 营收{' '}
+                            <b className="gw-num">{fmt.usd(totalChCharge)}</b> · 毛利{' '}
+                            <b className="gw-num" style={{ color: (periodMargin ?? 0) < 0 ? 'var(--gw-err)' : undefined }}>
+                              {fmt.pct(periodMargin ?? 0, 1)}
+                            </b>
+                          </span>
+                        ) : null
+                      }
+                    >
                       {byChannel.length ? (
                         <Table
                           rowKey="channelName"

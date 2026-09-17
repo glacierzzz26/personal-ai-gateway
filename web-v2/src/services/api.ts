@@ -7,10 +7,12 @@
  */
 import type {
   AdminMe, BalanceLogItem, BalanceResp, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
+  CostRatioInput, CostRatioRow,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   AnnouncementDraft, AnnouncementItem,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
-  OverviewData, CustomerFocusData, Provider, RequestLogItem, RouteRule, RuleDraft, Settings, StatRangeQuery, SyncResult,
+  OverviewData, CustomerFocusData, Provider, RefreshPricingResp, RequestLogItem, RouteRule, RuleDraft, Settings,
+  StatRangeQuery, SyncResult,
   TokenCreateResult,
   TokenDraft, TokenProbeResp, UsageDim, UsageRow, UserAccount, UserModelItem,
 } from '@/types';
@@ -18,6 +20,30 @@ import { http } from './http';
 
 /** 后端返回的 0..100 → UI 的 0..1 */
 const frac = (pct: number): number => (pct == null ? 0 : pct / 100);
+
+/** 批量重抓的前端超时:后端逐厂商各 45s,留足余量(见 http.RequestOpts)。 */
+export const REFRESH_TIMEOUT_MS = 120_000;
+
+/**
+ * 成本系数建议值:credit 型套餐的折扣率。
+ *
+ * 刻意只做「建议」不做「落库」—— $10 买 $60 是商业事实不是 schema 事实,
+ * 各环境(测试库/生产库)渠道 id 不同,迁移 seed 业务数据是错的。改为新建系数行时
+ * 预填 + 要人点确认。
+ */
+export const SUGGESTED_RATIOS: { match: RegExp; vendor: Provider; ratio: number; note: string }[] = [
+  { match: /command\s*code/i, vendor: 'DeepSeek' as Provider, ratio: 1 / 6, note: '$10 买 $60 额度' },
+];
+
+/** 按渠道类型/名给出建议系数(命中才返回;空 = 无建议,不预填)。 */
+export function suggestedRatio(channelType: string | undefined, vendor: Provider):
+  { ratio: number; note: string } | null {
+  if (!channelType) return null;
+  for (const s of SUGGESTED_RATIOS) {
+    if (s.match.test(channelType) && s.vendor === vendor) return { ratio: s.ratio, note: s.note };
+  }
+  return null;
+}
 
 function ch(x: Channel): Channel { return { ...x, successRate: frac(x.successRate) }; }
 function offer(o: ModelOffer): ModelOffer { return { ...o, successRate: frac(o.successRate) }; }
@@ -107,6 +133,26 @@ export const api = {
   /** 渠道额度(上游 GET {{apiRoot}}/v1/usage);仅 OpenAI 协议渠道会查询 */
   channelQuota(id: number): Promise<ChannelQuota> { return http.get(`/channels/${id}/quota`); },
   syncModels(id: number): Promise<SyncResult> { return http.post(`/channels/${id}/sync-models`); },
+
+  /* —— 渠道 × 厂商 成本系数(成本 = 厂商官方价 × ratio) —— */
+  //
+  // 独立端点而非并入 ChannelDraft:渠道 PATCH 是整体覆盖语义,系数混进去会被
+  // 「改个渠道名」误清空。详见迁移 m0012。
+  /**
+   * 本渠道的系数行(只含显式配置过的;未配的厂商不在列表里,计费按 1.0)。
+   * **勿据此渲染全部厂商** —— 要列全厂商请配 officialVendors()。
+   */
+  channelCostRatios(id: number): Promise<CostRatioRow[]> {
+    return http.get(`/channels/${id}/cost-ratios`);
+  },
+  /** 全量替换本渠道的系数行:未回传的厂商即被删除(不是合并) */
+  replaceChannelCostRatios(id: number, ratios: CostRatioInput[]): Promise<CostRatioRow[]> {
+    return http.put(`/channels/${id}/cost-ratios`, { ratios });
+  },
+  /** 删除一条系数(退回默认 1.0);该行不存在时后端 404 */
+  deleteChannelCostRatio(id: number, vendor: Provider): Promise<unknown> {
+    return http.del(`/channels/${id}/cost-ratios${qs({ vendor })}`);
+  },
 
   /* —— 模型广场 —— */
   async getModels(): Promise<ModelCatalogItem[]> {
@@ -221,6 +267,20 @@ export const api = {
   },
   /** 删除一条官方参考价(已应用到 offer 的价与留证不受影响) */
   deleteOfficialPrice(id: number): Promise<unknown> { return http.del(`/official-prices/${id}`); },
+  /**
+   * 批量重抓官方价并回填模型绑定。providers 为空 = 全部可抓厂商。
+   *
+   * 逐厂商独立成败:某厂商失败只记在它自己的结果里,不影响其他厂商 —— 所以整请求
+   * 仍是 200,前端要看 `results[].error` 才知道谁失败。
+   *
+   * ⚠️ 抓取有破坏性:内部会删掉官网已下架、页面上不再列出的模型行。
+   *
+   * 超时前端必须放宽到 120s:后端逐厂商各占 45s,浏览器默认早断会让人以为「点了没反应」。
+   */
+  refreshOfficialPrices(providers?: Provider[]): Promise<RefreshPricingResp> {
+    return http.post<RefreshPricingResp>('/official-prices/refresh', { providers: providers ?? [] },
+      { timeoutMs: REFRESH_TIMEOUT_MS });
+  },
 
   /* —— 令牌 —— */
   getTokens(): Promise<GatewayToken[]> { return http.get('/tokens'); },

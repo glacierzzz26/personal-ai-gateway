@@ -13,7 +13,7 @@ import type {
   BillingShape, ModelCatalogItem, ModelOffer, OfficialPriceView, Provider,
 } from '@/types';
 
-/** 计费形态标签。分时/阶梯/折扣必须显式标注 —— 网关按单一价计费。 */
+/** 计费形态标签。分时/阶梯/折扣必须显式标注 —— 计费按请求时刻选档,展示列的是「生效默认」档。 */
 const SHAPE_LABEL: Record<BillingShape, string> = {
   flat: '单一价',
   peak_offpeak: '峰谷分时',
@@ -29,8 +29,9 @@ interface Props {
 }
 
 /**
- * 官方参考价面板:展示该模型各渠道 provider 的官方单价,与本渠道报价并列比对,
- * 支持「指定官方价来源」「应用官方价」「手工录入」。官方价与手工报价分表,应用是显式动作。
+ * 官方参考价面板:展示该模型各渠道供应商的官方单价,与本渠道报价并列比对,
+ * 支持「指定官方价来源」「绑定到模型」「手工录入」。官方价与供给源报价分表,
+ * 绑定是显式动作 —— 而绑定之后,成本与售价都由官方价现算派生。
  */
 export default function OfficialPricePanel({ model, offers }: Props) {
   const { message, modal } = App.useApp();
@@ -82,10 +83,18 @@ export default function OfficialPricePanel({ model, offers }: Props) {
 
   const apply = useMutation({
     mutationFn: (v: { opId: number; offerId: number }) => api.applyOfficialPrice(v.opId, v.offerId, true),
-    onSuccess: () => { message.success('已应用官方价'); invalidate(); },
-    onError: (e) => message.error((e as Error)?.message || '应用失败'),
+    onSuccess: () => { message.success('已绑定到模型'); invalidate(); },
+    onError: (e) => message.error((e as Error)?.message || '绑定失败'),
   });
 
+  /**
+   * 「绑定到模型」—— 界面形状不变(仍是每行一个按钮),但动效在成本改造后变了:
+   *
+   * 改造前它把官方价**写进该 offer 的三价**,而那正是「成本 = 官方挂牌价」这个 bug 的来源
+   * (生产里模型 20 的 1.0/4.0/0.02 就是这么来的)。现在成本 = 官方价 × 渠道系数,是现算的,
+   * 真正让成本生效的动作是写 models.official_vendor/official_model_name —— 即本按钮。
+   * 后端顺带把三价快照进该模型全部 offer,仅作派生不可用时的兜底。
+   */
   function handleApply(o: ModelOffer, op: OfficialPriceView) {
     if (!op.rateSet) {
       message.warning(
@@ -97,8 +106,8 @@ export default function OfficialPricePanel({ model, offers }: Props) {
     if (o.overridePrice) {
       modal.confirm({
         title: '该供给源已手工覆盖报价',
-        content: `应用官方价会覆盖 ${o.channelName} 当前的手工报价(${fmt.price(o.inputPriceUsd)} / ${fmt.price(o.outputPriceUsd)})。是否继续?`,
-        okText: '仍要应用',
+        content: `绑定后该模型全部供给源的成本改由官方价派生,${o.channelName} 的手工兜底价(${fmt.price(o.inputPriceUsd)} / ${fmt.price(o.outputPriceUsd)})会被快照覆盖。是否继续?`,
+        okText: '仍要绑定',
         okButtonProps: { danger: true },
         cancelText: '取消',
         onOk: run,
@@ -156,7 +165,7 @@ export default function OfficialPricePanel({ model, offers }: Props) {
       title: '形态', key: 'shape', width: 96,
       render: (_, { op }) =>
         op ? (
-          <Tooltip title={op.billingShape === 'flat' ? '官方单一价' : '官方为分时/阶梯/折扣价,网关按单一价计费;此处展示的是「生效默认」档'}>
+          <Tooltip title={op.billingShape === 'flat' ? '官方单一价' : '官方为分时/阶梯/折扣价。分时按请求时刻自动选峰/谷价;阶梯暂按首档标量计。此处展示的是「生效默认」档'}>
             <span className="gw-badge">{SHAPE_LABEL[op.billingShape]}</span>
           </Tooltip>
         ) : dash,
@@ -186,7 +195,7 @@ export default function OfficialPricePanel({ model, offers }: Props) {
             loading={apply.isPending && apply.variables?.offerId === offer.id}
             onClick={() => handleApply(offer, op)}
           >
-            应用官方价
+            绑定到模型
           </Button>
         ) : dash,
     },
@@ -204,9 +213,10 @@ export default function OfficialPricePanel({ model, offers }: Props) {
       style={{ marginTop: 20 }}
       extra={<Button size="small" onClick={() => setManualOpen(true)}>手工录入</Button>}
     >
-      <DegradedNote title="官方价仅作核对参考">
-        官方价与手工报价分表存放;点「应用官方价」才会写入该渠道报价。分时/阶梯/折扣价展示的是「生效默认」档,
-        网关按单一价计费,不随时间/用量自动分段。来源 URL 与抓取时间可一键跳转核对。
+      <DegradedNote title="成本由官方价派生,此处只做绑定">
+        成本 = 官方价 × 渠道系数,售价 = 官方价 × 倍率,都是现算的 —— 官方价一变、系数一改,全站即时重算。
+        点「绑定到模型」写下绑定关系(这是让派生成本生效的动作),并顺带把三价快照进供给源,
+        仅在该模型派生不可用(未设汇率等)时作兜底。来源 URL 与抓取时间可一键跳转核对。
       </DegradedNote>
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 12 }}>
