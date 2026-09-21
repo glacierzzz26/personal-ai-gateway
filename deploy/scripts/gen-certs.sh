@@ -9,9 +9,8 @@
 #    (IP=${GW_PUBLIC_IP});另含 127.0.0.1 与主机名,便于本机/内网 DNS 访问。
 #
 #  ★ 域名上线后的定位:公网域名(gateway.5home.online 管理台 / gatewayapi.5home.online 数据面)
-#    走 Nginx 的公信证书,自签**降级**为
-#    (1) Nginx 回源网关的 https;(2) 裸 IP:17080 老客户端在 Nginx 的 SNI 回退块里继续验真。
-#    因此 SAN 里的 GW_PUBLIC_IP 必须保留 —— 否则旧 IP 客户端回退会验真失败。
+#    走 Nginx 的公信证书,自签**降级**为**仅 Nginx 回源网关的 https**(容器内仍终止 TLS,
+#    以保留数据面/管理台两面物理隔离)。裸 IP / 非标端口入口已下线,自签不再服务任何客户端。
 #
 # 用法:
 #   gen-certs.sh             默认输出到 deploy/certs,已存在则跳过

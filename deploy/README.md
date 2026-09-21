@@ -36,20 +36,20 @@ cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 |---|---|---|---|---|
 | 管理台/登录 | 443 | `gateway.5home.online` | 公信(`*.5home.online`) | `https://127.0.0.1:17090` |
 | 数据面(API) | 443 | `gatewayapi.5home.online` | 公信(`*.5home.online`) | `https://127.0.0.1:17081` |
-| 数据面(过渡) | 17080 | 任意(含 `5home.online`) | SNI=域名→公信;裸 IP(无 SNI)→自签回退 | `https://127.0.0.1:17081` |
-| 旧 IP 管理台 | 17090 | — | 自签(网关自持) | —(Nginx 不碰) |
+| 其它(裸 IP / 未知主机名) | 443 | — | — | **444,直接断连** |
 
-- **旧 IP 客户端为什么不断**:裸 IP 握手无 SNI,Nginx 落到 `:17080 default_server` 自签回退块 →
-  已导入 CA 的老客户端照常验真;域名客户端带 SNI 取公信证书。**双入口并存**,回滚只需把
-  `deploy/docker-compose.yml` 的端口绑定改回 `17080:17080`(须先停 Nginx)。
+- **只有这两个域名能进来**:Nginx **不监听 17080/17090**,容器发布口一律只绑 `127.0.0.1` ——
+  「裸 IP + 非标端口」时代的入口(`:17080` 过渡口、公网 `:17090`)**已随域名稳定下线**,公网无处可绕。
 - **网关侧必须配合的点**:
-  1. `deploy/docker-compose.yml` 把数据面发布收窄为 `127.0.0.1:17081:17080`(公网 17080 归 Nginx,
-     同号会撞 bind —— 公网口与回源口必须错开);
-  2. 自签证书 `deploy/certs/` 保留 —— Nginx 回源用它,裸 IP:17080 的 SNI 回退也用它,
-     故 **`gen-certs.sh` 的 `GW_PUBLIC_IP` SAN 不可去**(去掉则旧 IP 客户端验真失败);
+  1. `deploy/docker-compose.yml` 两个口都收窄为 `127.0.0.1`——数据面 `127.0.0.1:17081:17080`(公网口与回源口
+     必须错开,同号会撞 bind)、管理台 `127.0.0.1:17090:17090`;
+  2. 自签证书 `deploy/certs/` 保留 —— Nginx 回源用它(**仅此一处**);
   3. 管理台「系统设置 → 对外基址」填 `https://gatewayapi.5home.online`。
 - **回源仍用 https**:网关自签 TLS 同时承担数据面/管理台两面物理隔离;Nginx **覆写**
   `X-Forwarded-Proto`(网关无条件信任该头,决定 Secure Cookie 与基址推断)。
+- **回滚旧入口**(要恢复裸 IP / 非标端口):compose 端口绑定改回 `17080:17080` / `17090:17090`
+  → `docker compose up -d`,同时在 host-infra 的 vhost 里补回 `listen 17080` 块并重新渲染。
+  两块都要动,只改一边会出现「端口开着但 Nginx 没接」或「bind 冲突」。
 
 ## 一次性初始化
 

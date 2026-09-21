@@ -111,19 +111,20 @@ tls:
 ## 生产部署(Go 自终止 TLS 双口 + 域名边缘 Nginx)
 
 生产在云主机 `47.116.65.140`(别名 `aliyun`)上跑 Go 网关自身终止 TLS(数据面 17080 / 管理台 17090,
-容器 bridge + 端口发布);宿主原生 Nginx 作域名边缘,用**公信证书**终结 TLS,客户端不再需要导入自签 CA:
+**两个口都只绑 127.0.0.1**);宿主原生 Nginx 是唯一的公网入口,用**公信证书**终结 TLS,
+客户端不再需要导入自签 CA:
 
 ```
-[域名]  https://gateway.5home.online(管理台) / https://gatewayapi.5home.online(数据面)  ← 公信证书,均 443
-[旧IP]  https://47.116.65.140:17080(数据面,自签回退) / :17090(管理台)                  ← 过渡期保留,零改动
-[过渡]  https://5home.online:17080(数据面,公信证书)                                    ← 兼容写死 :17080 的老客户端
+[公网唯一入口]  https://gateway.5home.online(管理台) / https://gatewayapi.5home.online(数据面)  ← 公信证书,均 443
 ```
 
 - **Nginx 边缘**(宿主 apt 原生,非容器):配置在**独立仓库 `host-infra`**(宿主级多服务边缘,不是本仓库),
   本仓库只声明自己的端口与上文拓扑;网关为其中一个 vhost `ai-gateway.conf`。
   **两面各占一个子域、都在 443**,靠 SNI 主机名分流:管理台面 → 回源 17090,数据面 → 回源 17081;
-  两个子域共用一张通配符证书,**加面不加证书**。公网 17080 是**过渡口**,用 **SNI 双证书**——域名连接走公信证书、
-  裸 IP(无 SNI)落到 `default_server` 自签回退,所以**旧 IP 客户端在切换后不断**。17090 不碰,旧入口原样。
+  两个子域共用一张通配符证书,**加面不加证书**。裸 IP / 未知主机名打 443 落 `default_server` 直接 **444**。
+- **只从这两个域名可达**:容器发布口 `127.0.0.1:17081`(数据面)/ `127.0.0.1:17090`(管理台)只绑本机,
+  公网不可直达。曾经的「裸 IP + 非标端口」入口(`:17080` 过渡口与公网 `:17090`)**已随域名稳定下线**;
+  要恢复旧入口是改 compose 的端口绑定 + host-infra 的 vhost 两块(回滚步骤见 `deploy/README.md`)。
 - **证书**:DNS-01 签一张通配符 `*.5home.online`(腾讯云 DNSPod),覆盖包括上面两个子域在内的所有子域,
   不需开 80 口。工具默认 `acme.sh`(`dns_dp`/`dns_tencent` 原生支持;certbot 的 DNSPod 插件不在 apt)。
 - **回源**:Nginx → `https://127.0.0.1:17081/17090`(网关自签 TLS,`proxy_ssl_verify off`)。
@@ -140,6 +141,6 @@ deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gatew
 ```
 
 - 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
-- 自签证书 SAN 含各主机 IP,`deploy/certs/` 保留作**回源 + 旧 IP 客户端回退**;新客户端走公信证书,无需导 CA。
+- 自签证书 SAN 含各主机 IP,`deploy/certs/` 保留作 **Nginx 回源**用(容器内自签 TLS 同时承担两面隔离);客户端走公信证书,无需导 CA。
 - **灾备(家主机断电 / 云入口故障):** 方案与分阶段落地见 [`deploy/DR.md`](deploy/DR.md)(异地加密快照 + 云冷备同 IP 接管,RPO ≤15min / RTO ≤2min,客户端零改动)。
 - **改造方向(个人网关 → 中转站):** 角色/定价/钱包/可见面的方案见 [`PLAN.md`](PLAN.md)(admin=自己、user=客户;售价 = 官方价 × 倍率、成本仅自己可见;用户级钱包)。**尚未实施。**

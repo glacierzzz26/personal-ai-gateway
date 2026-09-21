@@ -10,7 +10,7 @@
 | 家主机 `lab` = `192.168.0.202` | 2C / 5.4G(空闲 ~4.5G)/ 48G 盘(剩 32G);跑 ai-gateway + piks + `frpc-gateway`;**无 `sqlite3`、无 `age`**,有 `openssl` |
 | 云主机 `aliyun` = `47.116.65.140` | 2C / 1.6G(可用 ~1.2G)/ 40G 盘(剩 32G);跑 `frps` + `litesentry`;无 Docker Hub(走 daocloud 镜像源) |
 | frps | `bindPort=17000`,`allowPorts 17001–17100`。**17080/17090 是 frps 动态占用的中继口** —— home 的 frpc 一断,frps 自动释放 |
-| 客户端入口 | **域名(均 443)** `https://gateway.5home.online`(管理台)/ `https://gatewayapi.5home.online`(数据面)—— 公信证书,无需导 CA。旧 **裸 IP** `47.116.65.140:17080`(自签)与 `:17090` 过渡期并存;`:17080` 过渡口也认 `5home.online`(见 §1.1) |
+| 客户端入口 | **只有两个域名(均 443)**:`https://gateway.5home.online`(管理台)/ `https://gatewayapi.5home.online`(数据面)—— 公信证书,无需导 CA。旧「裸 IP + 非标端口」入口(`47.116.65.140:17080` / `:17090`)已随域名稳定**下线**,公网不可达(见 §1.1) |
 | 备份 | home `crontab` 里**没有**网关备份(piks 有);`~/gw-backups/` 几份是手动快照,**同机 = 挡不住主机故障** |
 | 主密钥 | home `~/ai-gateway/.env` 的 `GW_MASTER_KEY`,**全系统唯一不可再生**;云上旧栈那把无关 |
 
@@ -28,12 +28,13 @@
 备案通过后 `5home.online` 上线,公网入口从「裸 IP + 自签 + frps 中转」改为「域名 + 公信证书 + 宿主 Nginx」:
 
 - 宿主机 Nginx(非容器)终结 TLS,**两面各占一个子域、都在 443**:`gateway.5home.online` → 管理台、
-  `gatewayapi.5home.online` → 数据面;另留 **17080 为数据面过渡口**(**SNI 双证书**:域名走公信、裸 IP 走自签回退)。
-  网关数据面发布收窄为 `127.0.0.1:17081:17080`,管理台仍 `17090:17090`。详见 `deploy/README.md`「域名边缘」。
+  `gatewayapi.5home.online` → 数据面;**只从这两个主机名可达**——Nginx 不监听 17080/17090,
+  容器发布口一律只绑 `127.0.0.1`(`127.0.0.1:17081:17080` 数据面 / `127.0.0.1:17090:17090` 管理台)。
+  详见 `deploy/README.md`「域名边缘」。
 - **对 DR 的影响**:①「切到云」不再是「只起 gateway 容器」,需一并接管 Nginx 与其证书(见 §7);
   ② 客户端入口从 IP 变为域名,但 DNS 已固定指向本 IP,接管期**不需改 DNS**;
   ③ 公信证书为通配符(`*.5home.online`),云冷备可直接复用。
-- 自签 CA 降级保留:回源 + 旧 IP:17080 客户端回退,`deploy/certs/` 仍不可删。
+- 自签 CA 降级保留:**只服务 Nginx 回源**(`proxy_ssl_verify off`),`deploy/certs/` 仍不可删。
 
 ## 2. 定稿架构
 
@@ -91,7 +92,9 @@ home 侧再加**看门狗**:容器不健康即 `compose restart`(治理「主机
   `https://gatewayapi.5home.online`;家主机断电这档(tunnel 层)**不用动 DNS**。
   ⚠️ 原文称 `gen-certs.sh` 的 SAN「已支持传 DNS 列表(`GW_DNS=…`)」**不属实**(该脚本只有
   `GW_HOSTNAME`/`GW_LAN_IP`/`GW_PUBLIC_IP`,无 `GW_DNS`);且域名已改走公信证书,**不再依赖自签 SAN 加域名**。
-  自签证书现仅用于 Nginx 回源与旧 IP:17080 的 SNI 回退。
+  自签证书现仅用于 Nginx 回源(`proxy_ssl_verify off`)。另:入口已收敛为这两个域名,Nginx 不监听
+  17080/17090、容器发布口只绑 `127.0.0.1` —— 上面 §1 里「frps 的 17080/17090 中继口」叙事已不适用
+  (那套「客户端 → IP:端口 → frps → frpc」链路随域名上线退役;DR 的 frp 层待随 P2/P3 重做)。
 
 ## 6. 分阶段与验收
 
@@ -113,9 +116,9 @@ home 侧再加**看门狗**:容器不健康即 `compose restart`(治理「主机
 - **frp 端口独占**:切之前必须先让原 frpc 让出端口(自动接管已由心跳驱动规避)。
 - **数据分叉**:快照是某时间点,切换会丢掉最后一次快照之后的写入(§3 以云为准反向拉回)。
 - **证书 SAN 与域名**:域名入口(`gateway.5home.online` / `gatewayapi.5home.online`)走 Nginx 的公信通配符证书,
-  DNS-01 签发、自动续期,**不再需要为域名重签自签 SAN**。自签证书现只服务两处:Nginx 回源、以及旧 IP:17080 的 SNI 回退 ——
-  故 `gen-certs.sh` 的 `GW_PUBLIC_IP` SAN **必须保留**(去掉则旧 IP 客户端回退验真失败)。
-- **云冷备接管要连 Nginx 一起切**:域名上线后公网入口多了宿主机 Nginx(443/17080 证书终结)。
+  DNS-01 签发、自动续期,**不再需要为域名重签自签 SAN**。自签证书现只服务 Nginx 回源 ——
+  `gen-certs.sh` 的 `GW_PUBLIC_IP` SAN 已非必需(SAN 里 IP 仍留无妨)。
+- **云冷备接管要连 Nginx 一起切**:域名上线后公网入口多了宿主机 Nginx(443 证书终结)。
   原 DR 的「只起 gateway 容器」不足 —— 云冷备须同时具备 Nginx 配置与公信证书(DNS 已指向本 IP,
   故证书可直接复用同一通配符),否则域名入口在接管期不可用。
 - **异地快照敏感性**:DB 含令牌 hash 与渠道密钥密文(密文需 `GW_MASTER_KEY` 才能解),「快照 + 主密钥」必须分开存放,**不能同放一台备机**;快照落云前必须加密。
