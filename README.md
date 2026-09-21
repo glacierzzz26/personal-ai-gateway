@@ -108,24 +108,39 @@ tls:
 - 管理账号与访问令牌:**不走配置**。账号靠首启「创建管理员」;令牌在管理台创建,明文只现一次。
 - 存量 v1(`upstreams`/`keys`/`pricing`/`quota` 概念、旧 `/api/v1/upstreams` 管理面、旧 `web/` 前端)已在 v2 演进中退役;旧 `gateway.db` 仅作历史留档。
 
-## 生产部署(Go 自终止 TLS 双口 + frp;无 Caddy)
+## 生产部署(Go 自终止 TLS 双口 + 域名边缘 Nginx)
 
-局域网主机跑 Go 网关自身终止 TLS 于 17080(数据面)/17090(管理台),再经云 frps 隧道把两口映射到公网:
+生产在云主机 `47.116.65.140`(别名 `aliyun`)上跑 Go 网关自身终止 TLS(数据面 17080 / 管理台 17090,
+**两个口都只绑 127.0.0.1**);宿主原生 Nginx 是唯一的公网入口,用**公信证书**终结 TLS,
+客户端不再需要导入自签 CA:
 
 ```
-[局域网] https://192.168.0.202:17080(数据面)/:17090(管理台)      ← Go 网关自身 TLS
-[公网]   https://47.116.65.140:17080/:17090 --frps--> frpc --> 127.0.0.1:17080/17090
+[公网唯一入口]  https://gateway.5home.online(管理台) / https://gatewayapi.5home.online(数据面)  ← 公信证书,均 443
 ```
+
+- **Nginx 边缘**(宿主 apt 原生,非容器):配置在**独立仓库 `host-infra`**(宿主级多服务边缘,不是本仓库),
+  本仓库只声明自己的端口与上文拓扑;网关为其中一个 vhost `ai-gateway.conf`。
+  **两面各占一个子域、都在 443**,靠 SNI 主机名分流:管理台面 → 回源 17090,数据面 → 回源 17081;
+  两个子域共用一张通配符证书,**加面不加证书**。裸 IP / 未知主机名打 443 落 `default_server` 直接 **444**。
+- **只从这两个域名可达**:容器发布口 `127.0.0.1:17081`(数据面)/ `127.0.0.1:17090`(管理台)只绑本机,
+  公网不可直达。曾经的「裸 IP + 非标端口」入口(`:17080` 过渡口与公网 `:17090`)**已随域名稳定下线**;
+  要恢复旧入口是改 compose 的端口绑定 + host-infra 的 vhost 两块(回滚步骤见 `deploy/README.md`)。
+- **证书**:DNS-01 签一张通配符 `*.5home.online`(腾讯云 DNSPod),覆盖包括上面两个子域在内的所有子域,
+  不需开 80 口。工具默认 `acme.sh`(`dns_dp`/`dns_tencent` 原生支持;certbot 的 DNSPod 插件不在 apt)。
+- **回源**:Nginx → `https://127.0.0.1:17081/17090`(网关自签 TLS,`proxy_ssl_verify off`)。
+  回源仍用 https 是为了保留**两面物理隔离**(数据面口只认 `/healthz`+`/v1/*`,管理台口只认
+  `/healthz`+`/api/v1/*`+SPA;明文 `:8787` 是合并面,绝不发布);错面访问 404。流式必须 `proxy_buffering off`。
+- **对外基址**:管理台「系统设置 → 对外基址」填 `https://gatewayapi.5home.online`,让「生成 Claude 配置」
+  吐出的 `ANTHROPIC_BASE_URL` 指向数据面子域(留空则按请求头推断)。
 
 ```bash
-deploy/scripts/gen-certs.sh          # 生成 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
+deploy/scripts/gen-certs.sh          # 生成自签 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
 deploy/scripts/deploy.sh [GW_HOST]   # 本地构建镜像 → docker save 经 ssh 推目标主机 → compose up(默认 rguo@192.168.0.202)
-deploy/scripts/setup-frp.sh          # 目标主机起 frpc 隧道容器(--network host,restart unless-stopped)
 deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gateway)
+# 域名边缘(公网入口)在独立仓库 host-infra:cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 ```
 
 - 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
-- 证书 SAN 含局域网 IP 与公网 IP,两条路径共用同一私钥 CA;客户端导入一次 `deploy/certs/ca.crt` 即可验真。
-- 两面物理隔离:数据面口只认 `/healthz` 与 `/v1/*`,管理台口只认 `/healthz`、`/api/v1/*` 与 SPA;错面访问 404。
+- 自签证书 SAN 含各主机 IP,`deploy/certs/` 保留作 **Nginx 回源**用(容器内自签 TLS 同时承担两面隔离);客户端走公信证书,无需导 CA。
 - **灾备(家主机断电 / 云入口故障):** 方案与分阶段落地见 [`deploy/DR.md`](deploy/DR.md)(异地加密快照 + 云冷备同 IP 接管,RPO ≤15min / RTO ≤2min,客户端零改动)。
 - **改造方向(个人网关 → 中转站):** 角色/定价/钱包/可见面的方案见 [`PLAN.md`](PLAN.md)(admin=自己、user=客户;售价 = 官方价 × 倍率、成本仅自己可见;用户级钱包)。**尚未实施。**

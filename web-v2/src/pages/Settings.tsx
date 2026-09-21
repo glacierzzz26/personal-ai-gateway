@@ -128,7 +128,7 @@ export default function Settings() {
           ),
         },
         {
-          key: 'tls', t: '跳过 TLS 校验', d: '仅在自签证书环境开启,存在中间人风险',
+          key: 'tls', t: '跳过 TLS 校验', d: '仅在自签证书环境开启,存在中间人风险(域名公信证书环境无需开启)',
           render: (f, s) => <Switch checked={f.skipTlsVerify} onChange={v => s('skipTlsVerify', v)} />,
         },
       ],

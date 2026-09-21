@@ -7,7 +7,7 @@
 #   - 证书首次用 gen-certs.sh 生成后稳定复用(CA 不变则客户端信任不失效);
 #   - 远端 .env(GW_MASTER_KEY / GW_IMAGE_TAG)与 data/(DB)只在缺失时创建,不随重部署覆盖。
 #
-# 前置:目标主机可免密 ssh;远端 docker compose v2;17080/17090 空闲。
+# 前置:目标主机可免密 ssh;远端 docker compose v2;宿主发布口 17081/17090 空闲。
 # 用法:deploy/scripts/deploy.sh [GW_HOST]         (默认 rguo@192.168.0.202)
 #       REMOTE_DIR=/path deploy.sh [GW_HOST]       (覆盖远端目录,默认 <远端家目录>/ai-gateway)
 # =====================================================================
@@ -74,6 +74,8 @@ else
     echo "    未找到清理脚本($CLEAN_SH),跳过。"
   fi
 fi
-echo "  数据面  https://192.168.0.202:17080/v1   /  https://47.116.65.140:17080/v1 (frp)"
-echo "  管理台  https://192.168.0.202:17090      /  https://47.116.65.140:17090    (frp)"
-echo "  CA      $CERTS_DIR/ca.crt —— 导入信任后两端口均可验真"
+echo "  数据面  https://gatewayapi.5home.online/v1        (公信证书,443)"
+echo "  管理台  https://gateway.5home.online               (公信证书,443)"
+echo "  入口    **只此两个域名**;裸 IP / 非标端口(17080/17090)已下线,公网不可达"
+echo "  自签CA  $CERTS_DIR/ca.crt —— 仅 Nginx 回源用;客户端无需导入"
+echo "  边缘    Nginx 边缘在独立仓库 host-infra(scripts/deploy.sh)"

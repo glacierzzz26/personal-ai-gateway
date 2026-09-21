@@ -5,8 +5,12 @@
 #  - admin 证书挂管理台(17090),api 证书挂数据面(17080);两张叶子 key 完全不同,
 #    满足「管理/API 不得共用同一套证书」。
 #  - 共用同一私域 CA → 客户端只导入一次 ca.crt,两端口都信任。
-#  - SAN 覆盖两条真实访问路径:局域网直连(IP=${GW_LAN_IP})与云 frp 隧道
+#  - SAN 覆盖两条真实访问路径:局域网直连(IP=${GW_LAN_IP})与云主机公网 IP
 #    (IP=${GW_PUBLIC_IP});另含 127.0.0.1 与主机名,便于本机/内网 DNS 访问。
+#
+#  ★ 域名上线后的定位:公网域名(gateway.5home.online 管理台 / gatewayapi.5home.online 数据面)
+#    走 Nginx 的公信证书,自签**降级**为**仅 Nginx 回源网关的 https**(容器内仍终止 TLS,
+#    以保留数据面/管理台两面物理隔离)。裸 IP / 非标端口入口已下线,自签不再服务任何客户端。
 #
 # 用法:
 #   gen-certs.sh             默认输出到 deploy/certs,已存在则跳过
