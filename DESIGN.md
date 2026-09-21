@@ -296,8 +296,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 (容器 bridge + 端口发布);宿主**原生 Nginx** 作域名边缘,用**公信证书**终结 TLS:
 
 ```
-[域名客户端]   --https--> 5home.online:17080(数据面) / 5home.online(管理台,443)   ← 公信证书
-[旧 IP 客户端] --https--> 47.116.65.140:17080(数据面,自签回退) / :17090(管理台)   ← 过渡期并存
+[域名客户端]   --https--> gateway.5home.online(管理台) / gatewayapi.5home.online(数据面)   ← 公信证书,均 443
+[旧 IP 客户端] --https--> 47.116.65.140:17080(数据面,自签回退) / :17090(管理台)           ← 过渡期并存
                                      │
                                      └─ Nginx ─回源 https─→ 127.0.0.1:17081/17090 (网关容器)
 ```
@@ -309,15 +309,17 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   SAN 覆盖 `ai-gateway.lan / localhost / 127.0.0.1 / <局域网 IP> / <公网 IP>`;域名上线后自签降级为
   **回源 + 旧 IP 客户端回退**(见下)。`RESIGN=1` 只重签叶子保留 CA(客户端信任不失效),`FORCE=1` 连 CA 轮换。
 - **域名边缘(Nginx)**:配置在**独立仓库 `host-infra`**(宿主级**多服务**边缘:公网入口/vhost/通配符证书
-  集中管理,不散落在各业务仓库),本仓库只声明"网关占哪些端口、回源到哪"。端口分工:**443** → 管理台/登录面(公信证书);
-  **17080** → 数据面,用 **SNI 双证书**——域名连接(SNI=`5home.online`)取公信证书,裸 IP(无 SNI)
+  集中管理,不散落在各业务仓库),本仓库只声明"网关占哪些端口、回源到哪"。端口与主机名分工:
+  **443 上按 SNI 主机名分两面**——`gateway.5home.online` → 管理台/登录面、`gatewayapi.5home.online` → 数据面;
+  两面共用同一张通配符证书(加面不加证书),443 的 `default_server`(裸 IP/未知主机名)返 444。
+  **17080** 是数据面**过渡口**,用 **SNI 双证书**——带 SNI 的连接取公信证书,裸 IP(无 SNI)
   落 `default_server` 取自签回退证书,**因此切域名后旧 IP:17080 客户端不受影响**;**17090** 不碰。
   回源 `https://127.0.0.1:17081/17090`(`proxy_ssl_verify off`)以保留两面隔离;`proxy_buffering off`
   保 SSE 流式首字节不被攒住(对应旧 Caddy 的 `flush_interval -1`)。Nginx **覆写** `X-Forwarded-Proto`,
   因网关无条件信任该头(`admin_claude_config.go` / `admin_auth.go`)决定 Secure Cookie 与对外基址推断。
 - **公信证书**:DNS-01 签通配符 `*.5home.online`(腾讯云 DNSPod),一张覆盖所有子域,不需开 80 口;
-  工具默认 `acme.sh`(`dns_dp` 原生支持),续期后自动 `systemctl reload nginx`。
-- **对外基址**:设置项 `public_base_url`(管理台「系统设置 → 对外基址」)填 `https://5home.online:17080`;
+  工具默认 `acme.sh`(`dns_dp` / `dns_tencent` 原生支持,按凭证形态自动选),续期后自动 `systemctl reload nginx`。
+- **对外基址**:设置项 `public_base_url`(管理台「系统设置 → 对外基址」)填 `https://gatewayapi.5home.online`;
   留空则 `admin_claude_config.go` 按 `X-Forwarded-Proto`/`Host` 推断。
 - **容器端口发布**:`deploy/docker-compose.yml` 把数据面发布收窄为 `127.0.0.1:17081:17080`(公网 17080 归
   Nginx),管理台仍 `17090:17090`(旧入口保留)。容器内监听口不变,改绑定只需 `docker compose up -d`,

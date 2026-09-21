@@ -114,21 +114,23 @@ tls:
 容器 bridge + 端口发布);宿主原生 Nginx 作域名边缘,用**公信证书**终结 TLS,客户端不再需要导入自签 CA:
 
 ```
-[域名]  https://5home.online:17080(数据面) / https://5home.online(管理台,443)  ← 公信证书
-[旧IP]  https://47.116.65.140:17080(数据面,自签回退) / :17090(管理台)          ← 过渡期保留,零改动
+[域名]  https://gateway.5home.online(管理台) / https://gatewayapi.5home.online(数据面)  ← 公信证书,均 443
+[旧IP]  https://47.116.65.140:17080(数据面,自签回退) / :17090(管理台)                  ← 过渡期保留,零改动
+[过渡]  https://5home.online:17080(数据面,公信证书)                                    ← 兼容写死 :17080 的老客户端
 ```
 
 - **Nginx 边缘**(宿主 apt 原生,非容器):配置在**独立仓库 `host-infra`**(宿主级多服务边缘,不是本仓库),
   本仓库只声明自己的端口与上文拓扑;网关为其中一个 vhost `ai-gateway.conf`。
-  公网 443 与管理台/登录面;公网 17080 用 **SNI 双证书**——域名连接走公信证书、裸 IP(无 SNI)
-  落到 `default_server` 自签回退,所以**旧 IP 客户端在切换后不断**。17090 不碰,旧入口原样。
-- **证书**:DNS-01 签一张通配符 `*.5home.online`(腾讯云 DNSPod),覆盖以后所有子域,不需开 80 口。
-  工具默认 `acme.sh`(`dns_dp` 原生支持;certbot 的 DNSPod 插件不在 apt)。
+  **两面各占一个子域、都在 443**,靠 SNI 主机名分流:管理台面 → 回源 17090,数据面 → 回源 17081;
+  两个子域共用一张通配符证书,**加面不加证书**。公网 17080 是**过渡口**,用 **SNI 双证书**——域名连接走公信证书、
+  裸 IP(无 SNI)落到 `default_server` 自签回退,所以**旧 IP 客户端在切换后不断**。17090 不碰,旧入口原样。
+- **证书**:DNS-01 签一张通配符 `*.5home.online`(腾讯云 DNSPod),覆盖包括上面两个子域在内的所有子域,
+  不需开 80 口。工具默认 `acme.sh`(`dns_dp`/`dns_tencent` 原生支持;certbot 的 DNSPod 插件不在 apt)。
 - **回源**:Nginx → `https://127.0.0.1:17081/17090`(网关自签 TLS,`proxy_ssl_verify off`)。
   回源仍用 https 是为了保留**两面物理隔离**(数据面口只认 `/healthz`+`/v1/*`,管理台口只认
   `/healthz`+`/api/v1/*`+SPA;明文 `:8787` 是合并面,绝不发布);错面访问 404。流式必须 `proxy_buffering off`。
-- **对外基址**:管理台「系统设置 → 对外基址」填 `https://5home.online:17080`,让「生成 Claude 配置」
-  吐出的 `ANTHROPIC_BASE_URL` 指向域名(留空则按请求头推断)。
+- **对外基址**:管理台「系统设置 → 对外基址」填 `https://gatewayapi.5home.online`,让「生成 Claude 配置」
+  吐出的 `ANTHROPIC_BASE_URL` 指向数据面子域(留空则按请求头推断)。
 
 ```bash
 deploy/scripts/gen-certs.sh          # 生成自签 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1

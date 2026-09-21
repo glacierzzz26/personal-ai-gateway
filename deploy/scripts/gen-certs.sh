@@ -8,7 +8,8 @@
 #  - SAN 覆盖两条真实访问路径:局域网直连(IP=${GW_LAN_IP})与云主机公网 IP
 #    (IP=${GW_PUBLIC_IP});另含 127.0.0.1 与主机名,便于本机/内网 DNS 访问。
 #
-#  ★ 域名上线(5home.online)后的定位:公网域名走 Nginx 的公信证书,自签**降级**为
+#  ★ 域名上线后的定位:公网域名(gateway.5home.online 管理台 / gatewayapi.5home.online 数据面)
+#    走 Nginx 的公信证书,自签**降级**为
 #    (1) Nginx 回源网关的 https;(2) 裸 IP:17080 老客户端在 Nginx 的 SNI 回退块里继续验真。
 #    因此 SAN 里的 GW_PUBLIC_IP 必须保留 —— 否则旧 IP 客户端回退会验真失败。
 #

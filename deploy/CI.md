@@ -16,7 +16,7 @@
 | lab 能否连 Docker Hub | ❌ 不通 | 不能 `docker pull` 官方基础镜像(故镜像基底 alpine 靠本地缓存/`docker save`) |
 | lab 网络位置 | 私网 NAT 后 | 云端 runner **无法**主动连入 lab |
 | frpc 暴露面 | 仅转发 17080 / 17090(**未暴露 22**) | 排除了「云端跳板 SSH 进 lab」的即时触发 |
-| 公网入口 | **域名 `5home.online`(2026-09-21 上线)**:宿主 Nginx 终结公信证书(443/17080),回源网关 127.0.0.1 | 见 `deploy/README.md`「域名边缘」;旧 IP 入口过渡期并存 |
+| 公网入口 | **域名(2026-09-21 上线)**:宿主 Nginx 终结公信证书,`gateway.5home.online`(管理台)/ `gatewayapi.5home.online`(数据面),均 443,回源网关 127.0.0.1 | 见 `deploy/README.md`「域名边缘」;`:17080` 过渡口与旧 IP 入口过渡期并存 |
 | 镜像体积 | **45.7MB**(alpine 基底已缓存) | 每次部署实际只传变更层,很快 |
 | 生产主机 | `lab` = 192.168.0.202(ssh 免密,sudo 需密码) | lab 端组件用 **systemd user 单元**(免 sudo) |
 
