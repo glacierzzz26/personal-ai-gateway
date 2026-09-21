@@ -10,7 +10,7 @@ db_path: "gateway-v2.db"
 # 生产:Go 网关自身终止 TLS 的两个监听口(数据面 / 管理台,两面物理隔离)。
 # 两组 listen+cert+key 全部齐全才生效;缺任一项则只起上面的明文 listen(dev/测试)。
 # 两张证书必须独立(不得共用同一套私钥)。证书生成见 deploy/scripts/gen-certs.sh。
-# 注:域名上线后公网侧由宿主机 Nginx 终结公信证书(见 deploy/nginx/ + setup-edge.sh),
+# 注:域名上线后公网侧由宿主机 Nginx 终结公信证书(边缘配置在独立仓库 host-infra),
 #     网关这两个口的自签 TLS 保留用于「Nginx 回源」与「旧 IP 客户端」,容器内监听口不变。
 # tls:
 #   api_listen: ":17080"                     # 数据面:仅 /healthz + /v1/*

@@ -308,8 +308,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - **自签证书**:`deploy/scripts/gen-certs.sh` 生成一个私有 CA + admin/api 两张独立叶子(各挂一个口,不共用)。
   SAN 覆盖 `ai-gateway.lan / localhost / 127.0.0.1 / <局域网 IP> / <公网 IP>`;域名上线后自签降级为
   **回源 + 旧 IP 客户端回退**(见下)。`RESIGN=1` 只重签叶子保留 CA(客户端信任不失效),`FORCE=1` 连 CA 轮换。
-- **域名边缘(Nginx)**:`deploy/scripts/setup-edge.sh` 在生产主机一次性建起 Nginx,配置模板
-  `deploy/nginx/ai-gateway-edge.conf`。端口分工:**443** → 管理台/登录面(公信证书);
+- **域名边缘(Nginx)**:配置在**独立仓库 `host-infra`**(宿主级**多服务**边缘:公网入口/vhost/通配符证书
+  集中管理,不散落在各业务仓库),本仓库只声明"网关占哪些端口、回源到哪"。端口分工:**443** → 管理台/登录面(公信证书);
   **17080** → 数据面,用 **SNI 双证书**——域名连接(SNI=`5home.online`)取公信证书,裸 IP(无 SNI)
   落 `default_server` 取自签回退证书,**因此切域名后旧 IP:17080 客户端不受影响**;**17090** 不碰。
   回源 `https://127.0.0.1:17080/17090`(`proxy_ssl_verify off`)以保留两面隔离;`proxy_buffering off`

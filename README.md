@@ -118,7 +118,8 @@ tls:
 [旧IP]  https://47.116.65.140:17080(数据面,自签回退) / :17090(管理台)          ← 过渡期保留,零改动
 ```
 
-- **Nginx 边缘**(宿主 apt 原生,非容器,配置模板 `deploy/nginx/ai-gateway-edge.conf`):
+- **Nginx 边缘**(宿主 apt 原生,非容器):配置在**独立仓库 `host-infra`**(宿主级多服务边缘,不是本仓库),
+  本仓库只声明自己的端口与上文拓扑;网关为其中一个 vhost `ai-gateway.conf`。
   公网 443 与管理台/登录面;公网 17080 用 **SNI 双证书**——域名连接走公信证书、裸 IP(无 SNI)
   落到 `default_server` 自签回退,所以**旧 IP 客户端在切换后不断**。17090 不碰,旧入口原样。
 - **证书**:DNS-01 签一张通配符 `*.5home.online`(腾讯云 DNSPod),覆盖以后所有子域,不需开 80 口。
@@ -132,8 +133,8 @@ tls:
 ```bash
 deploy/scripts/gen-certs.sh          # 生成自签 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
 deploy/scripts/deploy.sh [GW_HOST]   # 本地构建镜像 → docker save 经 ssh 推目标主机 → compose up(默认 rguo@192.168.0.202)
-deploy/scripts/setup-edge.sh         # 生产主机一次性建 Nginx 边缘 + 签公信证书(sudo DOMAIN=5home.online ...)
 deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gateway)
+# 域名边缘(公网入口)在独立仓库 host-infra:cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 ```
 
 - 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
