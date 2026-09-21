@@ -74,6 +74,7 @@ else
     echo "    未找到清理脚本($CLEAN_SH),跳过。"
   fi
 fi
-echo "  数据面  https://192.168.0.202:17080/v1   /  https://47.116.65.140:17080/v1 (frp)"
-echo "  管理台  https://192.168.0.202:17090      /  https://47.116.65.140:17090    (frp)"
-echo "  CA      $CERTS_DIR/ca.crt —— 导入信任后两端口均可验真"
+echo "  数据面  https://5home.online:17080/v1  (域名,公信证书)  /  旧 IP https://47.116.65.140:17080/v1 (自签)"
+echo "  管理台  https://5home.online           (域名,公信证书)  /  旧 IP https://47.116.65.140:17090"
+echo "  自签CA  $CERTS_DIR/ca.crt —— 仅旧 IP 入口/回源用;域名入口无需导入"
+echo "  边缘    若首次上域名:deploy/scripts/setup-edge.sh(生产主机一次性建 Nginx + 公信证书)"

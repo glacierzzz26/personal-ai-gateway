@@ -18,6 +18,29 @@ lab: gw-updater.timer (每 60s, systemd user)
 约束来自实测(见 `CI.md` §1):lab 连不通 github.com、连不通 Docker Hub,但**能拉 ghcr.io**;
 lab 在私网 NAT 后,云端 runner **无法主动连入** → 只能 lab 侧轮询。设计细节在 `CI.md`。
 
+## 域名边缘(Nginx + 公信证书)
+
+域名 `5home.online` 上线后,生产主机(云主机 `aliyun`)上多一层**宿主原生 Nginx**(非容器),
+用公信证书终结 TLS,**客户端不再需要导入自签 CA**。一次性建立:
+
+```bash
+sudo DOMAIN=5home.online deploy/scripts/setup-edge.sh   # 在 aliyun 上跑
+```
+
+| 入口 | 端口 | 证书 | 回源 |
+|---|---|---|---|
+| 管理台/登录 | 443 | 公信(`*.5home.online`) | `https://127.0.0.1:17090` |
+| 数据面 | 17080 | SNI=域名→公信;裸 IP(无 SNI)→自签回退 | `https://127.0.0.1:17080` |
+| 旧 IP 管理台 | 17090 | 自签(网关自持) | —(Nginx 不碰) |
+
+- **旧 IP 客户端为什么不断**:裸 IP 握手无 SNI,Nginx 落到 `:17080 default_server` 自签回退块 →
+  已导入 CA 的老客户端照常验真;域名客户端带 SNI 取公信证书。**双入口并存**,回滚只需把
+  `deploy/docker-compose.yml` 的端口绑定改回 `17080:17080`。
+- **证书**:DNS-01 签通配符 `*.5home.online`(DNSPod),覆盖以后所有子域,不需开 80。凭证
+  `/etc/ai-gateway-edge/dnspod.env`(0600,不入库);续期自动 `systemctl reload nginx`。
+- **配置模板** `deploy/nginx/ai-gateway-edge.conf`;Nginx **覆写** `X-Forwarded-Proto`(网关无条件信任该头)。
+- **对外基址**:管理台「系统设置 → 对外基址」填 `https://5home.online:17080`。
+
 ## 一次性初始化
 
 ### 1. ghcr 包设为 public(首次 Actions 跑通后)

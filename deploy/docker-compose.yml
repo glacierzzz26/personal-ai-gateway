@@ -1,4 +1,8 @@
-# 生产网关:Go 自身终止 TLS 双口(数据面 17080 / 管理台 17090),无边缘反代。
+# 生产网关:Go 自身终止 TLS 双口(数据面 17080 / 管理台 17090)。
+# 容器网络为 bridge + 端口发布(非 host 网络);宿主侧另起 Nginx 边缘(见 deploy/nginx/):
+#   - 公网 17080 由 Nginx 接管(公信证书终结 TLS 后回源 127.0.0.1:17080),故本文件把
+#     数据面发布收窄为 127.0.0.1:17080 —— 容器内监听口不变(仍 :17080),只改宿主可见性。
+#   - 管理台 17090 仍发布到 0.0.0.0,保留旧 IP:17090 入口;Nginx 443 另开公信入口指向它。
 # 用法(常规,ghcr 链路):lab 上 GW_IMAGE_TAG=<sha> docker compose up -d;镜像自 ghcr.io。
 # 用法(应急/回滚,本地链路):deploy/scripts/deploy.sh —— 它显式设 GW_IMAGE=ai-gateway
 #   (本地短名)并把镜像 docker save 推过去,覆盖下方缺省值。
@@ -10,8 +14,10 @@ services:
     restart: unless-stopped
     env_file: .env                      # GW_MASTER_KEY(渠道密钥主密钥;不换 key 则勿删)
     ports:
-      - "17080:17080"                   # 数据面 https(仅 /healthz + /v1/*,Go 自终止 TLS)
-      - "17090:17090"                   # 管理台 https(仅 /healthz + /api/v1/* + SPA)
+      # 数据面:宿主侧仅绑 127.0.0.1,公网 17080 交给 Nginx(公信证书终结 TLS)。
+      # 旧 IP:17080 客户端由 Nginx 的 :17080 default_server(自签回退)继续服务。
+      - "127.0.0.1:17080:17080"
+      - "17090:17090"                   # 管理台 https(仅 /healthz + /api/v1/* + SPA);旧 IP:17090 入口保留
     volumes:
       - ./data:/data                    # SQLite DB(生产数据落盘)
       - ./certs:/certs:ro               # 自签叶子证书(api/admin 各一,同 CA)
