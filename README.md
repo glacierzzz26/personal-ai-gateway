@@ -124,7 +124,7 @@ tls:
   落到 `default_server` 自签回退,所以**旧 IP 客户端在切换后不断**。17090 不碰,旧入口原样。
 - **证书**:DNS-01 签一张通配符 `*.5home.online`(腾讯云 DNSPod),覆盖以后所有子域,不需开 80 口。
   工具默认 `acme.sh`(`dns_dp` 原生支持;certbot 的 DNSPod 插件不在 apt)。
-- **回源**:Nginx → `https://127.0.0.1:17080/17090`(网关自签 TLS,`proxy_ssl_verify off`)。
+- **回源**:Nginx → `https://127.0.0.1:17081/17090`(网关自签 TLS,`proxy_ssl_verify off`)。
   回源仍用 https 是为了保留**两面物理隔离**(数据面口只认 `/healthz`+`/v1/*`,管理台口只认
   `/healthz`+`/api/v1/*`+SPA;明文 `:8787` 是合并面,绝不发布);错面访问 404。流式必须 `proxy_buffering off`。
 - **对外基址**:管理台「系统设置 → 对外基址」填 `https://5home.online:17080`,让「生成 Claude 配置」
@@ -139,6 +139,5 @@ deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gatew
 
 - 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
 - 自签证书 SAN 含各主机 IP,`deploy/certs/` 保留作**回源 + 旧 IP 客户端回退**;新客户端走公信证书,无需导 CA。
-- **灾备(主机断电 / 云入口故障):** 方案与分阶段落地见 [`deploy/DR.md`](deploy/DR.md)(异地加密快照 + 云冷备同 IP 接管,RPO ≤15min / RTO ≤2min,客户端零改动)。
 - **灾备(家主机断电 / 云入口故障):** 方案与分阶段落地见 [`deploy/DR.md`](deploy/DR.md)(异地加密快照 + 云冷备同 IP 接管,RPO ≤15min / RTO ≤2min,客户端零改动)。
 - **改造方向(个人网关 → 中转站):** 角色/定价/钱包/可见面的方案见 [`PLAN.md`](PLAN.md)(admin=自己、user=客户;售价 = 官方价 × 倍率、成本仅自己可见;用户级钱包)。**尚未实施。**

@@ -35,14 +35,14 @@ cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 | 入口 | 端口 | 证书 | 回源 |
 |---|---|---|---|
 | 管理台/登录 | 443 | 公信(`*.5home.online`) | `https://127.0.0.1:17090` |
-| 数据面 | 17080 | SNI=域名→公信;裸 IP(无 SNI)→自签回退 | `https://127.0.0.1:17080` |
+| 数据面 | 17080 | SNI=域名→公信;裸 IP(无 SNI)→自签回退 | `https://127.0.0.1:17081` |
 | 旧 IP 管理台 | 17090 | 自签(网关自持) | —(Nginx 不碰) |
 
 - **旧 IP 客户端为什么不断**:裸 IP 握手无 SNI,Nginx 落到 `:17080 default_server` 自签回退块 →
   已导入 CA 的老客户端照常验真;域名客户端带 SNI 取公信证书。**双入口并存**,回滚只需把
   `deploy/docker-compose.yml` 的端口绑定改回 `17080:17080`。
 - **网关侧必须配合的点**:
-  1. `deploy/docker-compose.yml` 把数据面发布收窄为 `127.0.0.1:17080:17080`(公网 17080 归 Nginx);
+  1. `deploy/docker-compose.yml` 把数据面发布收窄为 `127.0.0.1:17081:17080`(公网 17080 归 Nginx);
   2. 自签证书 `deploy/certs/` 保留 —— Nginx 回源用它,裸 IP:17080 的 SNI 回退也用它,
      故 **`gen-certs.sh` 的 `GW_PUBLIC_IP` SAN 不可去**(去掉则旧 IP 客户端验真失败);
   3. 管理台「系统设置 → 对外基址」填 `https://5home.online:17080`。
