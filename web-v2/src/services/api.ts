@@ -6,7 +6,7 @@
  * 这里统一除以 100 还原为 0..1 小数供 UI(fmt.pct)使用;errorRate 本身即小数。
  */
 import type {
-  AdminMe, BalanceLogItem, BalanceResp, Channel, ChannelDraft, ChannelQuota, ChannelTestResult, ClaudeConfig,
+  AdminMe, BalanceLogItem, BalanceResp, Channel, ChannelDraft, ChannelQuota, ChannelQuotaItem, ChannelTestResult, ClaudeConfig,
   CostRatioInput, CostRatioRow,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   AnnouncementDraft, AnnouncementItem,
@@ -130,8 +130,10 @@ export const api = {
   },
   deleteChannel(id: number): Promise<unknown> { return http.del(`/channels/${id}`); },
   testChannel(id: number): Promise<ChannelTestResult> { return http.post(`/channels/${id}/test`); },
-  /** 渠道额度(上游 GET {{apiRoot}}/v1/usage);仅 OpenAI 协议渠道会查询 */
+  /** 渠道额度(按 channel_type 分派到对应上游额度接口;后端带短 TTL 缓存) */
   channelQuota(id: number): Promise<ChannelQuota> { return http.get(`/channels/${id}/quota`); },
+  /** 批量渠道额度(首页「运行总览」用):一次拿全渠道,服务端并发拉 + 短 TTL 缓存。 */
+  channelsQuota(): Promise<ChannelQuotaItem[]> { return http.get('/channels/quota'); },
   syncModels(id: number): Promise<SyncResult> { return http.post(`/channels/${id}/sync-models`); },
 
   /* —— 渠道 × 厂商 成本系数(成本 = 厂商官方价 × ratio) —— */

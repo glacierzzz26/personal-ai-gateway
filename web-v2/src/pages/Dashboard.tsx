@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Empty, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
 import Sparkline from '@/components/Sparkline';
 import StatusDot from '@/components/StatusDot';
@@ -20,9 +20,10 @@ import { channelLabel } from '@/utils/channel';
 import {
   FAIL_DESC, FAIL_LABEL, FAIL_TONE, STATUS_CLIENT_CLOSED, TONE_COLOR, classifyError, fmt,
 } from '@/utils/format';
+import { QUOTA_ALERT, QUOTA_WARN, QUOTA_WINS, hasCap, pctText, quotaRatio } from '@/utils/quota';
 import type { EChartsOption } from 'echarts';
 import type { FailKind } from '@/utils/format';
-import type { CustomerRow, RequestLogItem } from '@/types';
+import type { Channel, ChannelQuota, ChannelQuotaItem, CustomerRow, RequestLogItem } from '@/types';
 
 /** "2026-09-03 20" → "20:00" */
 const hourLabel = (ts: string) => `${ts.slice(11)}:00`;
@@ -47,6 +48,7 @@ const RISK_META: Record<CustomerRow['risk'], { label: string; tone: 'err' | 'war
 export default function Dashboard() {
   const navigate = useNavigate();
   const c = useChartColors();
+  const qc = useQueryClient();
   const [detail, setDetail] = useState<RequestLogItem | null>(null);
   /* 统计窗口:默认最近 1 天(issue #13),预设可切 7/30 或自定义区间 */
   const [range, setRange] = useState(defaultRange);
@@ -63,6 +65,20 @@ export default function Dashboard() {
     queryKey: ['channels'], queryFn: api.getChannels, refetchInterval: 60_000,
   });
   const { data: tokens = [] } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
+  /* 渠道上游额度:一次批量拿全渠道(服务端并发 + 短 TTL 缓存),
+     与渠道页共用同一份缓存,不会把上游打成密集轮询。失败静默 —— 首页其余部分照常显示。 */
+  const { data: quotaItems = [], isError: quotaError } = useQuery({
+    queryKey: ['channels-quota'],
+    queryFn: api.channelsQuota,
+    refetchInterval: 60_000,
+    staleTime: 60_000,
+    retry: 0,
+  });
+  /* 首次额度查询在途(最长 6s)。期间**不能**让状态条断言「全部正常」——额度未知时
+     只报「读取中」,否则就是在没数据的时候给人一个假的好消息。
+     查询**失败**则不算在途(否则会卡在「读取中」不再前进),退回按已知信息展示 ——
+     额度是可选观测层,它挂了不该让整个状态条失真。 */
+  const quotaPending = channels.length > 0 && quotaItems.length === 0 && !quotaError;
   /* 客户关注区:余额告警 + 窗口内消耗排行(与首屏窗口同源) */
   const { data: focus, isLoading: foLoading, isError: foError, refetch: refetchFocus } = useQuery({
     queryKey: ['customers', 'focus', rq],
@@ -198,18 +214,48 @@ export default function Dashboard() {
   const costHues = [TOKENS.c1, TOKENS.c2, TOKENS.c3, TOKENS.c4, TOKENS.c5];
 
   /* ---------- 额度逼近 ---------- */
+  /* 令牌额度:已用 / 上限 ≥ 逼近阈值(60%)。 */
   const nearQuota = useMemo(
     () =>
       tokens
-        .filter(t => t.quotaUsd > 0 && t.usedUsd / t.quotaUsd >= 0.6)
+        .filter(t => t.quotaUsd > 0 && t.usedUsd / t.quotaUsd >= QUOTA_WARN)
         .sort((a, b) => b.usedUsd / b.quotaUsd - a.usedUsd / a.quotaUsd),
     [tokens],
   );
 
+  /* ---------- 上游渠道额度 ---------- */
+  /* 渠道 id → 额度。批量端点逐渠道返回,数组顺序即渠道顺序,取不到的就是「未知」。 */
+  const quotaById = useMemo(() => {
+    const m = new Map<number, ChannelQuota>();
+    for (const it of quotaItems as ChannelQuotaItem[]) m.set(it.id, it.quota);
+    return m;
+  }, [quotaItems]);
+
+  /**
+   * 上游渠道额度逼近/告警的渠道行。
+   *
+   * 两条排除规则:
+   *   - **查不到 ≠ 告警**:未配置、不支持、查询失败(quotaRatio 为 null)一律不入选 ——
+   *     第三方中转的「未配置」是常态,把它算成告警会让首页永远在喊狼来了。
+   *   - **停用渠道不算**:已停用的渠道不承载流量,额度见底不影响业务,不做告警。
+   */
+  const chQuotaRows = useMemo(() => {
+    const rows: Array<{ ch: Channel; q: ChannelQuota; ratio: number }> = [];
+    for (const c of channels) {
+      if (!c.enabled) continue;
+      const q = quotaById.get(c.id);
+      if (!q) continue;
+      const ratio = quotaRatio(q);
+      if (ratio != null && ratio >= QUOTA_WARN) rows.push({ ch: c, q, ratio });
+    }
+    return rows.sort((a, b) => b.ratio - a.ratio);
+  }, [channels, quotaById]);
+  const chQuotaAlert = chQuotaRows.filter(r => r.ratio >= QUOTA_ALERT);
+
   /* ---------- 顶部状态条 ---------- */
   const downCh = channels.filter(ch => ch.status === 'down' || ch.circuitOpen);
   const degradedCh = channels.filter(ch => ch.status === 'degraded');
-  const tightTokens = tokens.filter(t => t.quotaUsd > 0 && t.usedUsd / t.quotaUsd >= 0.85);
+  const tightTokens = tokens.filter(t => t.quotaUsd > 0 && t.usedUsd / t.quotaUsd >= QUOTA_ALERT);
   const atRisk = focus?.atRisk ?? [];
 
   const strip = (() => {
@@ -218,8 +264,9 @@ export default function Dashboard() {
     if (channels.length === 0 && tokens.length === 0) {
       return { tone: 'aux' as const, title: '尚未配置', desc: '还没有渠道与令牌，创建后这里会显示全局状态。' };
     }
-    /* 站主最该先看到的是「客户要断粮了」——欠费/低余额排在最前。 */
-    if (atRisk.length || downCh.length || tightTokens.length) {
+    /* 站主最该先看到的是「谁要断粮了」——按「客户断粮 > 上游断粮 > 自己断粮」排:
+       客户余额告警 → 渠道异常 → 上游渠道额度 → 令牌额度。 */
+    if (atRisk.length || downCh.length || chQuotaAlert.length || tightTokens.length) {
       const parts: string[] = [];
       if (atRisk.length) {
         parts.push(`${atRisk.length} 个客户余额告警（${atRisk.map(u => u.username).join('、')}）`);
@@ -227,6 +274,11 @@ export default function Dashboard() {
       if (downCh.length) {
         parts.push(
           `${downCh.length} 个渠道异常（${downCh.map(c => c.name).join('、')}）`,
+        );
+      }
+      if (chQuotaAlert.length) {
+        parts.push(
+          `${chQuotaAlert.length} 个上游渠道额度已用 ≥85%（${chQuotaAlert.map(r => r.ch.name).join('、')}）`,
         );
       }
       if (tightTokens.length) {
@@ -243,6 +295,10 @@ export default function Dashboard() {
         desc: `${degradedCh.length} 个渠道降级（${degradedCh.map(c => c.name).join('、')}）`,
       };
     }
+    /* 上游额度还没读回来(首屏读 6s):先别断言「全部正常」——没读到的部分不敢担保。 */
+    if (quotaPending) {
+      return { tone: 'aux' as const, title: '读取中', desc: '渠道健康正常，正在读取上游额度…' };
+    }
     return {
       tone: 'ok' as const,
       title: '全部正常',
@@ -256,6 +312,8 @@ export default function Dashboard() {
     void refetchLogs();
     void refetchFocus();
     fails.refetch();
+    // 额度有服务端 TTL 缓存,这里主动失效一次,让「刷新」真的重新问上游。
+    void qc.invalidateQueries({ queryKey: ['channels-quota'] });
   };
 
   /* 消耗 Top:后端已按营收降序返回,取前 5 展示。 */
@@ -668,37 +726,80 @@ export default function Dashboard() {
           <BlockCard>
             <BlockHead
               title="额度逼近"
-              sub="令牌全量 · 用量 ≥ 60%"
+              sub="令牌额度 + 上游渠道额度 · 用量 ≥ 60%"
               right={<button type="button" className="gw-link" onClick={() => navigate('/tokens')}>全部令牌 →</button>}
             />
-            {tokens.length === 0 ? (
+            {quotaPending ? (
               <BlockBody>
-                <EmptyState
-                  title="还没有令牌"
-                  desc="令牌用满额度后请求会被拒（quota_exceeded）。"
-                  action={<Button size="small" type="primary" onClick={() => navigate('/tokens')}>新建令牌</Button>}
-                />
+                <SkLines rows={['w80', 'w60']} />
               </BlockBody>
-            ) : nearQuota.length === 0 ? (
+            ) : nearQuota.length === 0 && chQuotaRows.length === 0 ? (
               <BlockBody>
-                <NoResultState title="没有令牌逼近额度" desc="所有令牌用量均低于 60%，无耗尽风险。" />
+                {tokens.length === 0 ? (
+                  <EmptyState
+                    title="还没有令牌"
+                    desc="令牌用满额度后请求会被拒（quota_exceeded）。"
+                    action={<Button size="small" type="primary" onClick={() => navigate('/tokens')}>新建令牌</Button>}
+                  />
+                ) : (
+                  <NoResultState title="没有额度逼近" desc="令牌与上游渠道用量均低于 60%，无耗尽风险。" />
+                )}
               </BlockBody>
             ) : (
               <div className="gw-list">
+                {/* 上游渠道额度:耗尽 = 该渠道所有模型对外不可用,故排在令牌之前。 */}
+                {chQuotaRows.map(({ ch, q, ratio }) => {
+                  const tone = ratio >= QUOTA_ALERT ? 'warn' : 'primary';
+                  const reset = QUOTA_WINS
+                    .map(k => q.windows?.[k]?.resetAt)
+                    .find(Boolean);
+                  return (
+                    <div className="gw-li" key={`ch-${ch.id}`}>
+                      <div className="r1">
+                        <span className="k">
+                          {ch.name}
+                          <span className="gw-badge" style={{ marginLeft: 6 }}>上游渠道额度</span>
+                        </span>
+                        <span className="n">{pctText(ratio * 100)}%</span>
+                        <span className="v">
+                          {hasCap(q, 'monthly') ? (
+                            <>
+                              {fmt.usd(q.windows!.monthly!.used ?? 0)}{' '}
+                              <span style={{ color: 'var(--gw-text-3)', fontWeight: 400 }}>/ {fmt.usd(q.windows!.monthly!.cap!)}</span>
+                            </>
+                          ) : (
+                            <span style={{ color: 'var(--gw-text-3)', fontWeight: 400 }}>按窗口百分比</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="gw-bar" role="img" aria-label={`${ch.name} 上游额度已用 ${pctText(ratio * 100)}%`}>
+                        <i style={{ width: `${ratio * 100}%`, background: tone === 'warn' ? TOKENS.warn : TOKENS.c1 }} />
+                      </div>
+                      <div className="r2">
+                        {ratio >= 1
+                          ? '上游额度已用尽，该渠道请求会开始失败（进而触发熔断）'
+                          : `剩余约 ${pctText((1 - ratio) * 100)}%${reset ? `，${new Date(reset).toLocaleString()} 重置` : '，消耗完该渠道将失败'}`}
+                      </div>
+                    </div>
+                  );
+                })}
                 {nearQuota.map(t => {
                   const r = t.usedUsd / t.quotaUsd;
-                  const tone = r >= 0.85 ? 'warn' : 'primary';
+                  const tone = r >= QUOTA_ALERT ? 'warn' : 'primary';
                   return (
-                    <div className="gw-li" key={t.id}>
+                    <div className="gw-li" key={`tk-${t.id}`}>
                       <div className="r1">
-                        <span className="k">{t.name}</span>
-                        <span className="n">{(r * 100).toFixed(0)}%</span>
+                        <span className="k">
+                          {t.name}
+                          <span className="gw-badge" style={{ marginLeft: 6 }}>令牌额度</span>
+                        </span>
+                        <span className="n">{pctText(r * 100)}%</span>
                         <span className="v">
                           {fmt.usd(t.usedUsd)}{' '}
                           <span style={{ color: 'var(--gw-text-3)', fontWeight: 400 }}>/ {fmt.usd(t.quotaUsd)}</span>
                         </span>
                       </div>
-                      <div className="gw-bar" role="img" aria-label={`${t.name} 额度已用 ${(r * 100).toFixed(0)}%`}>
+                      <div className="gw-bar" role="img" aria-label={`${t.name} 额度已用 ${pctText(r * 100)}%`}>
                         <i style={{ width: `${r * 100}%`, background: tone === 'warn' ? TOKENS.warn : TOKENS.c1 }} />
                       </div>
                       <div className="r2">

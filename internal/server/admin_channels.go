@@ -135,7 +135,8 @@ func validateChannelQuota(in domain.ChannelInput) error {
 }
 
 // handleChannelQuota 渠道上游额度(按渠道类型分派:窗口型 rolling/weekly/monthly、余额型或二者兼有)。
-// 失败/不支持也回 200 + available=false + error(前端据此展示灰色占位,不抛查询异常)。
+// 走后端短 TTL 缓存(见 quota_cache.go),故前端反复刷新不会反复打上游。
+// 失败/不支持也回 200 + available=false + errorKind/error(前端据此展示灰色占位,不抛查询异常)。
 func (s *Server) handleChannelQuota(w http.ResponseWriter, r *http.Request) {
 	id, ok := paramID(r, "id")
 	if !ok {
@@ -147,32 +148,12 @@ func (s *Server) handleChannelQuota(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	settings, err := s.st.GetSettings()
-	if err != nil {
-		writeStoreErr(w, err)
+	// 第三方没配路径:不发请求,直接给「未配置」占位(常态,不是故障)。
+	if quotaNeedsConfig(ch) {
+		writeJSON(w, http.StatusOK, quotaNotConfiguredResp())
 		return
 	}
-	resp := domain.ChannelQuotaResp{Available: true, Windows: map[string]domain.QuotaWindow{}}
-	res, err := s.rl.FetchChannelQuota(r.Context(), s.rl.Client(settings, 0), ch)
-	resp.PlanName = res.PlanName
-	resp.LatencyMs = res.LatencyMs
-	if err != nil {
-		resp.Available = false
-		switch {
-		case errors.Is(err, proxy.ErrQuotaNotConfigured):
-			resp.Error = "该渠道未配置额度查询路径"
-		case errors.Is(err, proxy.ErrQuotaUnsupported):
-			resp.Error = "该渠道类型没有已知的额度接口"
-		default:
-			resp.Error = err.Error()
-		}
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-	if res.Windows != nil {
-		resp.Windows = res.Windows
-	}
-	resp.Balance = res.Balance
+	resp, _ := s.channelQuota(r.Context(), ch)
 	writeJSON(w, http.StatusOK, resp)
 }
 
