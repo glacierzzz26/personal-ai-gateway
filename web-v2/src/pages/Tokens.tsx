@@ -485,13 +485,18 @@ export default function Tokens() {
   const columns: ColumnsType<GatewayToken> = useMemo(() => [
     {
       // 名称 / 归属 / Key 三合一 —— 都是「这个令牌是谁的、长什么样」
-      // 弹性列(不设 width),配合表格 tableLayout="fixed" 吸收剩余宽度,不横向溢出
-      title: '令牌', dataIndex: 'name',
+      //
+      // 给固定宽度(而非旧版留空当弹性列):fixed 布局下无 width 的列会吃掉全部剩余宽度,
+      // 于是宽屏时这列极宽、名字只占左边一小段,窄屏时又被压成省略号 —— 两头都不对。
+      // 固定后各列按比例分剩余宽度,列宽稳定,不再随窗口剧烈漂移。
+      title: '令牌', dataIndex: 'name', width: 240,
       render: (v, r) => (
         <div style={{ minWidth: 0, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <Tooltip title={v}>
-              <b style={{ fontWeight: 500, color: 'var(--gw-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{v}</b>
+              {/* flex:1 1 auto —— 名字占满列宽(而非按内容宽度收缩),超出再省略号:
+                  否则列虽宽、名字仍挤在左边一小块,看着又小又空。 */}
+              <b style={{ fontWeight: 500, color: 'var(--gw-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 auto', minWidth: 0 }}>{v}</b>
             </Tooltip>
             {isAdmin && (r.ownerId == null
               ? <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5, flexShrink: 0 }}>全局</span>
@@ -504,22 +509,18 @@ export default function Tokens() {
       ),
     },
     {
+      // 模型名一律拼成一个字符串 + 单元格 ellipsis。
+      // 旧版用 flexWrap 的徽标:徽标 nowrap 且 flex 项默认不收缩,单个长模型名比 140px 单元格还宽时
+      // 直接溢出 —— antd 单元格默认只有 overflow-wrap、没有 overflow:hidden(仅配 ellipsis 的列才裁),
+      // 于是画到右边「额度使用」列上,把进度条挡住。拼接文本交给 antd 裁剪 + Tooltip 给全文。
       title: '可用模型', dataIndex: 'allowedModels', width: 140,
+      ellipsis: { showTitle: false },
       render: v => {
         const list = v as string[];
         if (list.length === 1 && list[0] === '*') return <span className="gw-badge tint">不限</span>;
         if (!list.length) return <span style={{ color: 'var(--gw-text-3)' }}>无</span>;
-        const shown = list.slice(0, 2);
-        return (
-          <span style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap' }}>
-            {shown.map(m => <span className="gw-badge gw-mono" key={m}>{m}</span>)}
-            {list.length > shown.length && (
-              <Tooltip title={list.slice(2).join('、')}>
-                <span className="gw-badge">+{list.length - shown.length}</span>
-              </Tooltip>
-            )}
-          </span>
-        );
+        const text = list.join('、');
+        return <Tooltip title={text}><span className="gw-mono">{text}</span></Tooltip>;
       },
     },
     { title: '额度使用', key: 'quota', width: 158, render: (_, r) => quotaCell(r) },

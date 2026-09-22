@@ -279,6 +279,14 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 展示词表(providers/channelTypes/egressProtos/quotaShapes/capabilities 标签)属前端常量,与后端枚举一致;
   不作为运行时数据。渠道的展示名/徽标统一走 `utils/channel.ts` 的 `channelLabel`/`channelMark`
   (有厂商显示厂商,聚合渠道回落渠道类型),勿在页面里直接渲染 `ch.provider`(为空会显示空白)。
+- **antd 表格列宽**:一律 `tableLayout="fixed"`(见 `styles/tokens.ts`)。fixed 下**没有 `width` 的列会吃掉
+  全部剩余宽度**,故除「刻意当弹性列」外每列都要给 width(令牌表首列曾留空 → 宽屏时列极宽、名字只占左边
+  一小段,窄屏又被压成省略号)。单元格内容(`render`)默认**不被裁剪** —— antd 只给 `overflow-wrap`,
+  仅配 `ellipsis` 的列才加 `overflow:hidden`(见 `antd/es/table/style/index.js` + `ellipsis.js`),
+  所以**长内容列必须显式收口**:优先「拼成单一文本 + `ellipsis:{showTitle:false}` + `<Tooltip>` 给全文」
+  (令牌表「可用模型」列;旧版用 `flexWrap` 徽标,单个长模型名会溢出画到右边「额度使用」列、挡住进度条),
+  或自套 `overflow:hidden` 容器。别指望 `gw-table` 那套 `td{overflow:hidden}`(它只作用于 Dashboard
+  自建的 `<table>`,管不到 antd `<Table>`)。
 
 ## 8. 运行与联调
 
