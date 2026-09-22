@@ -586,7 +586,11 @@ export default function Dashboard() {
                           {ch.circuitOpen && <span className="gw-badge" style={{ marginLeft: 6 }}>熔断中</span>}
                         </td>
                         <td className="num">{ch.successRate ? fmt.pct(ch.successRate) : '—'}</td>
-                        <td className="num">{ch.status === 'down' ? '—' : fmt.ms(ch.latencyMs)}</td>
+                        <td className="num">
+                          {ch.status === 'down' || ch.status === 'unknown' || ch.status === 'disabled'
+                            ? '—'
+                            : fmt.ms(ch.latencyMs)}
+                        </td>
                         <td className="num">{ch.todayTokens ? fmt.k(ch.todayTokens) : '—'}</td>
                         <td className="num">{ch.todayCostUsd ? fmt.usd(ch.todayCostUsd) : '—'}</td>
                       </tr>

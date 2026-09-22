@@ -61,6 +61,8 @@ export const STATUS: Record<string, { t: string; tone: Tone }> = {
   degraded: { t: '降级', tone: 'warn' },
   down: { t: '不可用', tone: 'err' },
   disabled: { t: '已停用', tone: 'aux' },
+  // 尚无流量 / 半开待复检 —— 没有证据说它健康,也没有证据说它坏,如实标灰。
+  unknown: { t: '待观察', tone: 'aux' },
   active: { t: '正常', tone: 'ok' },
   expired: { t: '已过期', tone: 'err' },
 };

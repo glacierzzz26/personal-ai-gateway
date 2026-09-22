@@ -452,15 +452,19 @@ export default function Channels() {
     {
       // 成功率 / 延迟 / 状态 合并 —— 都是「这条渠道现在健不健康」
       title: '健康度', key: 'health', align: 'right', width: 132,
-      render: (_, r) => (
-        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <StatusDot status={r.status} />
-          <span className="gw-num" style={{ fontSize: 12.5 }}>
-            {fmt.pct(r.successRate, 2)} · {r.status === 'down' || r.status === 'disabled' ? '—' : fmt.ms(r.latencyMs)}
+      render: (_, r) => {
+        // down/disabled/unknown 都没有可报的成功率与延迟:前者在冷却、后两者没跑过流量或没启用。
+        const noData = r.status === 'down' || r.status === 'disabled' || r.status === 'unknown';
+        return (
+          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+            <StatusDot status={r.status} />
+            <span className="gw-num" style={{ fontSize: 12.5 }}>
+              {noData ? '—' : fmt.pct(r.successRate, 2)} · {noData ? '—' : fmt.ms(r.latencyMs)}
+            </span>
+            {r.circuitOpen && <span className="gw-badge" style={{ color: TOKENS.err, borderColor: TOKENS.err }}>熔断中</span>}
           </span>
-          {r.circuitOpen && <span className="gw-badge" style={{ color: TOKENS.err, borderColor: TOKENS.err }}>熔断中</span>}
-        </span>
-      ),
+        );
+      },
     },
     {
       // 今日 Token / 花费 合并 —— 同一时段的量价,一行显示
@@ -580,6 +584,7 @@ export default function Channels() {
                 { value: 'healthy' satisfies HealthStatus, label: '健康' },
                 { value: 'degraded' satisfies HealthStatus, label: '降级' },
                 { value: 'down' satisfies HealthStatus, label: '不可用' },
+                { value: 'unknown' satisfies HealthStatus, label: '待观察' },
                 { value: 'disabled' satisfies HealthStatus, label: '已停用' },
               ]}
             />

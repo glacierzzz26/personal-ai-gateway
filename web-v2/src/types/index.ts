@@ -13,7 +13,7 @@ export type EgressProto = 'openai' | 'anthropic' | 'azure';
 /** 第三方渠道额度接口的响应形状。 */
 export type QuotaShape = 'usage' | 'oneapi' | 'newapi_user';
 
-export type HealthStatus = 'healthy' | 'degraded' | 'down' | 'disabled';
+export type HealthStatus = 'healthy' | 'degraded' | 'down' | 'disabled' | 'unknown';
 
 export interface Channel {
   id: number;

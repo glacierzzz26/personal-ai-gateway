@@ -223,6 +223,72 @@ func TestCircuitOpenSkipsChannel(t *testing.T) {
 	}
 }
 
+// TestCircuitStateReportsProbing 冷却已过但未复检 → probing(而非 closed):
+// 这正是 issue #17 的回归点 —— 旧 CircuitOpen 在此返回「未熔断」,列表据此显示健康。
+func TestCircuitStateReportsProbing(t *testing.T) {
+	st := testStore(t)
+	e := New(st)
+	a := addChannel(t, st, "A", 1, 1)
+
+	if state, _ := e.CircuitState(a); state != CircuitClosed {
+		t.Fatalf("healthy channel state = %q, want closed", state)
+	}
+	e.RecordFailure(a, 1, 600) // 单次即熔断 600s
+	state, at := e.CircuitState(a)
+	if state != CircuitDown {
+		t.Fatalf("after trip state = %q, want down", state)
+	}
+	if at.IsZero() {
+		t.Fatalf("down state must carry availableFrom")
+	}
+	// 冷却已过(用 0 秒冷却模拟,立刻过期)→ probing,且 availableFrom 归零。
+	e.RecordFailure(a, 1, -1)
+	if state, at := e.CircuitState(a); state != CircuitProbing || !at.IsZero() {
+		t.Fatalf("expired cooldown state = %q at=%v, want probing + zero", state, at)
+	}
+}
+
+// TestClaimConsumesHalfOpenProbe 半开只放行一次:首个 Claim 放行并推后窗口,
+// 紧随其后的并发 Claim 必须被拒 —— 否则多请求会一起涌入刚熔断的渠道。
+func TestClaimConsumesHalfOpenProbe(t *testing.T) {
+	st := testStore(t)
+	e := New(st)
+	a := addChannel(t, st, "A", 1, 1)
+
+	e.RecordFailure(a, 1, -1) // 冷却已过 → 半开
+	if !e.Claim(a, 600) {
+		t.Fatalf("first claim must pass the half-open probe")
+	}
+	if state, _ := e.CircuitState(a); state != CircuitDown {
+		t.Fatalf("after claim state = %q, want down (probe window held)", state)
+	}
+	if e.Claim(a, 600) {
+		t.Fatalf("second claim must be rejected while the probe window is held")
+	}
+}
+
+// TestEvaluateServesHalfOpenOnce 端到端:熔断过期的渠道在 Evaluate 里被放行一次,
+// 紧随其后的另一次 Evaluate(探测窗口被占)必须拿不到它。
+func TestEvaluateServesHalfOpenOnce(t *testing.T) {
+	st := testStore(t)
+	e := New(st)
+	a := addChannel(t, st, "A", 1, 1)
+	m := addModel(t, st, "m1")
+	addOffer(t, st, m, a)
+
+	e.RecordFailure(a, 1, -1) // 冷却已过 → 半开
+	plan, err := e.Evaluate("m1")
+	if err != nil {
+		t.Fatalf("half-open evaluate should serve the probe: %v", err)
+	}
+	if len(plan.Attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1", len(plan.Attempts))
+	}
+	if _, err := e.Evaluate("m1"); !errors.Is(err, ErrModelUnavailable) {
+		t.Fatalf("second evaluate = %v, want ErrModelUnavailable (probe window held)", err)
+	}
+}
+
 func TestSupportsModelWildcard(t *testing.T) {
 	cases := []struct {
 		allowed []string

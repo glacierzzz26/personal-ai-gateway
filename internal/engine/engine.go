@@ -39,7 +39,17 @@ func New(st *store.Store) *Engine {
 type circuit struct {
 	failures  int
 	openUntil time.Time // 零值 = 未熔断
+	lastOK    time.Time // 最近一次成功(真实转发或管理台探测),供「无流量但有复检证据」判健康
 }
+
+// CircuitStateT 熔断展示态(Claim/CircuitState 共用)。
+type CircuitStateT string
+
+const (
+	CircuitClosed  CircuitStateT = "closed"  // 未熔断
+	CircuitDown    CircuitStateT = "down"    // 冷却中,剔除
+	CircuitProbing CircuitStateT = "probing" // 冷却已过、待复检(半开)
+)
 
 type ewma struct {
 	val float64 // 毫秒
@@ -99,15 +109,20 @@ func (e *Engine) Evaluate(model string) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
 	cands := make([]domain.OfferRead, 0, len(offers)) // 新底层数组,勿复用 offers(后续会原地收缩)
+	// 同一渠道可能挂多个 offer,Claim 是「消费半开机会」的写操作,同一渠道只算一次,
+	// 否则一条渠道的多个 offer 会把一次探测机会重复放行。
+	claimed := make(map[int64]bool, len(offers))
 	for _, o := range offers {
 		ch, ok := byID[o.ChannelID]
 		if !ok || !ch.Enabled {
 			continue
 		}
-		if !e.available(o.ChannelID, now) {
-			continue
+		if !claimed[o.ChannelID] {
+			if !e.Claim(o.ChannelID, ch.CooldownSec) {
+				continue
+			}
+			claimed[o.ChannelID] = true
 		}
 		cands = append(cands, o)
 	}
@@ -317,10 +332,16 @@ func weightedOrder(pool []domain.OfferRead, w map[int64]int, rnd *rand.Rand) []d
 func (e *Engine) RecordSuccess(chID int64, latencyMs int64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if c, ok := e.circuits[chID]; ok {
-		c.failures = 0
-		c.openUntil = time.Time{}
+	c, ok := e.circuits[chID]
+	if !ok {
+		c = &circuit{}
+		e.circuits[chID] = c
 	}
+	c.failures = 0
+	c.openUntil = time.Time{}
+	// 记下成功时刻:管理台「测试」走的是同一原语,故探测成功同样算复检证据,
+	// 让无流量的渠道也能凭一次真实成功判健康(而非只能永远 unknown)。
+	c.lastOK = time.Now()
 	ew := e.ewma[chID]
 	if ew == nil {
 		ew = &ewma{val: float64(latencyMs)}
@@ -350,29 +371,80 @@ func (e *Engine) RecordFailure(chID int64, maxFailures int, cooldownSec int) {
 	}
 }
 
-// available 是否可被选中(熔断期内剔除;过期后放行半开探测)。
-func (e *Engine) available(chID int64, now time.Time) bool {
+// Claim 判定渠道此刻能否被选中,并在放行时**原子地**占住这次机会。
+//
+// 三个态:
+//   - 未熔断/成功已复位 → 直接放行(不占位);
+//   - 冷却中(now < openUntil) → 拒绝;
+//   - 冷却已过但尚未复检 → 半开:只放行**一次**探测,并把 `openUntil` 往后延
+//     (cooldownSec≤0 回落到 30s),使并发请求不会一起涌入。
+//     放行后**不阻塞**:若这次探测因客户端 499 中断(不记成功也不记失败),
+//     `openUntil` 停在延后的时刻,下一个请求在下一个冷却边界会再试一次,
+//     最坏只是把一个「待复检」的渠道多晾一个冷却,漏判一个空闲渠道而已。
+//
+// 取代了原先的 available()+CircuitOpen():此前「判定是否可选」与「消费半开机会」
+// 是两步,读接口的 CircuitOpen 又只报「冷却中」,**冷却已过但从未复检**这一态两端都
+// 读成「健康」,于是列表显示健康、实际仍在被剔除。合并成一个原语后不存在这个缝。
+func (e *Engine) Claim(chID int64, cooldownSec int) bool {
+	if cooldownSec <= 0 {
+		cooldownSec = 30
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	c, ok := e.circuits[chID]
-	if !ok || c.openUntil.IsZero() || now.After(c.openUntil) {
+	c, exists := e.circuits[chID]
+	if !exists || c.openUntil.IsZero() {
 		return true
 	}
-	return false
+	now := time.Now()
+	if !now.After(c.openUntil) {
+		return false // 冷却中:剔除
+	}
+	// 冷却已过:开一次半开探测,把窗口推后,防并发涌入。
+	c.openUntil = now.Add(time.Duration(cooldownSec) * time.Second)
+	return true
 }
 
-// CircuitOpen 是否熔断中(供读接口展示 down + availableFrom)。
-func (e *Engine) CircuitOpen(chID int64) (open bool, availableFrom time.Time) {
+// CircuitState 渠道熔断展示态(供读接口)。
+//
+//   - down: 冷却中(now < openUntil),开放时间即 availableFrom;
+//   - probing: 曾熔断、冷却已过,但**没有任何近期成功证据**(lastOK 不存在或已超出
+//     一次冷却);此时半开探测还没落地,既不能说它坏,也不能说它好 —— 这才是
+//     「无流量不等于健康」的落点,列表敢显示它,也敢在首页提示;
+//   - closed: 未熔断。
+func (e *Engine) CircuitState(chID int64) (state CircuitStateT, availableFrom time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	c, ok := e.circuits[chID]
 	if !ok || c.openUntil.IsZero() {
-		return false, time.Time{}
+		return CircuitClosed, time.Time{}
 	}
-	if time.Now().After(c.openUntil) {
-		return false, time.Time{}
+	now := time.Now()
+	if !now.After(c.openUntil) {
+		return CircuitDown, c.openUntil
 	}
-	return true, c.openUntil
+	if !c.lastOK.IsZero() && now.Sub(c.lastOK) <= c.verifiedFor() {
+		return CircuitClosed, time.Time{} // 冷却后确有一次成功(真实转发或探测)→ 健康
+	}
+	return CircuitProbing, time.Time{}
+}
+
+// LastSuccessAt 最近一次成功时刻(零值 = 从未成功过)。
+func (e *Engine) LastSuccessAt(chID int64) time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if c, ok := e.circuits[chID]; ok {
+		return c.lastOK
+	}
+	return time.Time{}
+}
+
+// verifiedFor 一次成功能被采信多久。冷却期就是「这条渠道上次坏掉后要等多久」,
+// 拿它当证据有效期最自然:成功若比这还久远,就当没验过。
+func (c *circuit) verifiedFor() time.Duration {
+	if c.failures <= 0 {
+		return 15 * time.Minute
+	}
+	return 30 * time.Second
 }
 
 // LatencyMS EWMA 延迟(未知返回 0)。
