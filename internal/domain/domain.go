@@ -66,6 +66,25 @@ const (
 	ProviderQwen      Provider = "通义千问"
 	ProviderZhipu     Provider = "智谱"
 	ProviderMoonshot  Provider = "Moonshot"
+	// 以下为 issue #27 扩容:commandcode(CC)单页是其渠道来源,CC 卖的不止上述 6 家,
+	// 官方价锚点要能归到这 14 家。字符串即前端 ProviderMark 展示名,勿改。
+	// 命名依据:2026-09-23 逐模型核对 CC 详情页 JSON-LD 的 "brand"(81/81 命中,零冲突)。
+	// 注意 LongCat 的 brand 是 Meituan(不是 ByteDance),Ling 的 brand 是 inclusionAI。
+	// 品牌名(CC 详情页)与展示名(CC 列表页首词)对照见 internal/pricing/commandcode.go。
+	ProviderGoogle    Provider = "Google"
+	ProviderXAI       Provider = "xAI"
+	ProviderXiaomi    Provider = "Xiaomi"
+	ProviderMeta      Provider = "Meta"
+	ProviderMiniMax   Provider = "MiniMax"
+	ProviderNVIDIA    Provider = "NVIDIA"
+	ProviderTencent   Provider = "Tencent"
+	ProviderStepFun   Provider = "StepFun"
+	ProviderMeituan   Provider = "Meituan"
+	ProviderThinking  Provider = "Thinking Machines"
+	ProviderSakana    Provider = "Sakana AI"
+	ProviderPoolside  Provider = "Poolside"
+	ProviderInclusion Provider = "InclusionAI"
+	ProviderJev       Provider = "Jev"
 )
 
 // ProviderNone 「不是单一厂商」(多厂家中转/区域部署)。空串即此语义 —— 用常量而非裸 ""
@@ -76,6 +95,9 @@ const ProviderNone Provider = ""
 var Providers = []Provider{
 	ProviderOpenAI, ProviderAnthropic, ProviderDeepSeek,
 	ProviderQwen, ProviderZhipu, ProviderMoonshot,
+	ProviderGoogle, ProviderXAI, ProviderXiaomi, ProviderMeta, ProviderMiniMax,
+	ProviderNVIDIA, ProviderTencent, ProviderStepFun, ProviderMeituan,
+	ProviderThinking, ProviderSakana, ProviderPoolside, ProviderInclusion, ProviderJev,
 }
 
 // ChannelType 渠道类型 —— 决定**上游额度怎么查**(各家问法完全不同),与 Provider 正交:
@@ -652,6 +674,26 @@ type ApplyPriceReq struct {
 	ConfirmOverride bool  `json:"confirmOverride"` // offer.override_price=true 时须显式确认
 }
 
+// ProviderCount 一个厂商的落库行数(CC 抓取结果按厂商分行展示用)。
+type ProviderCount struct {
+	Provider Provider `json:"provider"`
+	Count    int      `json:"count"`
+}
+
+// CommandCodeFetchResult POST /official-prices/fetch-commandcode 返回。
+//
+// 与 FetchPricingResult 的区别:CC 单页覆盖**多厂商**,后者的单个 Provider 字段表达不了。
+// 免费行必须显式回报(它们被排除在落库之外,不报就是静默丢数据)。
+type CommandCodeFetchResult struct {
+	SourceURL   string          `json:"sourceUrl"`
+	ContentSHA  string          `json:"contentSha256,omitempty"`
+	TotalRows   int             `json:"totalRows"` // 表内数据行数(含免费行)
+	Upserted    int             `json:"upserted"`  // 落库行数(不含免费行)
+	Removed     int64           `json:"removed,omitempty"`
+	PerVendor   []ProviderCount `json:"perVendor"`
+	FreeSkipped []string        `json:"freeSkipped,omitempty"`
+}
+
 // RefreshProviderResult 批量刷新中单个厂商的结果。
 //
 // 逐厂商独立成败:一个厂商抓失败不影响其他厂商(共用一个按钮,单点网络抖动
@@ -678,6 +720,10 @@ type RefreshPricingResp struct {
 	BackfillError string `json:"backfillError,omitempty"`
 	TotalUpserted int    `json:"totalUpserted"`
 	TotalRemoved  int64  `json:"totalRemoved,omitempty"`
+	// CommandCode commandcode 单页锚点抓取的结果(issue #27;它已取代逐厂商抓取,是主力来源)。
+	// 失败时 CommandCodeError 记原因,不影响其余结果。
+	CommandCode      *CommandCodeFetchResult `json:"commandCode,omitempty"`
+	CommandCodeError string                  `json:"commandCodeError,omitempty"`
 }
 
 // ---------- 路由规则 ----------

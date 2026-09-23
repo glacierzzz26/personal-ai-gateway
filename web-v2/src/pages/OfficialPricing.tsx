@@ -40,8 +40,7 @@ export default function OfficialPricing() {
   const [vendor, setVendor] = useState<Provider | ''>('');
   const [kw, setKw] = useState('');
   const [manualOpen, setManualOpen] = useState(false);
-  const [fetching, setFetching] = useState<Provider | null>(null);
-  // 批量刷新结果(逐厂商成败 + 本次新绑定的模型)。
+  // 批量刷新结果(CC 锚点抓取 + 显式重试厂商的成败 + 本次新绑定的模型)。
   const [bulkRes, setBulkRes] = useState<RefreshPricingResp | null>(null);
   const [bulkRunning, setBulkRunning] = useState(false);
 
@@ -82,30 +81,6 @@ export default function OfficialPricing() {
   }, [models, index]);
 
   const vendorInfo = vendors.find(v => v.provider === vendor);
-  const manualOnly = !!vendorInfo?.manualOnly;
-
-  const fetchPrices = useMutation({
-    mutationFn: (p: Provider) => api.fetchOfficialPrices(p),
-    onSuccess: r => {
-      qc.invalidateQueries({ queryKey: ['official-prices'] });
-      const failed = r.failed?.length ?? 0;
-      const removed = r.removed ?? 0;
-      message.success({
-        content: (
-          <>
-            已抓取 {r.upserted} 个模型
-            {failed > 0 && `,${failed} 个失败`}
-            {/* 对账删除:官方页已下架的行被清掉,提示一下免得管理员以为数据丢了 */}
-            {removed > 0 && `,清理陈旧行 ${removed} 条`}
-            {' · '}
-            <a href={r.sourceUrl} target="_blank" rel="noreferrer">官方来源 ↗</a>
-          </>
-        ),
-        duration: removed > 0 ? 8 : 6,
-      });
-    },
-    onError: (e: Error) => message.error(e.message || '获取失败'),
-  });
 
   const del = useMutation({
     mutationFn: (id: number) => api.deleteOfficialPrice(id),
@@ -130,40 +105,29 @@ export default function OfficialPricing() {
     });
   };
 
-  const runFetch = async () => {
-    if (!vendor) {
-      message.warning('请先选择要获取的厂商');
-      return;
-    }
-    setFetching(vendor);
-    try {
-      await fetchPrices.mutateAsync(vendor);
-    } catch {
-      /* 失败提示由 mutation 处理 */
-    } finally {
-      setFetching(null);
-    }
-  };
-
   /**
-   * 全部重抓并回填 —— 一个按钮覆盖所有可抓厂商。
+   * 重抓官方价并回填 —— issue #27 后只有一个可抓来源:commandcode 单页锚点。
    *
-   * 抓取有破坏性(会清掉官网已下架的行),所以先显式确认再跑;逐厂商独立成败,
-   * 结果弹窗按厂商分列,失败的可以只重试失败的那几个。
+   * 逐厂商官网抓取已停用(全部 ManualOnly),所以这里**不再**按厂商发请求,而是固定打 CC 一处。
+   * `only` 传入时是「仅重试失败的厂商」:CC 不涉及,交给后端逐厂商路径(当前会以 manual_only
+   * 返回,属预期);它的存在是为了让失败重试按钮仍有落点,不是常规路径。
+   *
+   * 抓取有破坏性(会清掉 CC 页上已下架的行),所以先显式确认再跑。
    */
   const runBulkRefresh = (only?: Provider[]) => {
-    const targets = only ?? vendors.filter(v => !v.manualOnly).map(v => v.provider);
-    if (targets.length === 0) {
-      message.warning('没有可抓取的厂商');
-      return;
-    }
+    const retry = only && only.length > 0;
     modal.confirm({
-      title: only ? '仅重试失败的厂商' : `重新抓取 ${targets.length} 个厂商的官方价`,
+      title: retry ? `仅重试失败的 ${only.length} 个厂商` : '重新抓取官方价(commandcode 单页)',
       content: (
         <>
-          抓取会更新官方参考价,并<b>删除官网上已下架、页面上不再列出的模型行</b>。
+          从 commandcode 模型页抓取全部模型单价作为官方价锚点,并
+          <b>删除该来源下已下架、页面上不再列出的模型行</b>。
           抓完会自动把能唯一对上的模型绑定到官方价(成本与售价随之重算)。
-          <div style={{ marginTop: 8 }} className="gw-mono" >{targets.join('、')}</div>
+          {!retry && (
+            <div style={{ marginTop: 8, color: 'var(--gw-text-3)', fontSize: 12.5 }}>
+              费用倍率不在此处 —— CC 单价即锚点,「$10 买 $60」走渠道成本系数。
+            </div>
+          )}
         </>
       ),
       okText: '开始抓取',
@@ -176,7 +140,7 @@ export default function OfficialPricing() {
           qc.invalidateQueries({ queryKey: ['official-prices'] });
           qc.invalidateQueries({ queryKey: ['models'] });
         } catch (e) {
-          message.error((e as Error)?.message || '批量刷新失败');
+          message.error((e as Error)?.message || '重抓失败');
         } finally {
           setBulkRunning(false);
         }
@@ -306,10 +270,10 @@ export default function OfficialPricing() {
   ) : rows.length === 0 ? (
     <EmptyState
       title="还没有官方参考价"
-      desc="选择厂商后「获取官方价」自动抓取官网计费页;官方页动态渲染的厂商可「手工录入」。"
+      desc="点「抓取官方价」从 commandcode 模型页拉取全部模型单价(覆盖全部厂商);页面动态渲染、抓不到的厂商可「手工录入」。"
       action={
-        <Button size="small" type="primary" onClick={runFetch} disabled={!vendor || manualOnly || fetchPrices.isPending}>
-          获取官方价
+        <Button size="small" type="primary" loading={bulkRunning} onClick={() => runBulkRefresh()}>
+          抓取官方价
         </Button>
       }
     />
@@ -325,18 +289,13 @@ export default function OfficialPricing() {
     <div className="gw-page">
       <PageHeader
         title="官方定价"
-        desc="厂商官网单价,作为各模型的官方参考价来源;抓取/手工录入只写官方价,不改动渠道报价"
+        desc="官方参考价锚点来自 commandcode 模型页(覆盖全部厂商);抓取/手工录入只写官方价,不改动渠道报价"
         extra={
           <>
             <Button onClick={() => setManualOpen(true)}>手工录入</Button>
-            <Tooltip title="逐个抓取全部可抓厂商,并自动回填模型绑定 —— 成本按「官方价 × 渠道系数」随之重算">
-              <Button loading={bulkRunning} onClick={() => runBulkRefresh()}>
-                全部重抓并回填
-              </Button>
-            </Tooltip>
-            <Tooltip title={!vendor ? '请先选择厂商' : manualOnly ? '该厂商官方页动态渲染,只能手工录入' : ''}>
-              <Button type="primary" loading={fetching !== null} disabled={!vendor || manualOnly} onClick={runFetch}>
-                获取官方价
+            <Tooltip title="从 commandcode 模型页抓取全部模型单价并回填模型绑定 —— 成本按「官方价 × 渠道系数」随之重算">
+              <Button type="primary" loading={bulkRunning} onClick={() => runBulkRefresh()}>
+                抓取官方价
               </Button>
             </Tooltip>
           </>
@@ -352,10 +311,7 @@ export default function OfficialPricing() {
               placeholder="全部厂商"
               value={vendor || undefined}
               onChange={v => setVendor((v as Provider) ?? '')}
-              options={vendors.map(v => ({
-                value: v.provider,
-                label: v.manualOnly ? `${v.provider}(仅手工)` : v.provider,
-              }))}
+              options={vendors.map(v => ({ value: v.provider, label: v.provider }))}
             />
             <Input.Search
               allowClear
@@ -366,8 +322,8 @@ export default function OfficialPricing() {
             />
             {vendorInfo && (
               <span style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>
-                来源:<a href={vendorInfo.sourceUrl} target="_blank" rel="noreferrer" className="gw-mono">{vendorInfo.sourceUrl}</a>
-                {manualOnly && ' · 官方页动态渲染,请手工录入'}
+                官网来源(手工录入时留证):
+                <a href={vendorInfo.sourceUrl} target="_blank" rel="noreferrer" className="gw-mono">{vendorInfo.sourceUrl}</a>
               </span>
             )}
             <span className="count">共 <b>{list.length}</b> 行官方价</span>
@@ -398,12 +354,12 @@ export default function OfficialPricing() {
         onClose={() => setManualOpen(false)}
       />
 
-      {/* 批量刷新结果:逐厂商成败分列 —— 一个厂商失败不该淹没另外两个的成功 */}
+      {/* 重抓结果:CC 单页锚点为主,显式重试的逐厂商结果单列(一个失败不该淹没另一个的成功) */}
       <Modal
         title="重抓官方价结果"
         open={!!bulkRes}
         onCancel={() => setBulkRes(null)}
-        width={640}
+        width={680}
         footer={(() => {
           const failed = (bulkRes?.results ?? []).filter(r => r.error).map(r => r.provider);
           return (
@@ -420,35 +376,91 @@ export default function OfficialPricing() {
       >
         {bulkRes && (
           <>
-            <div className="gw-note" style={{ marginBottom: 14 }}>
-              <b>新抓 {bulkRes.totalUpserted} 行官方价{bulkRes.totalRemoved ? `,清理下架 ${bulkRes.totalRemoved} 行` : ''}</b>
-              <span>
-                成本按「官方价 × 渠道系数」自动重算。新绑定 {bulkRes.bound.length} 个模型;
-                未绑定的模型成本仍走手填兜底或显示「未知」。
-              </span>
-            </div>
-
-            {bulkRes.results.map(r => (
-              <div
-                key={r.provider}
-                style={{
-                  display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 0',
-                  borderBottom: '1px solid var(--gw-border)', fontSize: 13,
-                }}
-              >
-                <ProviderMark name={r.provider} />
-                <b style={{ fontWeight: 500, width: 96 }}>{r.provider}</b>
-                {r.error ? (
-                  <span style={{ color: 'var(--gw-err)', flex: 1 }}>
-                    失败({r.errorType}):{r.error}
-                  </span>
-                ) : (
-                  <span style={{ color: 'var(--gw-text-2)', flex: 1 }}>
-                    抓取 {r.upserted} 个模型{r.removed ? `,清理 ${r.removed} 行陈旧数据` : ''}
-                  </span>
-                )}
+            {/* —— CC 锚点:主力结果 —— */}
+            {bulkRes.commandCode ? (
+              <div className="gw-note" style={{ marginBottom: 14 }}>
+                <b>
+                  已从 commandcode 抓取 {bulkRes.commandCode.upserted} 行官方价
+                  {bulkRes.commandCode.removed ? `,清理下架 ${bulkRes.commandCode.removed} 行` : ''}
+                </b>
+                <span>
+                  共 {bulkRes.commandCode.totalRows} 行(含免费 {bulkRes.commandCode.freeSkipped?.length ?? 0} 行,已跳过)。
+                  成本按「官方价 × 渠道系数」自动重算;新绑定 {bulkRes.bound.length} 个模型,
+                  未绑定的仍走手填兜底或显示「未知」。
+                  {' '}
+                  <a href={bulkRes.commandCode.sourceUrl} target="_blank" rel="noreferrer">来源 ↗</a>
+                </span>
               </div>
-            ))}
+            ) : bulkRes.commandCodeError ? (
+              <div className="gw-note" role="alert" style={{ borderLeftColor: 'var(--gw-err)', marginBottom: 14 }}>
+                <b style={{ color: 'var(--gw-err)' }}>commandcode 抓取失败</b>
+                <span>{bulkRes.commandCodeError}(未改动任何官方价;旧数据仍在)</span>
+              </div>
+            ) : null}
+
+            {/* 按厂商分行:证实这次抓取确实覆盖到了各厂商(空表才有问题) */}
+            {(bulkRes.commandCode?.perVendor?.length ?? 0) > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginBottom: 6 }}>
+                  本次落库按厂商分布
+                </div>
+                <Space size={[6, 6]} wrap>
+                  {bulkRes.commandCode!.perVendor.map(p => (
+                    <Tag key={p.provider} style={{ marginInlineEnd: 0 }}>
+                      <ProviderMark name={p.provider} />
+                      <span style={{ marginLeft: 4 }}>{p.provider}</span>
+                      <span className="gw-num" style={{ marginLeft: 4, color: 'var(--gw-text-3)' }}>{p.count}</span>
+                    </Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+
+            {/* 免费行被排除在落库之外,不列出来就是静默丢数据 */}
+            {(bulkRes.commandCode?.freeSkipped?.length ?? 0) > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginBottom: 6 }}>
+                  免费模型(无单价,未落库)
+                </div>
+                <Space size={[6, 6]} wrap>
+                  {bulkRes.commandCode!.freeSkipped!.map(s => (
+                    <Tag key={s} style={{ marginInlineEnd: 0 }} className="gw-mono">{s}</Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+
+            {/* 显式重试的逐厂商结果(常规路径下为空) */}
+            {bulkRes.results.length > 0 && (
+              <div style={{ marginBottom: 4 }}>
+                <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginBottom: 6 }}>
+                  逐厂商结果
+                </div>
+                {bulkRes.results.map(r => (
+                  <div
+                    key={r.provider}
+                    style={{
+                      display: 'flex', alignItems: 'baseline', gap: 8, padding: '6px 0',
+                      borderBottom: '1px solid var(--gw-border)', fontSize: 13,
+                    }}
+                  >
+                    <ProviderMark name={r.provider} />
+                    <b style={{ fontWeight: 500, width: 96 }}>{r.provider}</b>
+                    {r.error ? (
+                      <span style={{ color: 'var(--gw-err)', flex: 1 }}>
+                        {r.errorType === 'manual_only'
+                          ? '仅手工录入(逐厂商抓取已停用,官方价由 commandcode 锚点写入)'
+                          : `失败(${r.errorType}):${r.error}`}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--gw-text-2)', flex: 1 }}>
+                        抓取 {r.upserted} 个模型{r.removed ? `,清理 ${r.removed} 行陈旧数据` : ''}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {bulkRes.backfillError && (
               <div className="gw-note" role="alert" style={{ borderLeftColor: 'var(--gw-err)', marginTop: 12 }}>

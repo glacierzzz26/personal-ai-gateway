@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/pricing"
+	"personal-ai-gateway/internal/store"
 )
 
 // 官方定价(pricing)管理面。
@@ -68,6 +70,87 @@ func (s *Server) fetchOfficialPrices(ctx context.Context, p domain.Provider) (do
 		resp.Removed = removed
 	}
 	return resp, http.StatusOK, "", nil
+}
+
+// fetchCommandCode 抓取 commandcode 单页锚点价并落库 + 对账。返回 (结果, httpStatus, errType, err)。
+//
+// issue #27:CC 是本站官方价的**唯一锚点来源**(逐厂商官网抓取已停用,见 pricing.go 的 scrapers 注释)。
+// 一页覆盖 20 家厂商,故对账按「来源整体」做而非逐厂商(见 store.ReconcileOfficialPricesFromSource):
+// 逐厂商对账够不到「某模型换厂商归属」「某厂商整体消失」两支。
+func (s *Server) fetchCommandCode(ctx context.Context) (domain.CommandCodeFetchResult, int, string, error) {
+	var resp domain.CommandCodeFetchResult
+	settings, err := s.st.GetSettings()
+	if err != nil {
+		return resp, 0, "", err
+	}
+	base := s.rl.Client(settings, 0)
+	if s.pricingBaseForURL != nil {
+		base = s.pricingBaseForURL(pricing.CommandCodeURL(), settings)
+	} else if s.pricingBase != nil {
+		base = s.pricingBase(domain.ProviderNone, settings)
+	}
+	client := pricing.AllowlistClient(*base, pricing.CommandCodeHosts())
+
+	// 行数护栏的基准 = 上次落库的行数(首次为 0 → 跳过比例检查)。
+	prev, err := s.st.CountOfficialPricesBySource(pricing.CommandCodeURL())
+	if err != nil {
+		return resp, 0, "", err
+	}
+	rows, rep, err := pricing.FetchCommandCode(ctx, client, prev)
+	if err != nil {
+		return resp, http.StatusBadGateway, "fetch_failed", err
+	}
+
+	resp = domain.CommandCodeFetchResult{
+		SourceURL:   rep.SourceURL,
+		ContentSHA:  rep.ContentSHA,
+		TotalRows:   rep.TotalRows,
+		FreeSkipped: rep.FreeSkipped,
+	}
+	keep := make([]store.OfficialPriceRef, 0, len(rows))
+	for _, row := range rows {
+		if _, err := s.st.UpsertOfficialPrice(row); err != nil {
+			return resp, 0, "", err
+		}
+		keep = append(keep, store.OfficialPriceRef{Provider: row.Provider, ModelName: row.ModelName})
+		resp.Upserted++
+	}
+	// 对账:来源为 CC 但不在本次结果里的行(下架 / 换厂商 / 厂商整体消失)一律清掉。
+	// 删除失败不阻断抓取本身(已入库的行仍有效),但把失败透出来由管理端提示。
+	removed, rerr := s.st.ReconcileOfficialPricesFromSource(pricing.CommandCodeURL(), keep)
+	if rerr != nil {
+		return resp, 0, "", rerr
+	}
+	resp.Removed = removed
+	resp.PerVendor = providerCounts(rep.PerVendor)
+	return resp, http.StatusOK, "", nil
+}
+
+// providerCounts map → 稳定排序的切片(厂商字典序)。
+func providerCounts(m map[domain.Provider]int) []domain.ProviderCount {
+	out := make([]domain.ProviderCount, 0, len(m))
+	for p, n := range m {
+		out = append(out, domain.ProviderCount{Provider: p, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	return out
+}
+
+// handleOfficialPricesFetchCommandCode POST /official-prices/fetch-commandcode
+// 抓 commandcode 单页锚点价 → upsert official_prices(issue #27)。
+func (s *Server) handleOfficialPricesFetchCommandCode(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	resp, status, typ, err := s.fetchCommandCode(ctx)
+	if err != nil {
+		if status == 0 {
+			writeStoreErr(w, err)
+			return
+		}
+		apiErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleFetchPricing 按渠道 provider 抓取官方单价表 → upsert official_prices。

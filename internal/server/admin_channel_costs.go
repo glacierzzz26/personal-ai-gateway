@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"personal-ai-gateway/internal/domain"
-	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/store"
 )
 
@@ -98,18 +97,18 @@ func (s *Server) handleChannelCostRatioDelete(w http.ResponseWriter, r *http.Req
 // 前端 axios 的超时需同步放宽,否则会在后端仍在跑时先断开。
 const refreshTimeout = 120 * time.Second
 
-// handleOfficialPricesRefresh 批量刷新全部(或指定)可抓厂商的官方价,并回填模型绑定。
+// handleOfficialPricesRefresh 批量刷新官方价:先抓 commandcode 单页锚点(issue #27 后的主力来源),
+// 再把调用方显式指定的 providers 走旧逐厂商路径(为将来可能恢复的逐厂商来源保留),最后回填模型绑定。
 //
-// 与单厂商接口的区别是**逐厂商独立成败**:一个厂商抓失败不能中止其他厂商 ——
-// 三个厂商共用一个按钮,任何一个的网络抖动都不该让另外两个的更新白跑。
+// 为什么把 CC 放在最前:它是本站官方价的**唯一可抓来源**(逐厂商官网抓取已停用),批量按钮
+// 若还按 pricing.Vendors() 里非 ManualOnly 的厂商循环,会得到空集、整个按钮变成空操作。
 //
-// 抓完顺带回填绑定:回填是「新抓到的官方价是否对得上某个模型」的收敛动作,
-// 单独一个按钮没人会记得点(re-fetch 后模型仍未绑定 = 成本仍派生不出来)。
+// 逐厂商独立成败的语义保留:显式指定的厂商仍是一个失败不影响其他。
 func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Providers []domain.Provider `json:"providers"`
 	}
-	// body 可空(空 = 全部可抓厂商);解析成功才采用,失败即按「全部」处理。
+	// body 可空(空 = 只跑 CC 锚点);解析成功才采用,失败即按空处理。
 	var body struct {
 		Providers []domain.Provider `json:"providers"`
 	}
@@ -117,25 +116,31 @@ func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Requ
 		req = body
 	}
 
-	providers := req.Providers
-	if len(providers) == 0 {
-		for _, v := range pricing.Vendors() {
-			if !v.ManualOnly {
-				providers = append(providers, v.Provider)
-			}
-		}
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), refreshTimeout)
 	defer cancel()
 
-	resp := domain.RefreshPricingResp{Results: make([]domain.RefreshProviderResult, 0, len(providers))}
-	for _, p := range providers {
+	resp := domain.RefreshPricingResp{Results: make([]domain.RefreshProviderResult, 0, len(req.Providers))}
+
+	// ① CC 单页锚点(主力来源)。
+	cc, status, typ, err := s.fetchCommandCode(ctx)
+	switch {
+	case err != nil && status != 0:
+		resp.CommandCodeError = err.Error()
+		_ = typ
+	case err != nil:
+		resp.CommandCodeError = err.Error()
+	default:
+		resp.CommandCode = &cc
+		resp.TotalUpserted += cc.Upserted
+		resp.TotalRemoved += cc.Removed
+	}
+
+	// ② 显式指定的厂商走旧逐厂商路径(当前全部为 ManualOnly → 会返回 manual_only,属预期)。
+	for _, p := range req.Providers {
 		item := domain.RefreshProviderResult{Provider: p}
 		res, status, typ, err := s.fetchOfficialPrices(ctx, p)
 		switch {
 		case err != nil && status != 0:
-			// 该厂商失败(不可抓/网络/解析):记下原因,继续跑其余厂商。
 			item.Error, item.ErrorType = err.Error(), typ
 		case err != nil:
 			item.Error, item.ErrorType = err.Error(), "store_error"
@@ -147,7 +152,7 @@ func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Requ
 		resp.Results = append(resp.Results, item)
 	}
 
-	// 回填绑定:唯一命中才写,多候选跳过(归错比不归更糟)。
+	// ③ 回填绑定:唯一命中才写,多候选跳过(归错比不归更糟)。
 	// 回填失败不回滚抓取结果 —— 价已入库是有效事实,绑定只是便利动作。
 	fills, err := s.st.BackfillOfficialBindings(false)
 	if err != nil {

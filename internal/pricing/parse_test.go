@@ -209,8 +209,13 @@ func TestManualOnlyProviders(t *testing.T) {
 	if !ManualOnly(domain.ProviderZhipu) {
 		t.Error("智谱应标记为仅手工录入")
 	}
-	if ManualOnly(domain.ProviderDeepSeek) || ManualOnly(domain.ProviderQwen) {
-		t.Error("DeepSeek/通义 不应是仅手工")
+	// issue #27:逐厂商官网抓取停用,官方价唯一锚点来源是 commandcode 单页。
+	// DeepSeek/通义仍支持(qa: 手工录入入口可用),但不再自动抓取。
+	if !Supports(domain.ProviderDeepSeek) || !ManualOnly(domain.ProviderDeepSeek) {
+		t.Error("DeepSeek 应为仅手工录入(自动抓取已停用,官方价由 CC 锚点写入)")
+	}
+	if !Supports(domain.ProviderQwen) || !ManualOnly(domain.ProviderQwen) {
+		t.Error("通义千问 应为仅手工录入(自动抓取已停用)")
 	}
 	// S4:Claude/GPT 官方价录不进 → 放开为「仅手工录入」(issue #8)。页面 JS 渲染,抓取不做。
 	if !Supports(domain.ProviderAnthropic) || !ManualOnly(domain.ProviderAnthropic) {
@@ -235,9 +240,13 @@ func TestManualDefaultCurrency(t *testing.T) {
 	if c := ManualDefaultCurrency(domain.ProviderZhipu); c != domain.CurrencyCNY {
 		t.Errorf("智谱手工录入默认原币应为 CNY, got %q", c)
 	}
-	// 非仅手工厂商无默认(币种由抓取解析决定)。
-	if c := ManualDefaultCurrency(domain.ProviderDeepSeek); c != "" {
-		t.Errorf("DeepSeek 非仅手工,不应有默认原币, got %q", c)
+	// issue #27 后 DeepSeek 也是仅手工(抓取停用),带出国内站默认人民币。
+	if c := ManualDefaultCurrency(domain.ProviderDeepSeek); c != domain.CurrencyCNY {
+		t.Errorf("DeepSeek 手工录入默认原币应为 CNY, got %q", c)
+	}
+	// 无官方来源的厂商无默认。
+	if c := ManualDefaultCurrency(domain.Provider("示例中转站")); c != "" {
+		t.Errorf("无官方来源厂商不应有默认原币, got %q", c)
 	}
 	// 缺省币种按厂商落地:Anthropic 录入不填币种 → USD 而非 CNY。
 	row, err := BuildManual(domain.OfficialPriceInput{

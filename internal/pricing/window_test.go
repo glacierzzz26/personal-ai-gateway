@@ -128,7 +128,8 @@ func TestShapePriceTieredIgnoresTiers(t *testing.T) {
 // TestIsPeakWindowTimezoneWins 窗口自带的 tzOffsetMin 优先于调用方回退时区。
 // 峰谷时段是厂商属性(DeepSeek 按北京时间),站点展示时区不该改写它。
 func TestIsPeakWindowTimezoneWins(t *testing.T) {
-	ws := []PriceWindow{{Days: []int{1}, Start: "09:00", End: "12:00", TZOffsetMin: 480}}
+	// TZSet 表示「该偏移是显式给定的」—— 内存构造的窗口必须显式置位(见 PriceWindow.TZSet 注释)。
+	ws := []PriceWindow{{Days: []int{1}, Start: "09:00", End: "12:00", TZOffsetMin: 480, TZSet: true}}
 	// 北京周一 10:00 = UTC 02:00。若误用 UTC(+0)判定会落到周一 02:00 → 谷段。
 	at := time.Date(2026, time.September, 14, 2, 0, 0, 0, time.UTC)
 	peak, err := IsPeak(ws, at, 0)

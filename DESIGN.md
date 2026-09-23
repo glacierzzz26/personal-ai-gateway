@@ -47,10 +47,11 @@ cmd/gateway     组装 config → 主密钥(secret)→ store(迁移)→ server
 internal/config listen/db_path/web_dir/tls;业务数据不进配置
 internal/domain v2 实体 DTO(JSON tag,兼 API body 与展示字段)
 internal/secret AES-GCM(渠道 api_key);主密钥 GW_MASTER_KEY 或 gateway.master.key(0600)
-internal/store  schema 版本化;channels/models/model_offers/rules/tokens/admins/users/
-                request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
+internal/store  schema 版本化;channels/models/model_offers/official_prices/channel_vendor_costs/
+                rules/tokens/admins/users/request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
 internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
 internal/engine 把目录+offers+规则+渠道健康编译为一次转发决策(候选/策略/重试/兜底)
+internal/pricing 官方价来源:commandcode 单页锚点抓取(唯一可抓来源,见 §5.6)+ 厂商登记表 + 手工录入 + 分时选价
 internal/proxy  relay 转发 + translate(anthropic↔openai 双向,流式状态机 + usage 权威计数)+ probe/ping
 internal/server 管理面 CRUD handler(会话)+ 模型面(令牌)+ 静态托管 web-v2/dist(SPA 回退)
 web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist 产物 gitignore
@@ -79,6 +80,14 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
    (AES-GCM)供回显/生成配置;owner_id=NULL 为全局 key;删用户级联删其令牌。m0002 之前建的旧 key 无密文。
 - `request_logs(id, ts UTC, model, channel_id/name, token_id/name, protocol, stream, status,
    in/out/cache tokens, cost, first_token_ms, total_ms, ip, err)` — idx ts/model/channel/token。
+- `official_prices(id, provider, model_name, source_url, fetched_at, currency, billing_shape,
+   in/out/cache_read 单价, cache_derived, native_text, detail_json, content_sha256, …, UNIQUE(provider, model_name))`
+   — 官方参考价,与手填的 `model_offers` 报价分表(官价只作默认值与比对源,不改写渠道报价)。
+   `provider` 是 `domain.Provider`(见 §5.6 的 20 家厂商枚举);`model_name` 对 CC 来源存 **slug**。
+   `detail_json` 装分时/阶梯/折扣明细(峰谷窗口、活动原价与到期、档位数)。
+- `channel_vendor_costs(channel_id FK, vendor, ratio, note, …, UNIQUE(channel_id, vendor))` — 成本系数。
+  **成本 = 官方价 × ratio**,键是**厂商**(非渠道),(渠道,厂商)唯一。未配的厂商默认 1.0。
+  为什么单列一张表而不并进 `channels`:渠道 PATCH 是整体覆盖语义,系数混进去会被「改个渠道名」误清空。
 - `settings(k PK, v)` — 网关参数 + `tz_offset_min`(默认 +480 Asia/Shanghai)+ `public_base_url`(生成配置用)。
 
 **时间口径**:`ts/*_at` UTC RFC3339Nano 落库;小时/天桶、today、日志展示全部按 `settings.tz_offset_min`
@@ -290,6 +299,48 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 前端 `HealthStatus` 增加 `unknown`(文案「待观察」,灰色),渠道页状态筛选与 latency 占位同步更新;
   `unknown`/`down`/`disabled` 均无有效成功率与延迟,展示 `—`。
 
+### 5.6 官方价锚点:commandcode 单页(issue #27)
+
+官方参考价的**唯一可抓来源**是 commandcode(CC)模型列表页 `https://commandcode.ai/models` —— 一页
+覆盖 CC 在售的全部模型,也就是本站渠道模型的真实全集。逐厂商官网抓取(DeepSeek/通义)**已停用**:
+它抓到的模型名与 CC 侧对不上(前缀/后缀/命名都不同),绑不上目录模型,等于白抓。
+
+**为什么是「锚点」而不是「厂商挂牌价」。** CC 页面单价是本站的**采购锚点**(CC 靠高缓存命中率把单价
+压得比厂商挂牌价低),不总是厂商官网挂牌价。⚠️ 将来若要对外展示厂商挂牌价,需另存一列区分 —— 本期不做。
+
+**费用倍率不写进官方价。** 「$10 买 $60 额度」是商业事实,走 `channel_vendor_costs.ratio`(成本 =
+官方价 × ratio),不改进 CC 单价。两者正交:官方价只回答「厂商口径是多少」,倍率只回答「本站实付多少」。
+
+实现要点(`internal/pricing/commandcode.go`,由 `internal/server/admin_pricing.go` 调用):
+
+- CC **不是厂商**(它是中转渠道,`provider` 为空),且一页含多厂商,塞不进 `scrapers`(`map[domain.Provider]scraper`)
+  —— 故独立成源,入口 `FetchCommandCode`。
+- **厂商归属靠显式前缀表**(`ccVendorPrefixes`,形如 `vendor.go` 的 `vendorTokens`),顺序即优先级(长前缀在前),
+  匹配词后紧跟字母不算命中(防 `GPT` 命中 `gptx`)。依据是 2026-09-23 逐模型核对 CC 详情页 JSON-LD 的 `brand`
+  (81/81 命中,零冲突):**LongCat 的 brand 是 Meituan(不是 ByteDance),Ling 的 brand 是 inclusionAI**。
+  `brand` 随行记入 `detail_json` 作留证,便于日后复核;运行时不吃 81 次详情页请求。
+- **`model_name` 落 slug**(`<a href="/models/<slug>">` 的最后一段,`-` 分隔),与 `canonicalModelKey`
+  (取最后 `/` 段小写)同口径;显示名不落库。厂商枚举据此从 6 家扩到 **20 家**(见 §3 `domain.Provider`)。
+- 价格单元格**四态**必须逐态解析,不能整格 `parseMoney`(会把删除线原价当现价):
+  普通 `$0.10` + `+N` 脚注角标(须剥掉);活动 `<s>$0.60</s>$0.30`(`<s>` 是原价,裸数字是**现价**);
+  免费单元格文本 `Free`(**排除落库**,计入报告);峰谷首格 `title` 给谷价与时段(显示值即谷价)。
+- **峰价缓存读是逐格可得的**(每个价格格的 `<button aria-label="... cache read: $0.006 during peak hours">`),
+  无须推导。峰谷时段是 **UTC(`tzOffsetMin=0`)** —— 见下方红线。
+- 分档明细(多档)只在详情页;列表页 `aria-label="...N context price bands"` 只给**档位数**,记
+  `detail_json["tierBands"]` 留证,**不参与选价**(与 `window.go` 的阶梯红线一致)。
+- **宁缺勿假的三道闸**:① 结构异常(表列数不符/行无 slug)**硬失败**,绝不静默给出错误值;
+  ② 免费行在 `validate()` 之前剔除(否则 in/out 全 0 会让整批被拒);③ **两道行数地板**(独立,任一不过即拒):
+  绝对数 < 40(挡「解析到半张表/抓错表」),或本次行数 < 上次成功抓取的 80%(挡改版半张表覆盖全部)。
+- **对账按来源整体做**(`ReconcileOfficialPricesFromSource`),不是逐厂商:unique 键是
+  `(provider, model_name)`,逐厂商删漏掉两种情况 —— ① 模型换了厂商归属(同 slug 落到了别的 provider);
+  ② 厂商整体从页面上消失。二者都只会在「按 source_url 整体比对 keep 集合」时才被发现。
+
+> **红线(实现时对照):CC 的峰谷窗口是 UTC,真实偏移就是 0。** `PriceWindow` 的
+> `tzOffsetMin==0` 既是「UTC 的真实偏移」也是 int 零值(未设置),早期 `IsPeak` 写 `if tz==0 { 用回退时区 }`
+> 会把 UTC 误判成 +480,峰谷整体偏 8 小时。故 `PriceWindow` 加 `TZSet bool`(显式给过才采信),
+> `decodeWindows` 按「键是否存在」置位。CC 写窗口时显式带 `tzOffsetMin:0` + `TZSet:true`。
+> 改 `PriceWindow` 序列化时务必保留这个语义(见 `internal/pricing/window.go` 与 `window_test.go`)。
+
 ## 6. 管理 REST 契约(v2;会话鉴权)
 
 | 方法与路径 | 作用 |
@@ -306,6 +357,13 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删 |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |
 | `GET /models/{id}/usage?days=7` | `{daily:[MetricPoint], byChannel:[{channelName,requests,costUsd}]}` |
+| `GET /channels/{id}/cost-ratios` · `PUT` `{ratios:[{vendor,ratio,note}]}` · `DELETE ?vendor=` | 渠道 × 厂商成本系数(成本 = 官方价 × ratio);PUT 是**全量替换**(未回传的厂商即删除);DELETE 一条退回默认 1.0 |
+| `GET /official-prices?provider=` · `GET /channels/{id}/official-prices` | 官方参考价(全量 / 按渠道 provider)+ 与现有 offer 的比对 |
+| `GET /official-prices/vendors` | 厂商登记表(`{provider, sourceUrl, manualOnly, manualCurrency}`);驱动抓取/手工录入入口与门禁 |
+| `POST /official-prices/fetch` `{provider}` · `POST /official-prices/manual` | 按厂商抓取(逐厂商路径,当前全部 ManualOnly)/ 手工录入(来源 URL 必填,缺省币种按厂商落地) |
+| `POST /official-prices/fetch-commandcode` | **官方价主来源**(issue #27):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped}` |
+| `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点(**破坏性**对账),再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, totalUpserted, totalRemoved}`。超时 120s |
+| `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写三价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
 | `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |
 | `GET /tokens/{id}/claude-config` | 生成可直接粘的 `~/.claude/settings.json` 片段(含真实 key;旧 key 无密文回 409) |
 | `GET/POST /rules` · `PATCH/DELETE /rules/{id}` · `PUT /rules/order` | 路由规则 CRUD + 重排 |
@@ -328,7 +386,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 数据层:react-query(重试 0);mutation 成功后 invalidate 对应 queryKey(`['channels']/['models']/['rules']/
   ['tokens']/['logs',filters,page]/['usage',dim,days]/['overview']/['settings']/['model-usage',id]`)。
 - 展示词表(providers/channelTypes/egressProtos/quotaShapes/capabilities 标签)属前端常量,与后端枚举一致;
-  不作为运行时数据。渠道的展示名/徽标统一走 `utils/channel.ts` 的 `channelLabel`/`channelMark`
+  不作为运行时数据。`providers` 现为 **20 家**(issue #27 扩容,与 `domain.Providers` 逐字对齐),
+  增删须同步 `constants.ts` 与 `types/index.ts` 的联合类型。渠道的展示名/徽标统一走 `utils/channel.ts` 的 `channelLabel`/`channelMark`
   (有厂商显示厂商,聚合渠道回落渠道类型),勿在页面里直接渲染 `ch.provider`(为空会显示空白)。
 - **antd 表格列宽**:一律 `tableLayout="fixed"`(见 `styles/tokens.ts`)。fixed 下**没有 `width` 的列会吃掉
   全部剩余宽度**,故除「刻意当弹性列」外每列都要给 width(令牌表首列曾留空 → 宽屏时列极宽、名字只占左边

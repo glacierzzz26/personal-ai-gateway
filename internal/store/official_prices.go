@@ -130,6 +130,84 @@ func (s *Store) DeleteOfficialPricesNotIn(p domain.Provider, sourceURL string, k
 	return n, nil
 }
 
+// CountOfficialPricesBySource 该来源 URL 下的官方价行数(抓取护栏用:与上次行数比,防半张表)。
+// 首次抓取返回 0,调用方据此跳过比例检查。
+func (s *Store) CountOfficialPricesBySource(sourceURL string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM official_prices WHERE source_url=?`, sourceURL).Scan(&n)
+	return n, err
+}
+
+// OfficialPriceRef 官方价的稳定标识(对账用)。
+type OfficialPriceRef struct {
+	Provider  domain.Provider
+	ModelName string
+}
+
+// ReconcileOfficialPricesFromSource 删除「来源为 sourceURL 但不在 keep 集合中」的官方价行,
+// 返回删除条数。
+//
+// 为什么需要整体对账(而不是逐厂商 DeleteOfficialPricesNotIn):official_prices 的唯一键是
+// (provider, model_name),而 CC 单页覆盖多厂商。逐厂商对账只能覆盖「同厂商下模型下架」一支,
+// 够不到另外两支:
+//   - 某模型**换了厂商归属**(补全/修正前缀映射后 A→B):upsert 只新增 (B,m),旧的 (A,m) 留着;
+//   - 某厂商**整体消失**(它的全部模型都改判别家):该厂商根本不出现在本次结果里,无人替它对账。
+//
+// keep 为空即不删(与 DeleteOfficialPricesNotIn 同一条防御原则:宁留不误删)。
+// 删除按 id 逐条进行 —— 来源行数有限(CC 实测 81),换来的是显而易见的正确性。
+func (s *Store) ReconcileOfficialPricesFromSource(sourceURL string, keep []OfficialPriceRef) (int64, error) {
+	if len(keep) == 0 {
+		return 0, nil
+	}
+	alive := make(map[OfficialPriceRef]bool, len(keep))
+	for _, k := range keep {
+		alive[k] = true
+	}
+	rows, err := s.db.Query(`SELECT id, provider, model_name FROM official_prices WHERE source_url=?`, sourceURL)
+	if err != nil {
+		return 0, err
+	}
+	var stale []int64
+	for rows.Next() {
+		var id int64
+		var provider, model string
+		if err := rows.Scan(&id, &provider, &model); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if !alive[OfficialPriceRef{Provider: domain.Provider(provider), ModelName: model}] {
+			stale = append(stale, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if len(stale) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var removed int64
+	for _, id := range stale {
+		res, err := tx.Exec(`DELETE FROM official_prices WHERE id=?`, id)
+		if err != nil {
+			return 0, fmt.Errorf("reconcile official prices by source: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			removed += n
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
 // ApplyOfficialPrice 把官方价应用到某 offer:写三价 + 来源留证四字段。
 //
 // 只动价与 provenance,不改 override_price、不改启停 —— 「手工覆盖价优先」由上层

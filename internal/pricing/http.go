@@ -68,10 +68,16 @@ func AllowlistClient(base http.Client, hosts []string) *http.Client {
 // fetchPage 抓取官方页面,返回正文与内容 sha256(留证)。
 // 只接受 2xx;非 2xx 视为失败(不解析错误页)。
 func fetchPage(ctx context.Context, client *http.Client, s scraper) ([]byte, string, error) {
+	return fetchPageURL(ctx, client, s.URL, s.Hosts)
+}
+
+// fetchPageURL 按显式 URL + 白名单抓取。commandcode 这类「非 provider 键控」的来源
+// 无 scraper 结构可用(见 commandcode.go),故把抓取核心提出来复用。
+func fetchPageURL(ctx context.Context, client *http.Client, url string, hosts []string) ([]byte, string, error) {
 	fctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(fctx, http.MethodGet, s.URL, nil)
+	req, err := http.NewRequestWithContext(fctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -80,7 +86,7 @@ func fetchPage(ctx context.Context, client *http.Client, s scraper) ([]byte, str
 	req.Header.Set("Accept-Encoding", "gzip")
 
 	// 客户端按白名单构造时已带 hostAllowlist;此处再显式核对一次,双保险。
-	if !hostAllowed(s, req.URL.Hostname()) {
+	if !hostInList(hosts, req.URL.Hostname()) {
 		return nil, "", &allowedHostError{host: req.URL.Hostname()}
 	}
 
@@ -111,7 +117,11 @@ func fetchPage(ctx context.Context, client *http.Client, s scraper) ([]byte, str
 }
 
 func hostAllowed(s scraper, host string) bool {
-	for _, h := range s.Hosts {
+	return hostInList(s.Hosts, host)
+}
+
+func hostInList(hosts []string, host string) bool {
+	for _, h := range hosts {
 		if h == host {
 			return true
 		}

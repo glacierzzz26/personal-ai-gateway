@@ -37,7 +37,14 @@ type PriceWindow struct {
 	Days        []int  `json:"days"`                  // 1=Mon … 7=Sun
 	Start       string `json:"start"`                 // "HH:MM"
 	End         string `json:"end"`                   // 必须 > Start(不支持跨零点)
-	TZOffsetMin int    `json:"tzOffsetMin,omitempty"` // 0 = 用调用方给的回退时区
+	TZOffsetMin int    `json:"tzOffsetMin,omitempty"` // 偏移分钟;0 是否生效取决于 TZSet
+	// TZSet 表示 tzOffsetMin 是**显式给定**的(含显式的 0 = UTC)。
+	//
+	// 为什么需要:0 既是「UTC 的真实偏移」,又是 int 零值(未设置)。CC 的峰谷窗口正是
+	// UTC(=0),若无此标志会被当成「未设置」而套用回退时区(默认 +480),峰谷整体偏 8 小时。
+	// 取值来源:decodeWindows 按 key 是否存在判定;内存构造(如 ccPeakWindows)显式置 true。
+	// 不进 JSON —— 它只是「该值是否可信」的标志,由解码路径重建。
+	TZSet bool `json:"-"`
 }
 
 // parseHHMM 解析 "HH:MM" 为当日分钟数。
@@ -94,8 +101,8 @@ const legacyDeepSeekPeakHours = "北京时间周一至周五 9:00-12:00、14:00-
 // legacyDeepSeekWindows 旧字面量对应的机器可读窗口(北京时间 = UTC+8,即 480 分钟)。
 func legacyDeepSeekWindows() []PriceWindow {
 	return []PriceWindow{
-		{Days: []int{1, 2, 3, 4, 5}, Start: "09:00", End: "12:00", TZOffsetMin: 480},
-		{Days: []int{1, 2, 3, 4, 5}, Start: "14:00", End: "18:00", TZOffsetMin: 480},
+		{Days: []int{1, 2, 3, 4, 5}, Start: "09:00", End: "12:00", TZOffsetMin: 480, TZSet: true},
+		{Days: []int{1, 2, 3, 4, 5}, Start: "14:00", End: "18:00", TZOffsetMin: 480, TZSet: true},
 	}
 }
 
@@ -164,6 +171,7 @@ func decodeWindows(raw any) ([]PriceWindow, bool) {
 		}
 		if n, ok := toFloat(m["tzOffsetMin"]); ok {
 			w.TZOffsetMin = int(n)
+			w.TZSet = true // key 存在即显式(显式的 0 = UTC,不能被当成「未设置」)
 		}
 		if days, ok := m["days"].([]any); ok {
 			for _, d := range days {
@@ -209,9 +217,11 @@ func IsPeak(windows []PriceWindow, at time.Time, fallbackTZMin int) (bool, error
 		if err := w.validate(); err != nil {
 			return false, err
 		}
-		tz := w.TZOffsetMin
-		if tz == 0 {
-			tz = fallbackTZMin
+		// 只有**显式给过** tzOffsetMin 才采信它;否则用调用方回退时区。
+		// 不能写 `if tz == 0`——那会把 UTC(真实偏移 0)误判成「未设置」(issue #27 的坑)。
+		tz := fallbackTZMin
+		if w.TZSet {
+			tz = w.TZOffsetMin
 		}
 		local := at.UTC().Add(time.Duration(tz) * time.Minute)
 		wd := isoWeekday(local)

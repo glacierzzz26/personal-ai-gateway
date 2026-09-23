@@ -35,6 +35,10 @@ type Server struct {
 	// 官方域名白名单在此之上照常套用,注入的 base 也不例外。
 	pricingBase func(p domain.Provider, settings domain.Settings) *http.Client
 
+	// pricingBaseForURL 覆盖「无厂商键控」来源(CC 单页)的抓取基础 client(仅测试注入)。
+	// CC 不是厂商,pricingBase 的 provider 参数对它无意义,故另开一个钩子。
+	pricingBaseForURL func(url string, settings domain.Settings) *http.Client
+
 	// 渠道额度网关级缓存(短 TTL + 在途去重;见 quota_cache.go)。
 	// 逐渠道与批量两条路径共用,避免首页/渠道页把上游打成密集轮询。
 	qmu    sync.Mutex
@@ -177,6 +181,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("GET /api/v1/channels/{id}/official-prices", adm(s.handleChannelOfficialPrices))
 	m.HandleFunc("GET /api/v1/official-prices", adm(s.handleOfficialPricesAll))
 	m.HandleFunc("POST /api/v1/official-prices/fetch", adm(s.handleOfficialPricesFetch))
+	m.HandleFunc("POST /api/v1/official-prices/fetch-commandcode", adm(s.handleOfficialPricesFetchCommandCode))
 	m.HandleFunc("POST /api/v1/official-prices/refresh", adm(s.handleOfficialPricesRefresh))
 	m.HandleFunc("GET /api/v1/official-prices/vendors", adm(s.handleOfficialVendors))
 	m.HandleFunc("POST /api/v1/official-prices/manual", adm(s.handleOfficialPriceManual))

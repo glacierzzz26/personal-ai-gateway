@@ -58,22 +58,30 @@ type scraper struct {
 
 // scrapers provider → 官方来源。未列出的 provider 视为无官方来源。
 //
-// ManualOnly 条目(Hosts 为空、parse 为空)表示「有官方价、但页面不可稳定抓取,只能手工录入」:
-// 它们不进抓取路径(Fetch 在 ManualOnly 分支直接返回 ErrManualOnly,不会用到 Hosts),
-// 仅用于让 Supports 放行、让管理台出现手工录入入口(issue #8:Claude/GPT 官方价录不进)。
+// issue #27 后**逐厂商官网抓取已停用**:本站渠道的真实来源是 commandcode(CC)一家中转,
+// CC 的模型清单才是本站模型的真实全集,而逐厂商官网抓到的名字与 CC 侧对不上(前缀/命名/后缀
+// 都不同)、绑不上模型,等于白抓。现在官方价的唯一锚点来源是 CC 单页(见 commandcode.go)。
+//
+// 本表因此收窄为「厂商登记表」:保留各厂商的官方页面 URL 供人工核对与手工录入入口,
+// 但不再有任何 provider 走自动抓取(parse 全为空 → 全部 ManualOnly 语义)。
+//
+// 全部条目 ManualOnly:ManualOnly 条目(Hosts 为空、parse 为空)不进抓取路径
+// (Fetch 直接返回 ErrManualOnly,不会用到 Hosts),仅用于让 Supports 放行、
+// 让管理台出现手工录入入口(issue #8:Claude/GPT 官方价录不进)。
+//
+// 为什么保留 parseDeepSeek/parseQwen 与 parse_test.go:它们是 table.go 的真实页面回归
+// (国内站表格形态多样),留着当解析器单测;只是不再接到抓取路径上。若要恢复 DeepSeek/通义
+// 的自动抓取,把对应条目的 Hosts/parse 填回即可(一行回滚)。
 var scrapers = map[domain.Provider]scraper{
 	domain.ProviderDeepSeek: {
-		Hosts: []string{"api-docs.deepseek.com"},
-		URL:   "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
-		parse: parseDeepSeek,
+		URL:        "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
+		ManualOnly: true,
 	},
 	domain.ProviderQwen: {
-		Hosts: []string{"help.aliyun.com"},
-		URL:   "https://help.aliyun.com/zh/model-studio/model-pricing",
-		parse: parseQwen,
+		URL:        "https://help.aliyun.com/zh/model-studio/model-pricing",
+		ManualOnly: true,
 	},
 	domain.ProviderZhipu: {
-		Hosts:      []string{"bigmodel.cn"},
 		URL:        "https://bigmodel.cn/pricing",
 		ManualOnly: true,
 	},
@@ -94,6 +102,50 @@ var scrapers = map[domain.Provider]scraper{
 		URL:            "https://platform.moonshot.cn/docs/pricing",
 		ManualOnly:     true,
 		ManualCurrency: domain.CurrencyCNY,
+	},
+	// 以下 14 家为 issue #27 扩容(CC 单页覆盖的厂商)。它们的价由 CC 抓取路径写入
+	// (provider 归到这些值),本表条目只提供手工录入入口与官方页 URL 供核对。
+	domain.ProviderGoogle: {
+		URL: "https://ai.google.dev/gemini-api/docs/pricing", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderXAI: {
+		URL: "https://docs.x.ai/docs/models", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderXiaomi: {
+		URL: "https://platform.xiaomimimo.com/#/docs/pricing", ManualOnly: true, ManualCurrency: domain.CurrencyCNY,
+	},
+	domain.ProviderMeta: {
+		URL: "https://www.llama.com/", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderMiniMax: {
+		URL: "https://www.minimaxi.com/document/price", ManualOnly: true, ManualCurrency: domain.CurrencyCNY,
+	},
+	domain.ProviderNVIDIA: {
+		URL: "https://build.nvidia.com/", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderTencent: {
+		URL: "https://cloud.tencent.com/document/product/1729/97731", ManualOnly: true, ManualCurrency: domain.CurrencyCNY,
+	},
+	domain.ProviderStepFun: {
+		URL: "https://platform.stepfun.com/docs/pricing/details", ManualOnly: true, ManualCurrency: domain.CurrencyCNY,
+	},
+	domain.ProviderMeituan: {
+		URL: "https://longcat.chat/", ManualOnly: true, ManualCurrency: domain.CurrencyCNY,
+	},
+	domain.ProviderThinking: {
+		URL: "https://thinkingmachines.ai/", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderSakana: {
+		URL: "https://sakana.ai/", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderPoolside: {
+		URL: "https://poolside.ai/", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
+	domain.ProviderInclusion: {
+		URL: "https://inclusionai.ai/", ManualOnly: true, ManualCurrency: domain.CurrencyCNY,
+	},
+	domain.ProviderJev: {
+		URL: "https://commandcode.ai/docs/resources/pricing-limits", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
 	},
 }
 

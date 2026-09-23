@@ -1,8 +1,13 @@
 /** 真实厂商(卖的是谁的模型)。已不含 Azure / 聚合中转 —— 出站协议见 EgressProto,
- *  渠道上游归属见 ChannelType。空串 = 不是单一厂商(多厂商聚合渠道)。 */
+ *  渠道上游归属见 ChannelType。空串 = 不是单一厂商(多厂商聚合渠道)。
+ *  与后端 domain.Providers 一致(commandcode 单页含 20 家,见 issue #27)。 */
 export type Provider =
   | 'OpenAI' | 'Anthropic' | 'DeepSeek'
-  | '通义千问' | '智谱' | 'Moonshot' | '';
+  | '通义千问' | '智谱' | 'Moonshot'
+  | 'Google' | 'xAI' | 'Xiaomi' | 'Meta' | 'MiniMax'
+  | 'NVIDIA' | 'Tencent' | 'StepFun' | 'Meituan'
+  | 'Thinking Machines' | 'Sakana AI' | 'Poolside' | 'InclusionAI' | 'Jev'
+  | '';
 
 /** 渠道类型:决定上游额度怎么查。 */
 export type ChannelType = 'deepseek' | 'commandcode' | 'opencode' | 'thirdparty';
@@ -273,6 +278,10 @@ export interface RefreshPricingResp {
   backfillError?: string;
   totalUpserted: number;
   totalRemoved?: number;
+  /** commandcode 单页锚点抓取结果(issue #27;现已取代逐厂商抓取) */
+  commandCode?: CommandCodeFetchResult;
+  /** commandcode 抓取失败原因(不影响 results 里的其他结果) */
+  commandCodeError?: string;
 }
 
 export interface GatewayToken {
@@ -524,6 +533,26 @@ export interface OfficialPriceView extends OfficialPrice {
   rateSet: boolean;
   /** 已应用该官方价(来源 URL + 抓取时间匹配)的 offer */
   appliedOfferIds: number[];
+}
+
+/** 一个厂商的落库行数(commandcode 抓取结果按厂商分行展示) */
+export interface ProviderCount {
+  provider: Provider;
+  count: number;
+}
+
+/** POST /official-prices/fetch-commandcode 返回(issue #27) */
+export interface CommandCodeFetchResult {
+  sourceUrl: string;
+  contentSha256?: string;
+  /** 表内数据行数(含免费行) */
+  totalRows: number;
+  /** 落库行数(不含免费行) */
+  upserted: number;
+  removed?: number;
+  perVendor: ProviderCount[];
+  /** 被跳过、未落库的免费模型("显示名(slug)") */
+  freeSkipped?: string[];
 }
 
 /** POST /channels/{id}/fetch-pricing 返回。失败即失败:failed 非空且 upserted=0。 */
