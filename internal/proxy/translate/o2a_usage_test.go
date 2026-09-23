@@ -7,11 +7,12 @@ import (
 	"testing"
 )
 
-// —— o2a 计费口径回归:缓存命中不得既进 Prompt(按输入价)又进 CacheRead(按缓存价)——
+// —— o2a 计费口径回归:缓存命中与缓存写都不得折进 Prompt(按输入价)——
 //
 // anthropic 的 input_tokens 不含缓存;归一化 Usage.Prompt 必须只含按输入价计费的部分,
-// 否则 costUsd 会对缓存命中重复计费。openai 客户端要看的 prompt_tokens(含缓存)由
-// o2aUsageJSON 用 Prompt+CacheRead 还原。
+// 否则 costUsd 会对缓存命中重复计费(既按输入价又按缓存价),对缓存写则系统性低估
+// (Anthropic 按 1.25× 输入价收,折进 input 只按 1×)。
+// openai 客户端要看的 prompt_tokens(含全部输入)由 o2aUsageJSON 用 Prompt+CacheRead+CacheWrite 还原。
 
 func TestO2AUsageCacheExcludedFromPrompt(t *testing.T) {
 	raw := `{
@@ -40,9 +41,9 @@ func TestO2AUsageCacheExcludedFromPrompt(t *testing.T) {
 	if resp.Usage.PromptTokens != 1010 || resp.Usage.Completion != 50 || resp.Usage.Details.Cached != 900 {
 		t.Errorf("openai usage = %+v, want prompt 1010 completion 50 cached 900", resp.Usage)
 	}
-	// 计费口径:Prompt 剔缓存(100+10),CacheRead 单列(900)
-	if tok.Prompt != 110 || tok.Completion != 50 || tok.CacheRead != 900 {
-		t.Errorf("Usage = %+v, want prompt 110 completion 50 cacheRead 900", tok)
+	// 计费口径:Prompt 只含 input(100),缓存读 900、缓存写 10 各自单列
+	if tok.Prompt != 100 || tok.Completion != 50 || tok.CacheRead != 900 || tok.CacheWrite != 10 {
+		t.Errorf("Usage = %+v, want prompt 100 completion 50 cacheRead 900 cacheWrite 10", tok)
 	}
 }
 
@@ -67,8 +68,8 @@ func TestO2AStreamUsageCacheExcludedFromPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("convertO2AStream: %v", err)
 	}
-	if u.Prompt != 110 || u.Completion != 50 || u.CacheRead != 900 {
-		t.Errorf("Usage = %+v, want prompt 110 completion 50 cacheRead 900", u)
+	if u.Prompt != 100 || u.Completion != 50 || u.CacheRead != 900 || u.CacheWrite != 10 {
+		t.Errorf("Usage = %+v, want prompt 100 completion 50 cacheRead 900 cacheWrite 10", u)
 	}
 	usage := lastStreamUsage(t, rec.Body.String())
 	if fnum(usage["prompt_tokens"]) != 1010 || fnum(usage["completion_tokens"]) != 50 {

@@ -110,7 +110,7 @@ func TestOfferCostQuoteDerivedFromOfficial(t *testing.T) {
 }
 
 // TestOfferCostQuoteUnknownShowsNoMargin 无任何成本依据的模型(**生产里 91 条 offer 的绝大多数**)
-// 必须给出 source=unknown 且三价全 0 —— 前端据此隐藏毛利列。
+// 必须给出 source=unknown 且四价全 0 —— 前端据此隐藏毛利列。
 //
 // 若这里返回 0 成本而 source 是 offer/official,页面就会显示「成本 0、毛利 100%」,
 // 那正是改造前那个假 100% 毛利的来源。
@@ -131,7 +131,7 @@ func TestOfferCostQuoteUnknownShowsNoMargin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create model: %v", err)
 	}
-	// 三价全 0 —— 生产快照里 91/95 条 offer 就是这个样子。
+	// 四价全 0 —— 生产快照里 91/95 条 offer 就是这个样子。
 	if _, err := st.CreateOffer(m.ID, domain.OfferInput{ChannelID: ch.ID, Enabled: boolPtrT(true)}); err != nil {
 		t.Fatalf("create offer: %v", err)
 	}

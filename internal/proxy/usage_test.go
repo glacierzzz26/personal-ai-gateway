@@ -26,14 +26,20 @@ func TestSSEAnthropicUsagePlacement(t *testing.T) {
 			want:  usage{prompt: 20, completion: 30, cacheRead: 500},
 		},
 		{
-			name:  "cache_creation 计入计费 input",
+			name:  "cache_creation 单列计费(不折进 input)",
 			lines: []string{`{"type":"message_start","usage":{"input_tokens":85,"cache_creation_input_tokens":40,"cache_read_input_tokens":0}}`},
-			want:  usage{prompt: 125},
+			want:  usage{prompt: 85, cacheWrite: 40},
 		},
 		{
 			name:  "后续 0-input chunk 不得覆盖已收敛的 input",
 			lines: []string{`{"type":"message_start","usage":{"input_tokens":85,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}`, `{"type":"message_delta","usage":{"output_tokens":0,"input_tokens":0}}`},
 			want:  usage{prompt: 85},
+		},
+		{
+			// 收敛比较仍用 input+cache_creation 的合计(单调);后一块合计更大即整体覆盖。
+			name:  "合计更大的一版覆盖(拆开落地)",
+			lines: []string{`{"type":"message_start","usage":{"input_tokens":85,"cache_creation_input_tokens":40,"cache_read_input_tokens":0}}`, `{"type":"message_delta","usage":{"input_tokens":85,"cache_creation_input_tokens":40,"cache_read_input_tokens":7}}`},
+			want:  usage{prompt: 85, cacheWrite: 40, cacheRead: 7},
 		},
 	}
 	for _, c := range cases {

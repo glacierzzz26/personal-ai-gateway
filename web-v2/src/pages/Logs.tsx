@@ -88,7 +88,11 @@ export default function Logs() {
     { title: '输入', dataIndex: 'inTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     { title: '输出', dataIndex: 'outTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     {
-      title: '缓存', dataIndex: 'cacheReadTokens', align: 'right', width: 70,
+      title: '缓存读', dataIndex: 'cacheReadTokens', align: 'right', width: 70,
+      render: v => (v ? <span className="gw-num">{fmt.k(v)}</span> : <span style={{ color: 'var(--gw-text-3)' }}>—</span>),
+    },
+    {
+      title: '缓存写', dataIndex: 'cacheWriteTokens', align: 'right', width: 70,
       render: v => (v ? <span className="gw-num">{fmt.k(v)}</span> : <span style={{ color: 'var(--gw-text-3)' }}>—</span>),
     },
     { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 70, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },

@@ -33,12 +33,13 @@ type UserModelView struct {
 	PriceNote string `json:"priceNote,omitempty"`
 }
 
-// UserPrice 一组每百万 token 的三价(计价币种)。
+// UserPrice 一组每百万 token 的四价(计价币种)。
 type UserPrice struct {
-	Input     float64 `json:"input"`
-	Output    float64 `json:"output"`
-	CacheRead float64 `json:"cacheRead"`
-	Currency  string  `json:"currency"`
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cacheRead"`
+	CacheWrite float64 `json:"cacheWrite,omitempty"`
+	Currency   string  `json:"currency"`
 }
 
 // userModelsList 客户可见模型 = 可用(启用 ∩ 有启用供给源 ∩ 渠道启用) ∩ 允许名单;
@@ -86,36 +87,39 @@ func (s *Server) userModelsList(allowed []string) ([]UserModelView, error) {
 			// 9:00 和 13:00 刷出两个不同的「本站价」,客户截图对不上账。这里把档位显式拆开,
 			// 展示面不再依赖「什么时候看的」。
 			if off, peak, ok := pricing.PeakOffpeakTriples(q); ok {
-				oi, oo, oc := mustConvert(off.In, q, settings), mustConvert(off.Out, q, settings), mustConvert(off.CacheRead, q, settings)
-				pi, po, pc := mustConvert(peak.In, q, settings), mustConvert(peak.Out, q, settings), mustConvert(peak.CacheRead, q, settings)
-				v.Official = &UserPrice{Input: oi, Output: oo, CacheRead: oc, Currency: cur}
+				oi, oo, oc, ow := mustConvert(off.In, q, settings), mustConvert(off.Out, q, settings),
+					mustConvert(off.CacheRead, q, settings), mustConvert(off.CacheWrite, q, settings)
+				pi, po, pc, pw := mustConvert(peak.In, q, settings), mustConvert(peak.Out, q, settings),
+					mustConvert(peak.CacheRead, q, settings), mustConvert(peak.CacheWrite, q, settings)
+				v.Official = &UserPrice{Input: oi, Output: oo, CacheRead: oc, CacheWrite: ow, Currency: cur}
 				v.Retail = &UserPrice{
 					Input: pricing.Round6(oi * rate), Output: pricing.Round6(oo * rate),
-					CacheRead: pricing.Round6(oc * rate), Currency: cur,
+					CacheRead: pricing.Round6(oc * rate), CacheWrite: pricing.Round6(ow * rate), Currency: cur,
 				}
 				v.PeakVaries = true
 				v.PeakRetail = &UserPrice{
 					Input: pricing.Round6(pi * rate), Output: pricing.Round6(po * rate),
-					CacheRead: pricing.Round6(pc * rate), Currency: cur,
+					CacheRead: pricing.Round6(pc * rate), CacheWrite: pricing.Round6(pw * rate), Currency: cur,
 				}
 				v.PeakHours = pricing.PeakHoursText(q)
 				out = append(out, v)
 				continue
 			}
-			// 其余形态(平坦/阶梯/折扣):单一价,取标量三价换算 —— 与改造前逐位一致。
+			// 其余形态(平坦/阶梯/折扣):单一价,取标量四价换算 —— 与改造前逐位一致。
 			if _, err := pricing.Convert(q.InputPrice, q.Currency, settings.DisplayCurrency, settings.USDPerCNY); err != nil {
 				v.PriceNote = "官方价币种与计价币种不一致，请管理员在【系统设置】填写汇率后显示"
 			} else {
 				v.Official = &UserPrice{
-					Input:     mustConvert(q.InputPrice, q, settings),
-					Output:    mustConvert(q.OutputPrice, q, settings),
-					CacheRead: mustConvert(q.CacheReadPrice, q, settings),
-					Currency:  cur,
+					Input:      mustConvert(q.InputPrice, q, settings),
+					Output:     mustConvert(q.OutputPrice, q, settings),
+					CacheRead:  mustConvert(q.CacheReadPrice, q, settings),
+					CacheWrite: mustConvert(q.CacheWritePrice, q, settings),
+					Currency:   cur,
 				}
-				in, outP, cache := v.Official.Input, v.Official.Output, v.Official.CacheRead
+				in, outP, cache, cacheW := v.Official.Input, v.Official.Output, v.Official.CacheRead, v.Official.CacheWrite
 				v.Retail = &UserPrice{
 					Input: pricing.Round6(in * rate), Output: pricing.Round6(outP * rate),
-					CacheRead: pricing.Round6(cache * rate), Currency: cur,
+					CacheRead: pricing.Round6(cache * rate), CacheWrite: pricing.Round6(cacheW * rate), Currency: cur,
 				}
 			}
 		} else {

@@ -22,18 +22,19 @@ func (s *Store) UpsertOfficialPrice(q domain.OfficialPriceRow) (domain.OfficialP
 	fetched := formatRFC3339(q.FetchedAt)
 	res, err := s.db.Exec(`INSERT INTO official_prices (
 		provider, model_name, source_url, fetched_at, currency, billing_shape,
-		in_price, out_price, cache_read_price, cache_derived, native_text,
+		in_price, out_price, cache_read_price, cache_write_price, cache_derived, native_text,
 		detail_json, content_sha256, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	ON CONFLICT(provider, model_name) DO UPDATE SET
 		source_url=excluded.source_url, fetched_at=excluded.fetched_at,
 		currency=excluded.currency, billing_shape=excluded.billing_shape,
 		in_price=excluded.in_price, out_price=excluded.out_price,
-		cache_read_price=excluded.cache_read_price, cache_derived=excluded.cache_derived,
+		cache_read_price=excluded.cache_read_price, cache_write_price=excluded.cache_write_price,
+		cache_derived=excluded.cache_derived,
 		native_text=excluded.native_text, detail_json=excluded.detail_json,
 		content_sha256=excluded.content_sha256, updated_at=excluded.updated_at`,
 		string(q.Provider), q.ModelName, q.SourceURL, fetched, string(q.Currency), string(q.BillingShape),
-		q.InputPrice, q.OutputPrice, q.CacheReadPrice, b2i(q.CacheDerived), q.NativeText,
+		q.InputPrice, q.OutputPrice, q.CacheReadPrice, q.CacheWritePrice, b2i(q.CacheDerived), q.NativeText,
 		detail, q.ContentSHA256, now, now)
 	if err != nil {
 		return domain.OfficialPriceRow{}, fmt.Errorf("upsert official price: %w", err)
@@ -208,17 +209,18 @@ func (s *Store) ReconcileOfficialPricesFromSource(sourceURL string, keep []Offic
 	return removed, nil
 }
 
-// ApplyOfficialPrice 把官方价应用到某 offer:写三价 + 来源留证四字段。
+// ApplyOfficialPrice 把官方价应用到某 offer:写四价 + 来源留证四字段。
 //
 // 只动价与 provenance,不改 override_price、不改启停 —— 「手工覆盖价优先」由上层
 // 依据 offer.OverridePrice 决定是否放行(需二次确认),store 层不做策略判断。
-// usd 三参为换汇后的 USD 价(原币为 USD 时等于原价;CNY 无汇率时由上层拒绝应用)。
-func (s *Store) ApplyOfficialPrice(offerID int64, q domain.OfficialPriceRow, usdIn, usdOut, usdCache float64) error {
+// usd 四参为换汇后的 USD 价(原币为 USD 时等于原价;CNY 无汇率时由上层拒绝应用)。
+// usdCacheWrite = 0 表示该行没给缓存写价,计费时按 input 价回落(见 pricing.ShapePrice)。
+func (s *Store) ApplyOfficialPrice(offerID int64, q domain.OfficialPriceRow, usdIn, usdOut, usdCacheRead, usdCacheWrite float64) error {
 	res, err := s.db.Exec(`UPDATE model_offers SET
-		input_price_usd=?, output_price_usd=?, cache_read_price_usd=?,
+		input_price_usd=?, output_price_usd=?, cache_read_price_usd=?, cache_write_price_usd=?,
 		price_source_url=?, price_fetched_at=?, price_currency=?, price_native_text=?
 		WHERE id=?`,
-		usdIn, usdOut, usdCache,
+		usdIn, usdOut, usdCacheRead, usdCacheWrite,
 		q.SourceURL, formatRFC3339(q.FetchedAt), string(q.Currency), q.NativeText, offerID)
 	if err != nil {
 		return fmt.Errorf("apply official price to offer %d: %w", offerID, err)
@@ -240,7 +242,7 @@ func (s *Store) OfferPriceSource(offerID int64) (url, fetchedAt, currency string
 }
 
 const officialPriceSelect = `SELECT id, provider, model_name, source_url, fetched_at,
-	currency, billing_shape, in_price, out_price, cache_read_price, cache_derived,
+	currency, billing_shape, in_price, out_price, cache_read_price, cache_write_price, cache_derived,
 	native_text, detail_json, content_sha256, created_at, updated_at
 	FROM official_prices`
 
@@ -249,7 +251,7 @@ func scanOfficialPrice(row scanner) (domain.OfficialPriceRow, error) {
 	var provider, currency, shape, fetched, detail, created, updated string
 	var derived int
 	if err := row.Scan(&q.ID, &provider, &q.ModelName, &q.SourceURL, &fetched,
-		&currency, &shape, &q.InputPrice, &q.OutputPrice, &q.CacheReadPrice, &derived,
+		&currency, &shape, &q.InputPrice, &q.OutputPrice, &q.CacheReadPrice, &q.CacheWritePrice, &derived,
 		&q.NativeText, &detail, &q.ContentSHA256, &created, &updated); err != nil {
 		return domain.OfficialPriceRow{}, err
 	}

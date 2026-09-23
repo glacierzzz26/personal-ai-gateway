@@ -71,17 +71,19 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - `models(id, name UNIQUE, display_name, context_window, capabilities(json), enabled, …)` — `name` 为渠道侧真实模型名;
   `display_name` 为网关统一名称(空=未重命名,对外回落 `name`),非空时唯一(部分索引 `WHERE display_name <> ''`)。
   统一名只作用于网关侧(管理台展示/路由规则匹配/`/v1/models`/日志归因),出站转发仍改回 `name`。
-- `model_offers(id, model_id FK, channel_id FK, in/out/cache_read 单价, override_price,
+- `model_offers(id, model_id FK, channel_id FK, in/out/cache_read/cache_write 单价, override_price,
    priority, enabled, rate_limit_rpm, note, UNIQUE(model_id, channel_id))` — 渠道/模型删除级联。
+   `cache_write_price_usd` = 0 表示该 offer 没给缓存写价 → 缓存写 token 按 input 价计(见 §5.7)。
 - `rules(id, name, enabled, match_mode(prefix|wildcard|regex), pattern, strategy(priority|weight|latency),
    channel_ids(json), weights(json), fallback_channel_id, retry, timeout_ms, sort, hit)`。
 - `tokens(id, name, sha256 UNIQUE, key_cipher, key_masked, allowed_models(json "*"|数组), quota_usd, used_usd,
    rpm_limit, expires_at, status, last_used_at, owner_id FK→admins NULL, …)` — sha256 供鉴权,key_cipher
    (AES-GCM)供回显/生成配置;owner_id=NULL 为全局 key;删用户级联删其令牌。m0002 之前建的旧 key 无密文。
 - `request_logs(id, ts UTC, model, channel_id/name, token_id/name, protocol, stream, status,
-   in/out/cache tokens, cost, first_token_ms, total_ms, ip, err)` — idx ts/model/channel/token。
+   in/out/cache_read/cache_write tokens, cost, first_token_ms, total_ms, ip, err)` — idx ts/model/channel/token。
+   `cache_write_tokens` 于 m0013 从 `prompt_tokens` 中拆出(此前 cache_creation 被折进输入)。
 - `official_prices(id, provider, model_name, source_url, fetched_at, currency, billing_shape,
-   in/out/cache_read 单价, cache_derived, native_text, detail_json, content_sha256, …, UNIQUE(provider, model_name))`
+   in/out/cache_read/cache_write 单价, cache_derived, native_text, detail_json, content_sha256, …, UNIQUE(provider, model_name))`
    — 官方参考价,与手填的 `model_offers` 报价分表(官价只作默认值与比对源,不改写渠道报价)。
    `provider` 是 `domain.Provider`(见 §5.6 的 20 家厂商枚举);`model_name` 对 CC 来源存 **slug**。
    `detail_json` 装分时/阶梯/折扣明细(峰谷窗口、活动原价与到期、档位数)。
@@ -127,7 +129,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
    出站 client 按 (proxy, skipTLS, 请求超时) 三元组缓存复用 Transport(连接池不再每请求重建);
    该超时只作**响应头阶段**硬上限(`ResponseHeaderTimeout`),流式拿到响应头后交给看门狗。
 4. **流式超时口径**(见 §5.1)。
-5. 记账:cost = 命中 offer 单价 × token;流式以结束块权威计数(流被中断时用已嗅探到的部分 + 输入估算兜底);
+5. 记账:cost = 命中 offer 单价 × token(**四价**各计一项:in/out/cache_read/cache_write;缓存写价缺失
+   回落该时刻生效的输入价,见 §5.7);流式以结束块权威计数(流被中断时用已嗅探到的部分 + 输入估算兜底);
    写 request_logs;`token.used_usd` 事务累加;今天/曲线统计由日志实时 GROUP BY(个人规模不建 rollup 表)。
 6. `/v1/models` = enabled 且有启用 offer 的模型(anthropic/openai 双形状),`id`/`display_name` 用统一名。
 7. **统一名称(重命名)**:模型级(不按渠道),同一模型多渠道共用一个对外名。客户端用统一名请求即可选路;
@@ -326,6 +329,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   免费单元格文本 `Free`(**排除落库**,计入报告);峰谷首格 `title` 给谷价与时段(显示值即谷价)。
 - **峰价缓存读是逐格可得的**(每个价格格的 `<button aria-label="... cache read: $0.006 during peak hours">`),
   无须推导。峰谷时段是 **UTC(`tzOffsetMin=0`)** —— 见下方红线。
+- **缓存写列**(`Cache write`)直取为 `cache_write_price`;CC 页面为 `—` 的行记 **0 = 无依据**,
+  计费回落输入价(见 §5.7)。峰谷行的缓存写只给一个标量(不分档),按行级值落地。
 - 分档明细(多档)只在详情页;列表页 `aria-label="...N context price bands"` 只给**档位数**,记
   `detail_json["tierBands"]` 留证,**不参与选价**(与 `window.go` 的阶梯红线一致)。
 - **宁缺勿假的三道闸**:① 结构异常(表列数不符/行无 slug)**硬失败**,绝不静默给出错误值;
@@ -340,6 +345,31 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 > 会把 UTC 误判成 +480,峰谷整体偏 8 小时。故 `PriceWindow` 加 `TZSet bool`(显式给过才采信),
 > `decodeWindows` 按「键是否存在」置位。CC 写窗口时显式带 `tzOffsetMin:0` + `TZSet:true`。
 > 改 `PriceWindow` 序列化时务必保留这个语义(见 `internal/pricing/window.go` 与 `window_test.go`)。
+
+### 5.7 缓存写计费(cache_creation,m0013)
+
+**问题。** Anthropic 的 `usage.cache_creation_input_tokens` 是按**高于输入**的单价收的(Anthropic 约
+1.25× 输入价),但改造前它被**折进 `prompt` 按普通输入价计**(`usage.go` 的旧 `parseAnthropicUsage` 与
+`sseAnthropicUsage`)。后果是 Claude 系请求的输入口径系统性**低估** —— 且偏离最大的恰是多轮/长上下文
+场景(`cache_creation` 在首轮写、后续轮读,写入量随上下文长度增长)。
+
+**改法。** 归一化 `usage` 增第 4 项 `cacheWrite`,**不再折进 `prompt`**;`prompt` 只含按正常输入价计费的
+输入 token。价格侧同扩到**四价**:`official_prices.cache_write_price` 与
+`model_offers.cache_write_price_usd`(m0013 加列),计费 `tokenCost`/`costUsd` 四价各计一项。
+
+**0 = 无依据 → 回落输入价(不是回归)。** 缓存写价 `0` 是明确的「无依据」:该行/该 offer 没给这个价。
+此时**回落该时刻生效的 input 价**(`ShapePrice` 选档**之后**回落,故峰谷行能跟着档位走:峰时落峰价、
+谷时落谷价)。这与改造前「`cache_creation` 折进 prompt 按输入价」**逐位一致** —— 所以对未提供该价的
+厂商,补 m0013 不是回归。CC 抓取会带上真值;CC 页面为 `—` 的行仍记 0。
+
+**存量数据不回溯。** 存量 `official_prices`/`model_offers` 的缓存写价为 0(同回落规则);
+存量 `request_logs.cache_write_tokens` 一律 0 —— 旧行里 `prompt_tokens` 那部分是 `cache_creation` 还是
+真输入已无从区分,**不臆造**(要重算旧账跑 `cmd/gwbackfill`,其四价公式与运行期 `costUsd` 逐位一致)。
+
+**改写口径的两处配套**(易漏,列此对照):
+- `o2a`(anthropic 上游 → openai 客户端)方向:`cache_creation` 拆进 `Usage.CacheWrite`,而 openai 的
+  `prompt_tokens` 语义含全部输入 → `o2aUsageJSON` 用 `Prompt + CacheRead + CacheWrite` 还原。
+- `a2o`(openai 上游 → anthropic 客户端)方向:OpenAI 无缓存写概念,`Usage.CacheWrite` 恒 0。
 
 ## 6. 管理 REST 契约(v2;会话鉴权)
 
@@ -363,7 +393,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `POST /official-prices/fetch` `{provider}` · `POST /official-prices/manual` | 按厂商抓取(逐厂商路径,当前全部 ManualOnly)/ 手工录入(来源 URL 必填,缺省币种按厂商落地) |
 | `POST /official-prices/fetch-commandcode` | **官方价主来源**(issue #27):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped}` |
 | `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点(**破坏性**对账),再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, totalUpserted, totalRemoved}`。超时 120s |
-| `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写三价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
+| `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写四价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
 | `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |
 | `GET /tokens/{id}/claude-config` | 生成可直接粘的 `~/.claude/settings.json` 片段(含真实 key;旧 key 无密文回 409) |
 | `GET/POST /rules` · `PATCH/DELETE /rules/{id}` · `PUT /rules/order` | 路由规则 CRUD + 重排 |
@@ -458,4 +488,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   (`Azure`→`OpenAI` + `egress_proto='azure'`,`聚合中转`→`''`);`channel_type` 按 base_url/provider 推断
   (`commandcode.ai`→`commandcode`、`opencode.ai`→`opencode`、`provider='DeepSeek'`→`deepseek`,其余 `thirdparty`)。
   迁移是追加式的,老库直接起新版本即可,无需手工干预。
+- m0013 补「缓存写」四项:`official_prices.cache_write_price` / `model_offers.cache_write_price_usd` /
+  `request_logs.cache_write_tokens`(均为 `NOT NULL DEFAULT 0`)。存量行为 0 = 无依据 → 按 input 价回落;
+  存量日志的 `cache_write_tokens` 一律 0,旧行不回溯拆分(见 §5.7)。同样追加式,老库起新版即自动加列。
 - 渠道 api_key 密文依赖主密钥;换主密钥会解不开旧密文 → 保留原密钥即可回放。

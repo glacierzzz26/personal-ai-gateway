@@ -287,16 +287,16 @@ func (s *Server) handleOfficialPriceDelete(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleOfficialPriceApply 把官方价**绑定到模型**(并把三价快照进 offer 作手填兜底)。
+// handleOfficialPriceApply 把官方价**绑定到模型**(并把四价快照进 offer 作手填兜底)。
 //
 // 语义在成本改造后收窄了:改造前它的动效是「把官方价写进 offer 三价」,而**那正是**
 // 「成本 = 官方价」这个 bug 的来源(生产里模型 20 的 1.0/4.0/0.02 就是这么来的)。
-// 现在成本是「官方价 × 渠道系数」现算的,写三价进 offer 不再是让成本生效的动作 ——
+// 现在成本是「官方价 × 渠道系数」现算的,写四价进 offer 不再是让成本生效的动作 ——
 // 真正生效的动作是**写 models.official_vendor/official_model_name**。
 //
 // 所以本接口做两件事:
 //  1. 写模型级绑定(成本与售价从此按官方价派生,官方价一变全线跟着变);
-//  2. 顺带快照三价进该模型全部 offer + provenance 四字段留证 —— 仅供派生不可用时兜底。
+//  2. 顺带快照四价进该模型全部 offer + provenance 四字段留证 —— 仅供派生不可用时兜底。
 //
 // 手工覆盖价优先:模型下任一 offer 的 override_price=true 时必须 confirmOverride=true
 // 才放行,避免自动化把用户手工维护的兜底价悄悄冲掉。原币为 CNY 且未设汇率时无法换算,直接拒绝。
@@ -345,7 +345,7 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 		writeStoreErr(w, err)
 		return
 	}
-	in, out, cache, err := convertPrice(q, settings.DisplayCurrency, settings.USDPerCNY)
+	in, out, cacheRead, cacheWrite, err := convertPrice(q, settings.DisplayCurrency, settings.USDPerCNY)
 	if err != nil {
 		apiErr(w, http.StatusBadRequest, "no_rate", err.Error())
 		return
@@ -365,10 +365,10 @@ func (s *Server) handleOfficialPriceApply(w http.ResponseWriter, r *http.Request
 		writeStoreErr(w, err)
 		return
 	}
-	// ② 快照三价进该模型**全部** offer(不只是发起的那条)——
+	// ② 快照四价进该模型**全部** offer(不只是发起的那条)——
 	// 派生失败时全模型口径一致地回落同一组兜底价。
 	for _, o := range offers {
-		if err := s.st.ApplyOfficialPrice(o.ID, q, in, out, cache); err != nil {
+		if err := s.st.ApplyOfficialPrice(o.ID, q, in, out, cacheRead, cacheWrite); err != nil {
 			writeStoreErr(w, err)
 			return
 		}
@@ -392,20 +392,25 @@ func rateOverrideOf(m domain.ModelRow) domain.OptionalFloat {
 
 // convertPrice 官方原币价 → 计价币种金额(每百万 token)。
 // 折算口径与计费链路共用 pricing.Convert,避免两处漂移。
-func convertPrice(q domain.OfficialPriceRow, target domain.Currency, usdPerCNY float64) (in, out, cache float64, err error) {
+func convertPrice(q domain.OfficialPriceRow, target domain.Currency, usdPerCNY float64) (in, out, cacheRead, cacheWrite float64, err error) {
 	in, err = pricing.Convert(q.InputPrice, q.Currency, target, usdPerCNY)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	out, err = pricing.Convert(q.OutputPrice, q.Currency, target, usdPerCNY)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
-	cache, err = pricing.Convert(q.CacheReadPrice, q.Currency, target, usdPerCNY)
+	cacheRead, err = pricing.Convert(q.CacheReadPrice, q.Currency, target, usdPerCNY)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
-	return in, out, cache, nil
+	// 缓存写价 0 = 该行没给;换汇 0 仍是 0,语义不变(计费链路按 input 价回落)。
+	cacheWrite, err = pricing.Convert(q.CacheWritePrice, q.Currency, target, usdPerCNY)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	return in, out, cacheRead, cacheWrite, nil
 }
 
 // officialPriceViews 批量组装读视图(换算 + 已应用 offer 标注)。
@@ -424,15 +429,16 @@ func (s *Server) officialPriceViews(p domain.Provider, rows []domain.OfficialPri
 	return out
 }
 
-// officialPriceView 单行读视图(换算三价 + 可用标记)。
+// officialPriceView 单行读视图(换算四价 + 可用标记)。
 func (s *Server) officialPriceView(q domain.OfficialPriceRow) domain.OfficialPriceView {
 	v := domain.OfficialPriceView{OfficialPriceRow: q, AppliedOfferIDs: []int64{}}
 	target, rate := domain.CurrencyCNY, 0.0
 	if st, err := s.st.GetSettings(); err == nil {
 		target, rate = st.DisplayCurrency, st.USDPerCNY
 	}
-	if in, out, cache, err := convertPrice(q, target, rate); err == nil {
-		v.InputPriceUsd, v.OutputPriceUsd, v.CacheReadPriceUsd = in, out, cache
+	if in, out, cacheRead, cacheWrite, err := convertPrice(q, target, rate); err == nil {
+		v.InputPriceUsd, v.OutputPriceUsd = in, out
+		v.CacheReadPriceUsd, v.CacheWritePriceUsd = cacheRead, cacheWrite
 		v.RateSet = true // 金额已按计价币种给出(同币种,或已按汇率折算)
 	}
 	return v

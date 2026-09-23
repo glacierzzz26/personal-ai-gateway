@@ -27,11 +27,13 @@ const (
 )
 
 // Usage 归一化 token 口径,与 proxy.usage 一致但独立定义(避免 import 环):
-// Prompt 已剔除缓存命中(按正常价计费的输入);Completion 输出;CacheRead 缓存命中。
+// Prompt 已剔除缓存命中与缓存写(只含按正常输入价计费的部分);Completion 输出;
+// CacheRead 缓存命中;CacheWrite 缓存写入(Anthropic cache_creation,按缓存写价计)。
 type Usage struct {
 	Prompt     int
 	Completion int
 	CacheRead  int
+	CacheWrite int
 }
 
 // Supported 是否实现 inProto→outProto 翻译(仅跨协议需要;同协议 fast path 透传)。

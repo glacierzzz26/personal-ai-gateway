@@ -793,18 +793,19 @@ func FetchCommandCode(ctx context.Context, client *http.Client, previousRows int
 		}
 		for _, r := range g {
 			out = append(out, domain.OfficialPriceRow{
-				Provider:       k.p,
-				ModelName:      r.Slug, // 落 slug(见 DESIGN:与 canonicalModelKey 一致,便于回填绑定)
-				SourceURL:      commandCodeURL,
-				FetchedAt:      at,
-				Currency:       domain.CurrencyUSD,
-				BillingShape:   k.s,
-				InputPrice:     r.In,
-				OutputPrice:    r.Out,
-				CacheReadPrice: r.CacheRead,
-				NativeText:     r.NativeText,
-				Detail:         r.Detail,
-				ContentSHA256:  sha,
+				Provider:        k.p,
+				ModelName:       r.Slug, // 落 slug(见 DESIGN:与 canonicalModelKey 一致,便于回填绑定)
+				SourceURL:       commandCodeURL,
+				FetchedAt:       at,
+				Currency:        domain.CurrencyUSD,
+				BillingShape:    k.s,
+				InputPrice:      r.In,
+				OutputPrice:     r.Out,
+				CacheReadPrice:  r.CacheRead,
+				CacheWritePrice: r.CacheWrite, // 列缺失(`—`)时为 0 = 无依据,计费回落 input 价
+				NativeText:      r.NativeText,
+				Detail:          r.Detail,
+				ContentSHA256:   sha,
 			})
 			rep.PerVendor[k.p]++
 		}

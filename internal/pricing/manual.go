@@ -43,7 +43,7 @@ func BuildManual(in domain.OfficialPriceInput) (domain.OfficialPriceRow, error) 
 	if !in.Currency.Valid() {
 		return domain.OfficialPriceRow{}, fmt.Errorf("currency 必须是 CNY 或 USD")
 	}
-	if in.InputPrice < 0 || in.OutputPrice < 0 || in.CacheReadPrice < 0 {
+	if in.InputPrice < 0 || in.OutputPrice < 0 || in.CacheReadPrice < 0 || in.CacheWritePrice < 0 {
 		return domain.OfficialPriceRow{}, fmt.Errorf("单价不能为负")
 	}
 	if in.InputPrice == 0 && in.OutputPrice == 0 {
@@ -54,17 +54,18 @@ func BuildManual(in domain.OfficialPriceInput) (domain.OfficialPriceRow, error) 
 		shape = domain.ShapeDiscount // 手工录入常用于「限时折扣」等带说明的形态
 	}
 	return domain.OfficialPriceRow{
-		Provider:       in.Provider,
-		ModelName:      in.ModelName,
-		SourceURL:      in.SourceURL,
-		FetchedAt:      time.Now().UTC(),
-		Currency:       in.Currency,
-		BillingShape:   shape,
-		InputPrice:     in.InputPrice,
-		OutputPrice:    in.OutputPrice,
-		CacheReadPrice: in.CacheReadPrice,
-		NativeText:     strings.TrimSpace(in.NativeText),
-		Detail:         map[string]any{"manual": true, "note": in.Note},
-		Note:           in.Note,
+		Provider:        in.Provider,
+		ModelName:       in.ModelName,
+		SourceURL:       in.SourceURL,
+		FetchedAt:       time.Now().UTC(),
+		Currency:        in.Currency,
+		BillingShape:    shape,
+		InputPrice:      in.InputPrice,
+		OutputPrice:     in.OutputPrice,
+		CacheReadPrice:  in.CacheReadPrice,
+		CacheWritePrice: in.CacheWritePrice, // 0 = 无依据,计费回落 input 价
+		NativeText:      strings.TrimSpace(in.NativeText),
+		Detail:          map[string]any{"manual": true, "note": in.Note},
+		Note:            in.Note,
 	}, nil
 }

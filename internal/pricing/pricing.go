@@ -36,6 +36,7 @@ type quote struct {
 	ModelName    string
 	In, Out      float64
 	CacheRead    float64
+	CacheWrite   float64
 	CacheDerived bool
 	NativeText   string
 	Detail       map[string]any
@@ -215,7 +216,7 @@ func validate(quotes []quote, cur domain.Currency, shape domain.BillingShape) er
 		if q.ModelName == "" {
 			return fmt.Errorf("解析出空模型名")
 		}
-		for _, v := range []float64{q.In, q.Out, q.CacheRead} {
+		for _, v := range []float64{q.In, q.Out, q.CacheRead, q.CacheWrite} {
 			if v < 0 || v > 1e6 {
 				return fmt.Errorf("%s 单价超出合理区间: %v", q.ModelName, v)
 			}
@@ -233,19 +234,20 @@ func toRows(p domain.Provider, url, sha string, cur domain.Currency, shape domai
 	out := make([]domain.OfficialPriceRow, 0, len(quotes))
 	for _, q := range quotes {
 		out = append(out, domain.OfficialPriceRow{
-			Provider:       p,
-			ModelName:      q.ModelName,
-			SourceURL:      url,
-			FetchedAt:      at,
-			Currency:       cur,
-			BillingShape:   shape,
-			InputPrice:     q.In,
-			OutputPrice:    q.Out,
-			CacheReadPrice: q.CacheRead,
-			CacheDerived:   q.CacheDerived,
-			NativeText:     q.NativeText,
-			Detail:         q.Detail,
-			ContentSHA256:  sha,
+			Provider:        p,
+			ModelName:       q.ModelName,
+			SourceURL:       url,
+			FetchedAt:       at,
+			Currency:        cur,
+			BillingShape:    shape,
+			InputPrice:      q.In,
+			OutputPrice:     q.Out,
+			CacheReadPrice:  q.CacheRead,
+			CacheWritePrice: q.CacheWrite,
+			CacheDerived:    q.CacheDerived,
+			NativeText:      q.NativeText,
+			Detail:          q.Detail,
+			ContentSHA256:   sha,
 		})
 	}
 	return out

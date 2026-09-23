@@ -16,7 +16,7 @@ import (
 // 高峰时段实收低于应收,且成本口径同样偏低。
 //
 // 设计边界(务必遵守):
-//   - 只处理 flat 与 peak_offpeak。tiered(通义阶梯)与 discount 一律返回标量三价,
+//   - 只处理 flat 与 peak_offpeak。tiered(通义阶梯)与 discount 一律返回标量四价,
 //     与改造前 RetailPrice 逐位一致。
 //   - 绝不消费 Detail["tiers"]:生产 166 行通义官方价的 tiers 是坏的
 //     (qwen3-max 的 15 档里 0<Token≤32K 重复 4 次且价不同,qwen3.7-plus 的 range 全为空串),
@@ -130,7 +130,7 @@ const defaultTZOffsetMin = 480
 // 三层兼容,依次尝试:
 //  1. windows(新结构,parseDeepSeek 已开始产出)
 //  2. peakHours 精确等于历史字面量 → 等价窗口(已落库的 2 行 DeepSeek 靠这层立即正确计费)
-//  3. 都没有 → ok=false,调用方按标量三价(= 生效默认价)计费,与改造前一致
+//  3. 都没有 → ok=false,调用方按标量四价(= 生效默认价)计费,与改造前一致
 //
 // shape 非 peak_offpeak 时直接 ok=false —— 只有分时形态才有窗口语义。
 func WindowsFromDetail(detail map[string]any, shape domain.BillingShape) ([]PriceWindow, bool) {
@@ -247,7 +247,8 @@ func containsInt(xs []int, v int) bool {
 	return false
 }
 
-// peakOffpeakTriple 从 detail 的 peak/offpeak 子对象取一组三价。
+// peakOffpeakTriple 从 detail 的 peak/offpeak 子对象取一组价(in/out/cacheRead)。
+// 缓存写不分档:两档共用行级 CacheWritePrice(见 PeakOffpeakTriples)。
 func peakOffpeakTriple(detail map[string]any, key string) (in, out, cache float64, ok bool) {
 	sub, ok := detail[key].(map[string]any)
 	if !ok {
@@ -262,17 +263,25 @@ func peakOffpeakTriple(detail map[string]any, key string) (in, out, cache float6
 	return i, o, c, true
 }
 
-// ShapePrice 一条官方价在 at 时刻应生效的三价(原币种,每百万 token)。
+// ShapePrice 一条官方价在 at 时刻应生效的四价(原币种,每百万 token)。
 //
 // 分派:
-//   - flat / discount / 未知:原样返回标量三价(改造前行为)
-//   - peak_offpeak:按 windows 选档取 detail 的 peak/offpeak;无法判定档位时回落标量三价
-//   - tiered:**原样返回标量三价,绝不读 detail["tiers"]**(见文件头说明)
+//   - flat / discount / 未知:原样返回标量四价(改造前行为)
+//   - peak_offpeak:按 windows 选档取 detail 的 peak/offpeak;无法判定档位时回落标量
+//   - tiered:**原样返回标量四价,绝不读 detail["tiers"]**(见文件头说明)
+//
+// 缓存写价(cacheWrite)是**行级标量**:CC 的峰谷行只在首格给 in/out 两档,缓存写不随档位变;
+// 值为 0 表示「无依据」——此时回落**该时刻生效的输入价**(= 改造前 cache_creation 折进
+// prompt 的行为,逐位一致,不是回归)。回落放在选档**之后**,故峰谷行也能跟着档位走。
 //
 // 返回的 isPeak 供调用方记录 request_logs.price_window,便于事后核对账面。
-func ShapePrice(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int) (in, out, cache float64, isPeak bool, err error) {
-	scalar := func() (float64, float64, float64, bool, error) {
-		return q.InputPrice, q.OutputPrice, q.CacheReadPrice, false, nil
+func ShapePrice(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int) (in, out, cacheRead, cacheWrite float64, isPeak bool, err error) {
+	scalar := func() (float64, float64, float64, float64, bool, error) {
+		cw := q.CacheWritePrice
+		if cw == 0 {
+			cw = q.InputPrice
+		}
+		return q.InputPrice, q.OutputPrice, q.CacheReadPrice, cw, false, nil
 	}
 	if q.BillingShape != domain.ShapePeakOff {
 		return scalar()
@@ -294,13 +303,17 @@ func ShapePrice(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int) (in, o
 	if !ok {
 		return scalar()
 	}
-	return pi, po, pc, peak, nil
+	cw := q.CacheWritePrice
+	if cw == 0 {
+		cw = pi // 回落到该档位生效的输入价
+	}
+	return pi, po, pc, cw, peak, nil
 }
 
-// PriceTriple 一组每百万 token 的三价(官方原币种)。
-type PriceTriple struct{ In, Out, CacheRead float64 }
+// PriceTriple 一组每百万 token 的四价(官方原币种)。CacheWrite = 0 表示该行没给缓存写价。
+type PriceTriple struct{ In, Out, CacheRead, CacheWrite float64 }
 
-// PeakOffpeakTriples 分时形态模型的两个档位三价(谷价、峰价),官方原币种。
+// PeakOffpeakTriples 分时形态模型的两个档位四价(谷价、峰价),官方原币种。
 //
 // 展示面专用:客户面要**并列**列出谷/峰两价与时段(见 PLAN.md §5),而不是随时间跳动的单值
 // —— 后者随 react-query 缓存过期就变,客户截图对不上账。
@@ -316,7 +329,8 @@ func PeakOffpeakTriples(q domain.OfficialPriceRow) (off, peak PriceTriple, ok bo
 	if !ok1 || !ok2 {
 		return PriceTriple{}, PriceTriple{}, false
 	}
-	return PriceTriple{In: oi, Out: oo, CacheRead: oc}, PriceTriple{In: pi, Out: po, CacheRead: pc}, true
+	return PriceTriple{In: oi, Out: oo, CacheRead: oc, CacheWrite: q.CacheWritePrice},
+		PriceTriple{In: pi, Out: po, CacheRead: pc, CacheWrite: q.CacheWritePrice}, true
 }
 
 // PeakHoursText detail 里人读的峰时段说明(厂商原文)。空 = 该行没写。
@@ -329,35 +343,39 @@ func PeakHoursText(q domain.OfficialPriceRow) string {
 
 // applyMultiplier 按币种换算并乘系数(成本用渠道系数、售价用倍率),统一 Round6。
 func applyMultiplier(q domain.OfficialPriceRow, display domain.Currency, usdPerCNY, multiplier float64,
-	in, out, cache float64) (float64, float64, float64, error) {
+	in, out, cacheRead, cacheWrite float64) (float64, float64, float64, float64, error) {
 	rate := multiplier
 	if rate <= 0 {
 		rate = 1.0
 	}
 	ci, err := Convert(in, q.Currency, display, usdPerCNY)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	co, err := Convert(out, q.Currency, display, usdPerCNY)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
-	cc, err := Convert(cache, q.Currency, display, usdPerCNY)
+	cc, err := Convert(cacheRead, q.Currency, display, usdPerCNY)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
-	return Round6(ci * rate), Round6(co * rate), Round6(cc * rate), nil
+	cw, err := Convert(cacheWrite, q.Currency, display, usdPerCNY)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	return Round6(ci * rate), Round6(co * rate), Round6(cc * rate), Round6(cw * rate), nil
 }
 
 // RetailPriceAt 本站价 = 该时刻生效的官方价 × 倍率(计价币种,每百万 token)。
 func RetailPriceAt(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int,
-	display domain.Currency, usdPerCNY, multiplier float64) (in, out, cache float64, isPeak bool, err error) {
-	si, so, sc, peak, err := ShapePrice(q, at, tzOffsetMin)
+	display domain.Currency, usdPerCNY, multiplier float64) (in, out, cacheRead, cacheWrite float64, isPeak bool, err error) {
+	si, so, sc, sw, peak, err := ShapePrice(q, at, tzOffsetMin)
 	if err != nil {
-		return 0, 0, 0, false, err
+		return 0, 0, 0, 0, false, err
 	}
-	in, out, cache, err = applyMultiplier(q, display, usdPerCNY, multiplier, si, so, sc)
-	return in, out, cache, peak, err
+	in, out, cacheRead, cacheWrite, err = applyMultiplier(q, display, usdPerCNY, multiplier, si, so, sc, sw)
+	return in, out, cacheRead, cacheWrite, peak, err
 }
 
 // WholesalePriceAt 成本 = 该时刻生效的官方价 × 渠道系数(计价币种,每百万 token)。
@@ -365,11 +383,11 @@ func RetailPriceAt(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int,
 // 与 RetailPriceAt 共用同一 ShapePrice 与同一 at —— 这是「成本与售价同步浮动」的实现点:
 // 两者只会相差一个乘数,不会因档位判定不一致而产生假毛利。
 func WholesalePriceAt(q domain.OfficialPriceRow, at time.Time, tzOffsetMin int,
-	display domain.Currency, usdPerCNY, ratio float64) (in, out, cache float64, isPeak bool, err error) {
-	si, so, sc, peak, err := ShapePrice(q, at, tzOffsetMin)
+	display domain.Currency, usdPerCNY, ratio float64) (in, out, cacheRead, cacheWrite float64, isPeak bool, err error) {
+	si, so, sc, sw, peak, err := ShapePrice(q, at, tzOffsetMin)
 	if err != nil {
-		return 0, 0, 0, false, err
+		return 0, 0, 0, 0, false, err
 	}
-	in, out, cache, err = applyMultiplier(q, display, usdPerCNY, ratio, si, so, sc)
-	return in, out, cache, peak, err
+	in, out, cacheRead, cacheWrite, err = applyMultiplier(q, display, usdPerCNY, ratio, si, so, sc, sw)
+	return in, out, cacheRead, cacheWrite, peak, err
 }

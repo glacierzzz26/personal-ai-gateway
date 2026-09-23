@@ -177,7 +177,8 @@ export default function OfficialPricing() {
         <div className="gw-num">
           {curOf(r.currency)}{r.inputPrice} / {curOf(r.currency)}{r.outputPrice}
           <div style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
-            {r.currency}{r.cacheReadPrice > 0 ? ` · 缓存 ${curOf(r.currency)}${r.cacheReadPrice}` : ''}
+            {r.currency}{r.cacheReadPrice > 0 ? ` · 缓存读 ${curOf(r.currency)}${r.cacheReadPrice}` : ''}
+            {r.cacheWritePrice ? ` · 缓存写 ${curOf(r.currency)}${r.cacheWritePrice}` : ''}
           </div>
         </div>
       ),

@@ -226,6 +226,8 @@ export const api = {
       inputPriceUsd: o.inputPriceUsd,
       outputPriceUsd: o.outputPriceUsd,
       cacheReadPriceUsd: o.cacheReadPriceUsd ?? 0,
+      // 缓存写价同理必须回传:PATCH 全量替换语义下漏传即清零(0=无依据→按 input 价回落)
+      cacheWritePriceUsd: o.cacheWritePriceUsd ?? 0,
       overridePrice: o.overridePrice,
       rateLimitRpm: o.rateLimitRpm,
       enabled,
@@ -263,7 +265,7 @@ export const api = {
   manualOfficialPrice(body: ManualPriceDraft): Promise<OfficialPriceView> {
     return http.post('/official-prices/manual', body);
   },
-  /** 应用官方价到某 offer(写三价 + 来源留证;手工覆盖价需 confirmOverride) */
+  /** 应用官方价到某 offer(写四价 + 来源留证;手工覆盖价需 confirmOverride) */
   applyOfficialPrice(id: number, offerId: number, confirmOverride = false): Promise<ModelOffer> {
     return http.post<ModelOffer>(`/official-prices/${id}/apply`, { offerId, confirmOverride }).then(offer);
   },

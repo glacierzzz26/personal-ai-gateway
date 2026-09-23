@@ -408,7 +408,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			} else {
 				u = parseOpenAIUsage(res.body)
 			}
-			tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead}
+			tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead, CacheWrite: u.cacheWrite}
 		} else {
 			var convErr error
 			var cap translate.Capture
@@ -557,7 +557,7 @@ func (g *Gateway) streamFrom(w http.ResponseWriter, r *http.Request, in *inbound
 	if inProto == outProto {
 		var u usage
 		u, streamErr = passthroughSSE(hw, res.body, outProto)
-		tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead}
+		tok = translate.Usage{Prompt: u.prompt, Completion: u.completion, CacheRead: u.cacheRead, CacheWrite: u.cacheWrite}
 	} else {
 		estIn := 0
 		if inProto == ProtoAnthropic {
@@ -642,9 +642,17 @@ func clientGone(ctx context.Context, err error) bool {
 // —— 计费与日志 ——
 
 // costUsd 按命中 offer 单价 × token(每百万)算成本(你付上游)。
+//
+// 四价:缓存写价为 0 时按 input 价计 —— 与「cache_creation 折进 prompt」的旧行为逐位一致,
+// 不是回归(见 usage 注释)。
 func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 	pm := func(price float64, n int) float64 { return price * float64(n) / 1e6 }
-	return pm(offer.InputPriceUsd, tok.Prompt) + pm(offer.OutputPriceUsd, tok.Completion) + pm(offer.CacheReadPriceUsd, tok.CacheRead)
+	cw := offer.CacheWritePriceUsd
+	if cw == 0 {
+		cw = offer.InputPriceUsd
+	}
+	return pm(offer.InputPriceUsd, tok.Prompt) + pm(offer.OutputPriceUsd, tok.Completion) +
+		pm(offer.CacheReadPriceUsd, tok.CacheRead) + pm(cw, tok.CacheWrite)
 }
 
 // officialFor 取该模型绑定的官方价一行;未绑定或查不到时 ok=false(调用方回落成本口径)。
@@ -695,6 +703,7 @@ func (g *Gateway) settle(in *inboundReq, ch domain.ChannelRow, status int, tok t
 		PromptTokens: tok.Prompt,
 		Completion:   tok.Completion,
 		CacheRead:    tok.CacheRead,
+		CacheWrite:   tok.CacheWrite,
 		CostUsd:      b.Cost,
 		ChargeUsd:    b.Charge,
 		CostSource:   string(b.CostSrc),

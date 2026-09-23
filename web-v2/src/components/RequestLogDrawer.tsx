@@ -51,6 +51,11 @@ export default function RequestLogDrawer({ detail, onClose }: {
                 <span className="gw-num">{fmt.n(detail.cacheReadTokens!)}</span>
               </Descriptions.Item>
             )}
+            {!!detail.cacheWriteTokens && (
+              <Descriptions.Item label="缓存写入 Token">
+                <span className="gw-num">{fmt.n(detail.cacheWriteTokens!)}</span>
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label="首字延迟">{detail.firstTokenMs ? fmt.ms(detail.firstTokenMs) : '—'}</Descriptions.Item>
             <Descriptions.Item label="总耗时">{fmt.ms(detail.totalMs)}</Descriptions.Item>
             <Descriptions.Item label="花费">{fmt.usd(detail.costUsd, 6)}</Descriptions.Item>

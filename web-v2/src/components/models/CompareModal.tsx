@@ -19,6 +19,7 @@ type OfferRow = {
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd: number;
+  cacheWritePriceUsd: number;
   latencyMs: number;
   successRate: number;
 };
@@ -76,6 +77,7 @@ export default function CompareModal({ open, models, onClose }: Props) {
       inputPriceUsd: o.inputPriceUsd,
       outputPriceUsd: o.outputPriceUsd,
       cacheReadPriceUsd: o.cacheReadPriceUsd ?? 0,
+      cacheWritePriceUsd: o.cacheWritePriceUsd ?? 0,
       latencyMs: o.latencyMs,
       successRate: o.successRate,
     })),
@@ -101,6 +103,10 @@ export default function CompareModal({ open, models, onClose }: Props) {
     },
     {
       title: '缓存读价', dataIndex: 'cacheReadPriceUsd', align: 'right',
+      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
+    },
+    {
+      title: '缓存写价', dataIndex: 'cacheWritePriceUsd', align: 'right',
       render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
     },
     {

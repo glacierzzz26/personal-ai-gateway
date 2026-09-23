@@ -85,6 +85,8 @@ export interface ModelOffer {
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd?: number;
+  /** 手填兜底成本里的缓存写价(0/缺省 = 无依据 → 缓存写 token 按 input 价计) */
+  cacheWritePriceUsd?: number;
   overridePrice: boolean;
   latencyMs: number;
   successRate: number;
@@ -114,12 +116,14 @@ export type CostSource = 'official' | 'offer' | 'unknown';
  * 供给源成本的派生视图(每百万 token,计价币种)。
  *
  * 成本不落库,是「官方价 × 渠道系数」现算的 —— 官方价一变、系数一改即时生效。
- * source='unknown' 时三价恒为 0,前端据此显示「成本未知」而非「成本 0」。
+ * source='unknown' 时四价恒为 0,前端据此显示「成本未知」而非「成本 0」。
  */
 export interface CostQuote {
   in: number;
   out: number;
   cacheRead: number;
+  /** 缓存写价;0 = 该行/该 offer 无依据(计费时按 in 价回落) */
+  cacheWrite?: number;
   source: CostSource;
   /** 仅 source='official' 时有值 */
   vendor?: Provider;
@@ -138,6 +142,8 @@ export interface OfferDraft {
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd?: number;
+  /** 手填兜底成本里的缓存写价(0/缺省 = 无依据 → 缓存写 token 按 input 价计) */
+  cacheWritePriceUsd?: number;
   overridePrice?: boolean;
   rateLimitRpm: number;
   enabled?: boolean;
@@ -211,11 +217,13 @@ export interface UserModelItem {
   priceNote?: string;
 }
 
-/** 用户面每百万 token 的三价(计价币种) */
+/** 用户面每百万 token 的四价(计价币种) */
 export interface UserPrice {
   input: number;
   output: number;
   cacheRead: number;
+  /** 缓存写价;0 = 无依据(计费按 input 价回落) */
+  cacheWrite?: number;
   currency: string;
 }
 
@@ -355,6 +363,8 @@ export interface RequestLogItem {
   inTokens: number;
   outTokens: number;
   cacheReadTokens?: number;
+  /** 缓存写 token(cache_creation);已从 inTokens 中拆出,不再折进输入 */
+  cacheWriteTokens?: number;
   costUsd: number;
   /** 实际向归属用户钱包扣的金额(计价币种,= 官方价 × 归属用户倍率;无官方价时回落成本 × 倍率);0 = 未结算(失败请求 / 管理员键) */
   chargeUsd?: number;
@@ -511,6 +521,8 @@ export interface OfficialPrice {
   inputPrice: number;
   outputPrice: number;
   cacheReadPrice: number;
+  /** 缓存写价(官方原币种);0 = 页面未给(计费按 input 价回落) */
+  cacheWritePrice?: number;
   /** 缓存价由官方规则推导(非官方列,如通义) */
   cacheDerived: boolean;
   nativeText?: string;
@@ -529,6 +541,8 @@ export interface OfficialPriceView extends OfficialPrice {
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd: number;
+  /** 缓存写价;0 = 该行没给(计费按 input 价回落) */
+  cacheWritePriceUsd: number;
   /** 金额可用:原币种与计价币种一致,或已按汇率折算成功 */
   rateSet: boolean;
   /** 已应用该官方价(来源 URL + 抓取时间匹配)的 offer */
@@ -576,6 +590,8 @@ export interface ManualPriceDraft {
   inputPrice: number;
   outputPrice: number;
   cacheReadPrice?: number;
+  /** 缓存写价;0/缺省 = 无依据(计费按输入价回落) */
+  cacheWritePrice?: number;
   nativeText?: string;
   note?: string;
 }

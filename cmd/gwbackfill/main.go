@@ -3,9 +3,10 @@
 // 背景:2026-09-11~13 期间供给源单价为空,全部请求的 cost 落库为 0。单价补齐后历史
 // 花费仍是 0 —— 因为 cost 是请求当时的快照(见 internal/proxy/gateway.go 的 costUsd),
 // 读取时只做 SUM(cost),不会按当前价重算。本工具按 (channel_id, model) 找到该请求
-// 命中的当前 offer 三价,重算:
+// 命中的当前 offer 四价,重算:
 //
-//	cost = in×prompt + out×completion + cache×cache_read   (单价为每百万 token)
+//	cost = in×prompt + out×completion + cacheRead×cache_read + cacheWrite×cache_write
+//	       (单价为每百万 token;cacheWrite 价为 0 = 无依据 → 按 in 价计)
 //
 // 并同步 tokens.used_usd —— 令牌累计用量是运行期累加值,不补会让它与日志对不上。
 //
@@ -39,8 +40,9 @@ type offerKey struct {
 	modelID   int64
 }
 
-// prices 一条 offer 的三价(每百万 token,当前计价币种)。
-type prices struct{ in, out, cache float64 }
+// prices 一条 offer 的四价(每百万 token,当前计价币种)。cacheWrite=0 表示该 offer 没给
+// 缓存写价 —— 与运行期 costUsd 一样按 input 价回落(见 costOf)。
+type prices struct{ in, out, cacheRead, cacheWrite float64 }
 
 func main() {
 	dbPath := flag.String("db", "gateway-v2.db", "SQLite 库路径")
@@ -113,7 +115,7 @@ func run(dbPath string, apply bool, backup string) error {
 			byToken[r.tokenID] += r.cost
 			continue
 		}
-		n := costOf(p, r.prompt, r.completion, r.cache)
+		n := costOf(p, r.prompt, r.completion, r.cacheRead, r.cacheWrite)
 		plans = append(plans, plan{r.id, r.cost, n, r.model, r.channelID, r.tokenID})
 		byModel[r.model] = add2(byModel[r.model], r.cost, n)
 		byToken[r.tokenID] += n
@@ -217,17 +219,17 @@ func run(dbPath string, apply bool, backup string) error {
 // —— 数据加载 ——
 
 type logRow struct {
-	id                        int64
-	model                     string
-	channelID                 int64
-	tokenID                   int64
-	prompt, completion, cache int64
-	cost                      float64
+	id                                        int64
+	model                                     string
+	channelID                                 int64
+	tokenID                                   int64
+	prompt, completion, cacheRead, cacheWrite int64
+	cost                                      float64
 }
 
 func loadLogs(db *sql.DB) ([]logRow, error) {
 	rows, err := db.Query(`SELECT id, model, channel_id, token_id,
-		prompt_tokens, completion_tokens, cache_read_tokens, cost FROM request_logs`)
+		prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, cost FROM request_logs`)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +238,7 @@ func loadLogs(db *sql.DB) ([]logRow, error) {
 	for rows.Next() {
 		var r logRow
 		if err := rows.Scan(&r.id, &r.model, &r.channelID, &r.tokenID,
-			&r.prompt, &r.completion, &r.cache, &r.cost); err != nil {
+			&r.prompt, &r.completion, &r.cacheRead, &r.cacheWrite, &r.cost); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -284,7 +286,7 @@ func loadModelNames(db *sql.DB) (map[string]int64, error) {
 
 func loadOffers(db *sql.DB) (map[offerKey]prices, error) {
 	rows, err := db.Query(`SELECT channel_id, model_id,
-		input_price_usd, output_price_usd, cache_read_price_usd FROM model_offers`)
+		input_price_usd, output_price_usd, cache_read_price_usd, cache_write_price_usd FROM model_offers`)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +295,7 @@ func loadOffers(db *sql.DB) (map[offerKey]prices, error) {
 	for rows.Next() {
 		var k offerKey
 		var p prices
-		if err := rows.Scan(&k.channelID, &k.modelID, &p.in, &p.out, &p.cache); err != nil {
+		if err := rows.Scan(&k.channelID, &k.modelID, &p.in, &p.out, &p.cacheRead, &p.cacheWrite); err != nil {
 			return nil, err
 		}
 		out[k] = p
@@ -326,10 +328,15 @@ func loadTokens(db *sql.DB) ([]tokenRow, error) {
 
 // —— 小工具 ——
 
-// costOf 与 internal/proxy/gateway.go 的 costUsd 同式:单价 × token / 1e6 三项相加。
-func costOf(p prices, prompt, completion, cache int64) float64 {
+// costOf 与 internal/proxy/gateway.go 的 costUsd 同式:单价 × token / 1e6 四项相加。
+// 缓存写价缺失(0)时按 input 价计 —— 与「cache_creation 折进 prompt」的旧账面逐位一致。
+func costOf(p prices, prompt, completion, cacheRead, cacheWrite int64) float64 {
 	pm := func(price float64, n int64) float64 { return price * float64(n) / 1e6 }
-	return pm(p.in, prompt) + pm(p.out, completion) + pm(p.cache, cache)
+	cw := p.cacheWrite
+	if cw == 0 {
+		cw = p.in
+	}
+	return pm(p.in, prompt) + pm(p.out, completion) + pm(p.cacheRead, cacheRead) + pm(cw, cacheWrite)
 }
 
 func add2(v [2]float64, old, new float64) [2]float64 { return [2]float64{v[0] + old, v[1] + new} }

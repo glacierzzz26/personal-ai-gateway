@@ -7,11 +7,16 @@ import (
 
 // usage 是归一化后的 token 统计口径:
 //
-//	prompt    已剔除缓存命中,为"按正常价计费的输入 token"
+//	prompt     只含按**正常输入价**计费的输入 token(已剔除缓存命中**与缓存写**)
 //	completion 输出 token
-//	cacheRead  缓存命中 token(Anthropic cache_read / OpenAI cached_tokens)
+//	cacheRead  缓存命中 token(Anthropic cache_read / OpenAI cached_tokens),按缓存读价计
+//	cacheWrite 缓存写入 token(Anthropic cache_creation),按缓存写价计
+//
+// ⚠️ 缓存写**不再折进 prompt**(补 m0013 前的旧行为)。厂商对它按更高单价收
+// (Anthropic 约 1.25× 输入价),折进 prompt 会系统性低估成本,且正是多轮/长上下文
+// 场景偏差最大。价格缺失时由计费回落按 input 价(见 billing.tokenCost)。
 type usage struct {
-	prompt, completion, cacheRead int
+	prompt, completion, cacheRead, cacheWrite int
 }
 
 // —— 上游各自的 usage 结构 ——
@@ -40,13 +45,15 @@ func parseAnthropicUsage(raw []byte) usage {
 		return usage{}
 	}
 	return usage{
-		prompt:     body.Usage.InputTokens + body.Usage.CacheCreation,
+		prompt:     body.Usage.InputTokens,
 		completion: body.Usage.OutputTokens,
 		cacheRead:  body.Usage.CacheRead,
+		cacheWrite: body.Usage.CacheCreation,
 	}
 }
 
 // parseOpenAIUsage 解析"完整 OpenAI 响应体"。缓存命中的 token 不计费,从输入里剔出。
+// OpenAI 无缓存写概念(其 input 不含 cache_creation),故 cacheWrite 恒 0。
 func parseOpenAIUsage(raw []byte) usage {
 	var body struct {
 		Usage openAIUsageJSON `json:"usage"`
@@ -111,6 +118,9 @@ func sseOpenAIUsage(payload string) (usage, bool) {
 //
 //	输入/缓存  → 取 input+cache_creation 更大的一版(防后面 0 值 chunk 覆盖);
 //	输出       → 累计语义下取观测最大值(若某上游按增量下发,校准后改为累加)。
+//
+// 比较仍用 input+cache_creation 的**合计**(单调、可跨 chunk 判大小),但落地时按口径拆开:
+// prompt 只放 input,cache_creation 单列 cacheWrite(见 usage 注释)。
 func sseAnthropicUsage(payload string, u *usage) {
 	var ev struct {
 		Type  string              `json:"type"`
@@ -119,9 +129,10 @@ func sseAnthropicUsage(payload string, u *usage) {
 	if json.Unmarshal([]byte(payload), &ev) != nil || ev.Usage == nil {
 		return
 	}
-	in := ev.Usage.InputTokens + ev.Usage.CacheCreation
-	if u.prompt == 0 || in >= u.prompt {
-		u.prompt = in
+	total := ev.Usage.InputTokens + ev.Usage.CacheCreation
+	if u.prompt+u.cacheWrite == 0 || total >= u.prompt+u.cacheWrite {
+		u.prompt = ev.Usage.InputTokens
+		u.cacheWrite = ev.Usage.CacheCreation
 		u.cacheRead = ev.Usage.CacheRead
 	}
 	if ev.Usage.OutputTokens > u.completion {

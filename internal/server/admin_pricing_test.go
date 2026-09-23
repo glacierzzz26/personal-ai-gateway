@@ -97,7 +97,7 @@ func TestFetchPricingUnsupportedProvider(t *testing.T) {
 	}
 }
 
-// TestManualPriceEntryAndApply 手工录入官方价 → 应用 → offer 三价 + 来源留证落库,override_price 不动。
+// TestManualPriceEntryAndApply 手工录入官方价 → 应用 → offer 四价 + 来源留证落库,override_price 不动。
 func TestManualPriceEntryAndApply(t *testing.T) {
 	srv, c, st := newTestServer(t)
 	base := srv.URL
@@ -197,7 +197,7 @@ func TestApplyOfficialPriceCrossCurrency(t *testing.T) {
 	})
 	mustStatus(t, code, http.StatusOK, "manual price")
 	op := decode[domain.OfficialPriceView](t, body)
-	// 币种不一致且无汇率 → 金额不可用(三价留 0,不臆造)。
+	// 币种不一致且无汇率 → 金额不可用(四价留 0,不臆造)。
 	if op.RateSet {
 		t.Error("rateSet should be false when currencies differ and no rate is set")
 	}

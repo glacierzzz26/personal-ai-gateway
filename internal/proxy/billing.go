@@ -27,16 +27,17 @@ import (
 const (
 	// CostFromOfficial 官方价 × 渠道系数 —— 唯一随官方价与分时自动更新、可算毛利的来源。
 	CostFromOfficial = domain.CostFromOfficial
-	// CostFromOffer 回落 model_offers 的手填兜底三价(74 个无官方价来源的模型走这条)。
+	// CostFromOffer 回落 model_offers 的手填兜底四价(74 个无官方价来源的模型走这条)。
 	CostFromOffer = domain.CostFromOffer
-	// CostUnknown 无任何成本依据(兜底三价全 0)→ 毛利不可计算,展示面必须藏起来。
+	// CostUnknown 无任何成本依据(兜底四价全 0)→ 毛利不可计算,展示面必须藏起来。
 	CostUnknown = domain.CostUnknown
 )
 
-// tokenCost 三价 × token 数(每百万)。与 costUsd 同式,提出单点是让单价口径只有一处。
-func tokenCost(in, out, cache float64, tok translate.Usage) float64 {
+// tokenCost 四价 × token 数(每百万)。与 costUsd 同式,提出单点是让单价口径只有一处。
+func tokenCost(in, out, cacheRead, cacheWrite float64, tok translate.Usage) float64 {
 	pm := func(price float64, n int) float64 { return price * float64(n) / 1e6 }
-	return pm(in, tok.Prompt) + pm(out, tok.Completion) + pm(cache, tok.CacheRead)
+	return pm(in, tok.Prompt) + pm(out, tok.Completion) +
+		pm(cacheRead, tok.CacheRead) + pm(cacheWrite, tok.CacheWrite)
 }
 
 // windowName 档位名,落 request_logs.price_window。
@@ -75,10 +76,10 @@ func (g *Gateway) resolveBilling(in *inboundReq, plan *engine.Plan, offer domain
 	// —— 成本:官方价 × 渠道系数,取不到则回落手填兜底价 ——
 	if hasOfficial {
 		ratio := g.costRatio(offer.ChannelID, plan.OfficialVendor)
-		cin, cout, cc, _, err := pricing.WholesalePriceAt(q, at, settings.TZOffsetMin,
+		cin, cout, ccr, ccw, _, err := pricing.WholesalePriceAt(q, at, settings.TZOffsetMin,
 			settings.DisplayCurrency, settings.USDPerCNY, ratio)
 		if err == nil {
-			b.Cost = tokenCost(cin, cout, cc, tok)
+			b.Cost = tokenCost(cin, cout, ccr, ccw, tok)
 			b.CostSrc = CostFromOfficial
 			if q.BillingShape == domain.ShapeTiered {
 				// 阶梯价按首档标量计 —— tiers 数据已知损坏,绝不消费(见 pricing/window.go)。
@@ -94,7 +95,7 @@ func (g *Gateway) resolveBilling(in *inboundReq, plan *engine.Plan, offer domain
 	if b.CostSrc == "" {
 		b.Cost = costUsd(offer, tok)
 		b.CostSrc = CostFromOffer
-		if offer.InputPriceUsd == 0 && offer.OutputPriceUsd == 0 && offer.CacheReadPriceUsd == 0 {
+		if offer.InputPriceUsd == 0 && offer.OutputPriceUsd == 0 && offer.CacheReadPriceUsd == 0 && offer.CacheWritePriceUsd == 0 {
 			b.CostSrc = CostUnknown
 		} else if b.Warn == "" {
 			b.Warn = "未绑定官方价,成本按兜底价计"
@@ -110,10 +111,10 @@ func (g *Gateway) resolveBilling(in *inboundReq, plan *engine.Plan, offer domain
 		rate = 1.0
 	}
 	if hasOfficial {
-		rin, rout, rc, peak, err := pricing.RetailPriceAt(q, at, settings.TZOffsetMin,
+		rin, rout, rcr, rcw, peak, err := pricing.RetailPriceAt(q, at, settings.TZOffsetMin,
 			settings.DisplayCurrency, settings.USDPerCNY, rate)
 		if err == nil {
-			b.Charge = tokenCost(rin, rout, rc, tok)
+			b.Charge = tokenCost(rin, rout, rcr, rcw, tok)
 			if q.BillingShape == domain.ShapePeakOff {
 				b.IsPeak = peak
 				b.Window = windowName(peak)
@@ -160,11 +161,11 @@ func (g *Gateway) CostQuote(m domain.ModelRow, offer domain.OfferRead, settings 
 	if m.OfficialVendor != "" && m.OfficialModelName != "" {
 		if q, err := g.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
 			ratio := g.costRatio(offer.ChannelID, m.OfficialVendor)
-			cin, cout, cc, peak, err := pricing.WholesalePriceAt(q, at, settings.TZOffsetMin,
+			cin, cout, ccr, ccw, peak, err := pricing.WholesalePriceAt(q, at, settings.TZOffsetMin,
 				settings.DisplayCurrency, settings.USDPerCNY, ratio)
 			if err == nil {
 				c := domain.CostQuote{
-					In: cin, Out: cout, CacheRead: cc,
+					In: cin, Out: cout, CacheRead: ccr, CacheWrite: ccw,
 					Source: domain.CostFromOfficial, Vendor: m.OfficialVendor, Ratio: ratio,
 				}
 				if q.BillingShape == domain.ShapePeakOff {
@@ -185,15 +186,16 @@ func (g *Gateway) CostQuote(m domain.ModelRow, offer domain.OfferRead, settings 
 	return offerFallbackQuote(offer, "未绑定官方价,成本按兜底价计")
 }
 
-// offerFallbackQuote 层 2/3:成本回落 model_offers 手填三价。
-// 三价全 0 → Source=unknown 且三价**保持 0** —— 前端据此隐藏毛利列,
+// offerFallbackQuote 层 2/3:成本回落 model_offers 手填四价。
+// 四价全 0 → Source=unknown 且四价**保持 0** —— 前端据此隐藏毛利列,
 // 绝不能让「没有成本依据」显示成「成本 0、毛利 100%」。
 func offerFallbackQuote(offer domain.OfferRead, warn string) domain.CostQuote {
 	c := domain.CostQuote{
-		In: offer.InputPriceUsd, Out: offer.OutputPriceUsd, CacheRead: offer.CacheReadPriceUsd,
+		In: offer.InputPriceUsd, Out: offer.OutputPriceUsd,
+		CacheRead: offer.CacheReadPriceUsd, CacheWrite: offer.CacheWritePriceUsd,
 		Source: domain.CostFromOffer, Warn: warn,
 	}
-	if c.In == 0 && c.Out == 0 && c.CacheRead == 0 {
+	if c.In == 0 && c.Out == 0 && c.CacheRead == 0 && c.CacheWrite == 0 {
 		c.Source = domain.CostUnknown
 	}
 	return c
