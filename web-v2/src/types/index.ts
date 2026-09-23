@@ -134,6 +134,10 @@ export interface CostQuote {
   window?: 'peak' | 'offpeak';
   /** 非致命提示:阶梯按首档计 / 系数未设 / 未绑定官方价 */
   warn?: string;
+  /** 零价供给源:官方价与兜底四价都拿不出非 0 数字 → 启用即免费放流量(服务端禁止启用)。 */
+  zeroPrice?: boolean;
+  /** 零价成因(未绑官方价 / 官方价为 0 / 汇率缺失 / 兜底四价全 0),直接展示给管理员。 */
+  zeroReason?: string;
 }
 
 /** 供给源创建/编辑入参 */

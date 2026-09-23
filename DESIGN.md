@@ -371,6 +371,39 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   `prompt_tokens` 语义含全部输入 → `o2aUsageJSON` 用 `Prompt + CacheRead + CacheWrite` 还原。
 - `a2o`(openai 上游 → anthropic 客户端)方向:OpenAI 无缓存写概念,`Usage.CacheWrite` 恒 0。
 
+### 5.8 零价供给源闸门(issue #26)
+
+**问题。** 一条供给源若**官方价拿不到**且**手填四价全为 0**,启用它等于**免费放流量** —— 计费
+`cost`/`charge` 都为 0,账面毛利 100%,但那不是真的。旧代码允许这种供给源启用,只在成本视图里
+标 `source=unknown`(见 `CostSource`),属于「事后标注」而非「事前拦截」。
+
+**判定(单一真源 `pricing.ZeroPriced`)。** 零价 ⟺ 该模型**未绑定可用官方价** **且** 该供给源
+手填四价**全为 0**。这是**交集**不是并集 —— 两条回归红线必须保住:
+
+- **缓存读/写价为 0 但 in/out 非 0 → 非零价**(缓存价 0 是合法形态,不是「无价」)。
+- **已绑定有效官方价 → 非零价**(兜底为空不影响,官方价就是成本依据)。
+
+`pricing.OfferHasNoPrice(offer)` 是「四价全 0」的判据,`pricing.ZeroPriced(q, offer, settings, at)`
+在其上加官方价换算(与计费同一条 `WholesalePriceAt` 链,含峰谷选档与汇率换算)→ 返回 `(zero, reason)`。
+`reason` 区分四种成因:**未绑定官方价** / **官方价单价为 0** / **官方价不可用**(带底层错,如汇率缺失)/
+兜底四价全 0 —— 供前端 tooltip 直接展示「差什么」。**判据不另写一份**:计费(`resolveBilling`、
+`CostQuote`)、启用闸门、读接口共用同一个 `ZeroPriced`/`OfferHasNoPrice`,改一处即全改,防漂移。
+
+**三道闸门(服务端是唯一权威,前端置灰只是提前提示)。** 覆盖三条「会变成零价启用」的路径:
+
+1. **新建供给源**(`POST /models/{id}/offers`):缺省 `enabled=true`,同样受限 → 命中回 `400 zero_price`。
+2. **编辑供给源**(`PATCH /offers/{oid}`):改价改成 0 而仍 `enabled=true` 必须拦下,否则可从「有价启用」
+   改成「零价启用」绕过创建闸门。改成 0 且**显式停用**放行(允许「先停用再补价」;不误伤存量)。
+3. **模型启用联动**(`PATCH /models/{id}`,`enabled:false → true`):只开**有价**的供给源,**跳过零价**,
+   不整批失败也不整批放行;被跳过者以渠道名经 `skippedZeroPrice` 回传,前端提示去补价。响应结构
+   `modelUpdateResp` 内嵌 `ModelRead`(既有字段平铺不变),仅在确有跳过时才带该字段。
+
+**读接口留痕。** `CostQuote.zeroPrice` + `zeroReason` 随成本视图回传(仅管理面;用户面结构天然不含
+`Cost`)。前端据此把该供给源的开关置灰并展示成因 —— 是**提示**,拦不拦得住以服务端为准。
+
+**不做的事:** 不因零价**自动停用**存量供给源(存量可能是正常运行、只是刚巧没绑官方价);闸门只挡
+**状态迁移**(启用那一步),存量原样保留,靠读接口置灰引导人工补价。
+
 ## 6. 管理 REST 契约(v2;会话鉴权)
 
 | 方法与路径 | 作用 |
@@ -383,8 +416,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `POST /channels/{id}/test` · `/sync-models` | 连通探测 `{ok,latencyMs}`;拉 `/v1/models` 补目录+停用 offer |
 | `GET /channels/{id}/quota` | 用该渠道自己的 Key 问上游额度(按 `channel_type` 分发,见 §5.3);走网关级短 TTL 缓存 |
 | `GET /channels/quota` | 批量渠道额度(首页用):一次拿全渠道,服务端并发 + 短路未配置渠道(见 §5.3) |
-| `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(`name`=统一名、`originalName`=真实名)/新增/改(全量,`displayName` 非传=不变)/删;GET 全站可读 |
-| `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删 |
+| `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(`name`=统一名、`originalName`=真实名)/新增/改(全量,`displayName` 非传=不变)/删;GET 全站可读。**PATCH 启用时联动只开有价供给源,跳过零价者经响应 `skippedZeroPrice:[渠道名]` 回报**(见 §5.8) |
+| `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删;**启用且零价**(无官方价 + 兜底四价全 0)→ `400 zero_price`(见 §5.8) |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |
 | `GET /models/{id}/usage?days=7` | `{daily:[MetricPoint], byChannel:[{channelName,requests,costUsd}]}` |
 | `GET /channels/{id}/cost-ratios` · `PUT` `{ratios:[{vendor,ratio,note}]}` · `DELETE ?vendor=` | 渠道 × 厂商成本系数(成本 = 官方价 × ratio);PUT 是**全量替换**(未回传的厂商即删除);DELETE 一条退回默认 1.0 |

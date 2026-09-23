@@ -119,8 +119,11 @@ func TestOfferLifecycleAndCascade(t *testing.T) {
 	}
 }
 
-// TestSetModelOffersEnabled 批量启停某模型下全部供给源(父级联动开关用)。
-func TestSetModelOffersEnabled(t *testing.T) {
+// TestSetOfferEnabled 单个供给源启停,不影响同模型下其它供给源。
+//
+// 注:模型启用联动已改为逐条判定(跳过零价,见 server.handleModelsUpdate 与 issue #26),
+// 不再走批量 SetModelOffersEnabled,故该批量原语已删除。
+func TestSetOfferEnabled(t *testing.T) {
 	st := newTestStore(t)
 	a := mkChannel(t, st, "A")
 	b := mkChannel(t, st, "B")
@@ -131,30 +134,23 @@ func TestSetModelOffersEnabled(t *testing.T) {
 	_, err = st.CreateOffer(m.ID, domain.OfferInput{ChannelID: b, Enabled: boolPtrStore(false)})
 	mustNoErr(t, err, "offer b disabled")
 
-	// 全部打开
-	mustNoErr(t, st.SetModelOffersEnabled(m.ID, true), "enable all offers")
 	offers, err := st.ListModelOffers(m.ID)
 	mustNoErr(t, err, "list offers")
-	for _, o := range offers {
-		if !o.Enabled {
-			t.Errorf("offer %d should be enabled", o.ID)
-		}
-	}
 
-	// 单个供给源仍可单独关闭,不受父级锁死
-	mustNoErr(t, st.SetOfferEnabled(offers[0].ID, false), "disable single offer")
+	// 单个供给源仍可单独开关,不受父级锁死
+	mustNoErr(t, st.SetOfferEnabled(offers[0].ID, true), "enable single offer")
 	offers, _ = st.ListModelOffers(m.ID)
-	if offers[0].Enabled {
-		t.Error("single offer should be disabled independently")
+	if !offers[0].Enabled {
+		t.Error("single offer should be enabled independently")
 	}
-	if !offers[1].Enabled {
-		t.Error("sibling offer should stay enabled")
+	if offers[1].Enabled {
+		t.Error("sibling offer must be untouched")
 	}
 
 	// 只影响目标模型
 	m2, _ := st.CreateModel(domain.ModelInput{Name: "other"})
 	_, _ = st.CreateOffer(m2.ID, domain.OfferInput{ChannelID: a, Enabled: boolPtrStore(true)})
-	mustNoErr(t, st.SetModelOffersEnabled(m.ID, false), "disable all offers of m")
+	mustNoErr(t, st.SetOfferEnabled(offers[0].ID, false), "disable single offer again")
 	offers2, _ := st.ListModelOffers(m2.ID)
 	if !offers2[0].Enabled {
 		t.Error("other model's offer must be untouched")

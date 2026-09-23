@@ -270,7 +270,14 @@ export default function Models() {
       setBusyId(v.id);
       return api.toggleModel(v.id, v.enabled);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['models'] }),
+    onSuccess: (r) => {
+      // 启用时后端跳过零价供给源(issue #26),有条数就提示,否则不打扰。
+      const skipped = r?.skippedZeroPrice ?? [];
+      if (skipped.length > 0) {
+        message.warning(`模型已启用,但有 ${skipped.length} 条供给源因无成本依据未启用:${skipped.join('、')}`);
+      }
+      qc.invalidateQueries({ queryKey: ['models'] });
+    },
     onSettled: () => setBusyId(null),
     onError: () => message.error('启停失败，请稍后重试'),
   });

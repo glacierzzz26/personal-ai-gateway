@@ -299,7 +299,11 @@ func TestAdminCRUD(t *testing.T) {
 }
 
 // TestSyncModelsDefaultDisabledAndEnableCascade 同步导入的模型默认停用;
-// 打开模型开关时联动打开其下全部供给源,此后单个供给源仍可单独关闭。
+// 补价后打开模型开关时联动打开其下供给源,此后单个供给源仍可单独关闭。
+//
+// 注意:同步导入的供给源**无价**,按 issue #26 零价闸门不得被联动启用 ——
+// 故本用例先补价再开模型(与 offer 的提示语「set price then enable」一致);
+// 「零价不被打开」另见 offer_zero_price_test.go。
 func TestSyncModelsDefaultDisabledAndEnableCascade(t *testing.T) {
 	srv, c, _ := newTestServer(t)
 	base := srv.URL
@@ -331,9 +335,14 @@ func TestSyncModelsDefaultDisabledAndEnableCascade(t *testing.T) {
 		}
 	}
 
-	// 打开模型开关(前端发送完整草稿)→ 供给源联动打开
+	// 打开模型开关(前端发送完整草稿)→ 供给源联动打开。
+	// 同步导入的 offer 无价,须先补价,否则会被零价闸门跳过(issue #26)。
 	m0 := models[0]
 	mid := int64(m0["id"].(float64))
+	offerID0 := int64(m0["offers"].([]any)[0].(map[string]any)["id"].(float64))
+	code, _ = doJSON(t, c, http.MethodPatch, fmt.Sprintf("%s/api/v1/offers/%d", base, offerID0),
+		map[string]any{"channelId": chID, "inputPriceUsd": 3, "outputPriceUsd": 15})
+	mustStatus(t, code, http.StatusOK, "price synced offer")
 	code, _ = doJSON(t, c, http.MethodPatch, fmt.Sprintf("%s/api/v1/models/%d", base, mid), map[string]any{
 		"name": m0["name"], "contextWindow": m0["contextWindow"],
 		"capabilities": m0["capabilities"], "enabled": true,
