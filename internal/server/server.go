@@ -247,8 +247,23 @@ func (s *Server) apiMux() *http.ServeMux {
 	return m
 }
 
+// handleHealthz 回网关存活 + 版本标识。version 形如 v0.0.0-<sha7>(发布纪律:版本号 + 短 hash);
+// schema 为本库已应用的最大迁移号(升级脚本据此判「降级是否会越过 DB 迁移」,迁移单向)。
+// schema 直接从 store 取(而非配置),store 恒存在 —— 未接线的配置不会再让它静默为 0。
+// 注:store 字段是字面量,只表示「进程起来了」(迁移在 store.Open 内跑完才可能监听)。
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "store": "up", "version": s.cfg.Version})
+	schema := 0
+	if s.st != nil {
+		if v, err := s.st.SchemaVersion(); err == nil {
+			schema = v
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"store":   "up",
+		"version": s.cfg.Version,
+		"schema":  schema,
+	})
 }
 
 func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {

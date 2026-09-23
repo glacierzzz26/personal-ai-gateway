@@ -69,7 +69,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 
 - 后端直接静态托管 `web_dir`(默认 `web-v2`)下的 `dist/`,SPA 路由回退到 `index.html`;`/` 打开即管理台。
 - 开发期可 `cd web-v2 && npm run dev`(Vite :5178,`/api`、`/v1` 已代理到 :8787),改前端热更。
-- 页面覆盖:运行总览(默认**近 1 天**,以「经营」为中心 —— 营收/成本/毛利 + 客户余额风险 + 渠道健康 + 明细;预设可切 7/30 天或自定义区间)/ 渠道管理(CRUD + 连通测试 + 同步模型)/ 模型广场(供给源管理、定价、拖拽排序、设为首选、用量)/ 官方定价(官方参考价锚点 —— 从 commandcode 单页抓取全厂商价 + 手工录入 + 反查引用模型)/ 路由规则 / 访问令牌(归属与筛选、生成 Claude 配置)/ 请求日志(服务端分页/筛选/详情)/ 用户管理(建号/角色/充值/余额)/ 系统设置(超时、重试、自动降级、代理、TLS、日志保留/采样、时区、对外基址、清空日志)。
+- 页面覆盖:运行总览(默认**近 1 天**,以「经营」为中心 —— 营收/成本/毛利 + 客户余额风险 + 渠道健康 + 明细;预设可切 7/30 天或自定义区间)/ 渠道管理(CRUD + 连通测试 + 同步模型)/ 模型广场(供给源管理、定价、拖拽排序、设为首选、用量)/ 官方定价(官方参考价锚点 —— 从 commandcode 单页抓取全厂商价 + 手工录入 + 反查引用模型) / 路由规则 / 访问令牌(归属与筛选、生成 Claude 配置)/ 请求日志(服务端分页/筛选/详情)/ 用户管理(建号/角色/充值/余额)/ 系统设置(超时、重试、自动降级、代理、TLS、日志保留/采样、时区、对外基址、清空日志)。侧栏底部显示**发布版本**(取自 `/healthz` 的 `version`,形如 `v0.0.0-4de1cde`),据此一眼确认生产跑的是哪一版。
 - 角色:普通用户登录后仅见「访问令牌」页,只能管理自己的 Key;其余页面与接口对其实admin-only(前端隐藏 + 服务端 403 双重约束)。
 
 > 页面读到的数值口径:成功率等一律 0..100 百分数经服务层换算成 0..1 小数;日志/曲线时间戳按设置里的
@@ -136,12 +136,17 @@ tls:
 
 ```bash
 deploy/scripts/gen-certs.sh          # 生成自签 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
-deploy/scripts/deploy.sh [GW_HOST]   # 本地构建镜像 → docker save 经 ssh 推目标主机 → compose up(默认 rguo@192.168.0.202)
-deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gateway)
+ssh aliyun 'bash /opt/ai-gateway-v2/upgrade.sh <版本>'   # 生产一键升级/回滚(ghcr 链路;见 deploy/README.md)
+deploy/scripts/deploy.sh [GW_HOST]   # 应急/离线链路:本地构建镜像 → docker save 经 ssh 推目标主机(默认 aliyun)
+deploy/scripts/backup.sh             # SQLite 快照(REMOTE_DIR=/opt/ai-gateway-v2)
 # 域名边缘(公网入口)在独立仓库 host-infra:cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 ```
 
-- 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
+- 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);**常规升级走 ghcr + `upgrade.sh`**(按版本切换、
+  自动备份、健康校验、失败回滚、降级护栏),`deploy.sh` 的 `save|ssh|load` 留作 ghcr 不可达时的兜底。
+- **版本标识**:由 `deploy/scripts/lib-version.sh` 单一提供 —— HEAD 在 `v*` tag 上为 `v<tag>-<sha7>`,
+  否则恒为 `v0.0.0-<sha7>`(未发版不给版本号);镜像内烘焙 `APP_VERSION`/`GIT_SHORT`,
+  `/healthz` 回 `version` 与 `schema`(库已应用迁移号)。
 - 自签证书 SAN 含各主机 IP,`deploy/certs/` 保留作 **Nginx 回源**用(容器内自签 TLS 同时承担两面隔离);客户端走公信证书,无需导 CA。
 - **灾备(家主机断电 / 云入口故障):** 方案与分阶段落地见 [`deploy/DR.md`](deploy/DR.md)(异地加密快照 + 云冷备同 IP 接管,RPO ≤15min / RTO ≤2min,客户端零改动)。
 - **改造方向(个人网关 → 中转站):** 角色/定价/钱包/可见面的方案见 [`PLAN.md`](PLAN.md)(admin=自己、user=客户;售价 = 官方价 × 倍率、成本仅自己可见;用户级钱包)。**尚未实施。**

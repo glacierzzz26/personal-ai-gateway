@@ -402,7 +402,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `GET /usage?dim=model\|channel\|token&days=7\|30` | →`{rows:UsageRow[](errorRate 0..1), days}` |
 | `GET /overview` | `{hours[24], days[7], totalRequests, totalErrors, totalCostUsd, avgFirstTokenMs}`(近 7 天窗口) |
 | `GET/PATCH /settings` | 网关参数(超时/重试/降级/代理/TLS/日志保留/采样/记录请求体/时区/对外基址) |
-| `GET /healthz` | 健康检查 |
+| `GET /healthz` | 健康检查 →`{ok, store, version, schema}`(version=版本号+短 hash;schema=库已应用迁移号) |
 
 标注「仅 admin」者经 `requireAdmin` 闸门;其余为「已登录即可」。令牌越权访问一律回 404(不泄露他人 key 存在)。
 
@@ -427,6 +427,11 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   (令牌表「可用模型」列;旧版用 `flexWrap` 徽标,单个长模型名会溢出画到右边「额度使用」列、挡住进度条),
   或自套 `overflow:hidden` 容器。别指望 `gw-table` 那套 `td{overflow:hidden}`(它只作用于 Dashboard
   自建的 `<table>`,管不到 antd `<Table>`)。
+- **发布版本展示**:侧栏底部渲染**发布版本**(`AppLayout.tsx` footer),取自既有的 `GET /healthz` 的
+  `version` 字段(由构建期 `APP_VERSION`/`-ldflags` 注入,形如 `v0.0.0-4de1cde`),不再写死
+  `个人网关 · v2`(v2 是技术分代、不表意)。**降级**:`version` 缺失(本地 `go run` 未注入、或网关
+  不可达)时回退 `v0.0.0`,绝不显示 `undefined`;折叠态只放短 hash(取串中首个 7+ 位 hex 段),
+  避免在 64px 宽里挤成空白破版。
 
 ## 8. 运行与联调
 
@@ -473,11 +478,16 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   `127.0.0.1:17081:17080`、管理台 `127.0.0.1:17090:17090`,**公网一律经 Nginx 的 443 + 域名**。
   容器内监听口不变(`config.prod.yaml` 仍 `:17080`/`:17090`),改绑定只需 `docker compose up -d`,
   **不必重建镜像**;发布口用 17081(非 17080)是必需的:与(曾经的)Nginx 抢同一端口会 bind 冲突。
-- **部署流**:`deploy/scripts/deploy.sh [GW_HOST]`(默认 `rguo@192.168.0.202`)→ 本地 `build.sh` 构建镜像
-  (前端 + 交叉编译 + docker build,版本由 `git describe` 注入 `-ldflags -X main.version`)→
-  `docker save | ssh docker load` 推到目标主机 → 同步 compose/证书 → 远端 `compose up -d`。
+- **部署流(常规)**:`release.yml` 在 push `main` / tag `v*` 时编译推 ghcr;生产 `aliyun` 用
+  `upgrade.sh <版本>` 一键升级(拉镜像 → 强制备份 → 切 `.env` → 重建 → 健康校验,失败自动回滚,带降级护栏)。
+- **部署流(应急)**:`deploy/scripts/deploy.sh [GW_HOST]`(默认 `aliyun`)→ 本地 `build.sh` 构建镜像
+  → `docker save | ssh docker load` 推目标主机 → 同步 compose/证书 → 远端 `compose up -d`。
   目标主机只需 docker,不需 Go/Node/Docker Hub。远端 `.env`(`GW_MASTER_KEY`/`GW_IMAGE_TAG`)与 `data/` 首次生成后保留。
-- **版本可见**:`/healthz` 回 `{ok,store,version}`;`build.sh` 打 `ai-gateway:$VER` 与 `:latest` 便于回滚。
+- **版本注入**:版本号由 `deploy/scripts/lib-version.sh` 单一提供(HEAD 在 `v*` tag 上 → `v<tag>-<sha7>`,
+  否则 `v0.0.0-<sha7>`),经 `docker build --build-arg` 烘焙为镜像 `APP_VERSION`/`GIT_SHORT`/`SCHEMA_HEAD`
+  与 LABEL;本地 `go build` 仍可由 `-ldflags -X main.version` 注入(env 优先,ldflags 兜底)。
+- **版本可见**:`/healthz` 回 `{ok, store, version, schema}` —— `version` 为「版本号 + 短 hash」
+  (如 `v0.0.0-4de1cde`),`schema` 为本库已应用的最大迁移号(升级脚本据此判「降级是否会越过 DB 迁移」)。
 
 ## 9. 迁移与留档
 

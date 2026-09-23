@@ -62,6 +62,10 @@ func TestOpenMigratesAndIdempotent(t *testing.T) {
 	if version != len(migrations) {
 		t.Errorf("migration version = %d, want %d", version, len(migrations))
 	}
+	// SchemaVersion(/healthz 的 schema 字段来源)应与迁移条数一致 —— 升级脚本据此判降级。
+	sv, err := st2.SchemaVersion()
+	mustNoErr(t, err, "SchemaVersion")
+	mustEqual(t, sv, len(migrations), "SchemaVersion == len(migrations)")
 	// 业务表应就绪(抽查几张三件套)
 	for _, table := range []string{"channels", "models", "model_offers", "rules", "tokens", "request_logs", "settings", "admins", "official_prices", "announcements", "announcement_dismissals"} {
 		var n int

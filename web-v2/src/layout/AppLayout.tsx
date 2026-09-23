@@ -27,6 +27,15 @@ const GATE_TEXT: Record<GateStatus, string> = {
   loading: '状态读取中',
 };
 
+/** /healthz 未回版本（本地 go run 未注入、或网关不可达）时的兜底展示，绝不显示 undefined。 */
+const VERSION_FALLBACK = 'v0.0.0';
+
+/** 从发布版本串里取短 hash：`v0.0.0-4de1cde`→`4de1cde`（脏工作区后缀 `-dirty` 一并跳过）。
+ *  取不到 hex 段就原样返回（如本地跑成 `dev`）。折叠态只放得下短 hash。 */
+function shortHash(version: string): string {
+  return version.match(/[0-9a-f]{7,}/)?.[0] ?? version;
+}
+
 function Brand({ collapsed }: { collapsed: boolean }) {
   return (
     <div
@@ -90,6 +99,9 @@ export default function AppLayout() {
         ? 'warn'
         : 'ok';
   const gateTone = gate === 'ok' ? 'ok' : gate === 'warn' ? 'warn' : gate === 'err' ? 'err' : 'aux';
+
+  /** 发布版本：取 /healthz 的 version（后端由 APP_VERSION/env 注入），缺失时回退 VERSION_FALLBACK。 */
+  const version = health?.version || VERSION_FALLBACK;
 
   const items = useMemo(() => visibleNav(isAdmin), [isAdmin]);
   const crumb = crumbOf(pathname, isAdmin);
@@ -210,18 +222,35 @@ export default function AppLayout() {
           })}
         </nav>
 
-        {!collapsed && (
-          <div
-            style={{
-              borderTop: '1px solid var(--gw-border)',
-              padding: '12px 18px',
-              fontSize: 12.5,
-              color: 'var(--gw-text-3)',
-            }}
-          >
-            个人网关 · v2
-          </div>
-        )}
+        <div
+          style={{
+            borderTop: '1px solid var(--gw-border)',
+            padding: collapsed ? '12px 0' : '12px 18px',
+            fontSize: 12.5,
+            color: 'var(--gw-text-3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: collapsed ? 'center' : 'space-between',
+            gap: 8,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+          }}
+        >
+          {!collapsed && <span>AI Gateway</span>}
+          <Tooltip title="发布版本(版本号 + 短 hash)">
+            <span
+              style={{
+                fontFamily: 'var(--gw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+                fontSize: 11.5,
+                letterSpacing: 0.2,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {collapsed ? shortHash(version) : version}
+            </span>
+          </Tooltip>
+        </div>
       </aside>
 
       {/* ============ 主区 ============ */}
