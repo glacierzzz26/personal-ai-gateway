@@ -442,8 +442,14 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   /* —— 模型级：启停 / 保存基本信息 —— */
   const toggleModel = useMutation({
     mutationFn: (v: { id: number; enabled: boolean }) => api.toggleModel(v.id, v.enabled),
-    onSuccess: () => {
-      message.success('模型状态已更新');
+    onSuccess: (r) => {
+      const skipped = r?.skippedZeroPrice ?? [];
+      if (skipped.length > 0) {
+        // 联动启用时跳过零价供给源(issue #26)—— 说清是哪几条、为什么。
+        message.warning(`模型已启用,但有 ${skipped.length} 条供给源因无成本依据未启用:${skipped.join('、')}`);
+      } else {
+        message.success('模型状态已更新');
+      }
       qc.invalidateQueries({ queryKey: ['models'] });
     },
     onError: () => message.error('状态更新失败'),
@@ -481,7 +487,11 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     mutationFn: (v: { modelId: number; offerId: number; enabled: boolean }) =>
       api.toggleOffer(v.modelId, v.offerId, v.enabled),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['models'] }),
-    onError: () => message.error('供给源启停失败'),
+    onError: (e) => {
+      // 零价闸门(issue #26):服务端拒绝时把成因原样透出,别吞成泛化文案。
+      const msg = (e as Error)?.message;
+      message.error(msg || '供给源启停失败');
+    },
   });
 
   const deleteOffer = useMutation({
@@ -636,14 +646,24 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     },
     {
       title: '启用', dataIndex: 'enabled', align: 'center',
-      render: (v, r) => (
-        <Switch
-          size="small"
-          checked={v}
-          loading={toggleOffer.isPending && toggleOffer.variables?.offerId === r.id}
-          onChange={next => toggleOffer.mutate({ modelId: r.modelId, offerId: r.id, enabled: next })}
-        />
-      ),
+      render: (v, r) => {
+        // 零价供给源:启用即免费放流量,服务端会拒 —— 前端提前置灰并说明差什么。
+        const zero = r.cost?.zeroPrice && !v;
+        const sw = (
+          <Switch
+            size="small"
+            checked={v}
+            disabled={zero}
+            loading={toggleOffer.isPending && toggleOffer.variables?.offerId === r.id}
+            onChange={next => toggleOffer.mutate({ modelId: r.modelId, offerId: r.id, enabled: next })}
+          />
+        );
+        return zero ? (
+          <Tooltip title={`无成本依据,不能启用:${r.cost?.zeroReason || '官方价与兜底四价都为空'}`}>
+            <span>{sw}</span>
+          </Tooltip>
+        ) : sw;
+      },
     },
     {
       title: '', align: 'right', width: 56,

@@ -95,7 +95,8 @@ func (g *Gateway) resolveBilling(in *inboundReq, plan *engine.Plan, offer domain
 	if b.CostSrc == "" {
 		b.Cost = costUsd(offer, tok)
 		b.CostSrc = CostFromOffer
-		if offer.InputPriceUsd == 0 && offer.OutputPriceUsd == 0 && offer.CacheReadPriceUsd == 0 && offer.CacheWritePriceUsd == 0 {
+		// 兜底四价全 0 → 无成本依据(判据与启用闸门共用 pricing.OfferHasNoPrice,防漂移)。
+		if pricing.OfferHasNoPrice(offer) {
 			b.CostSrc = CostUnknown
 		} else if b.Warn == "" {
 			b.Warn = "未绑定官方价,成本按兜底价计"
@@ -158,30 +159,44 @@ func joinWarn(a, b string) string {
 //
 // at 取「此刻」:目录展示答的是「这条供给源现在什么成本」,与计费按请求时刻选价语义不同但都对。
 func (g *Gateway) CostQuote(m domain.ModelRow, offer domain.OfferRead, settings domain.Settings, at time.Time) domain.CostQuote {
+	var q *domain.OfficialPriceRow
 	if m.OfficialVendor != "" && m.OfficialModelName != "" {
-		if q, err := g.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
-			ratio := g.costRatio(offer.ChannelID, m.OfficialVendor)
-			cin, cout, ccr, ccw, peak, err := pricing.WholesalePriceAt(q, at, settings.TZOffsetMin,
-				settings.DisplayCurrency, settings.USDPerCNY, ratio)
-			if err == nil {
-				c := domain.CostQuote{
-					In: cin, Out: cout, CacheRead: ccr, CacheWrite: ccw,
-					Source: domain.CostFromOfficial, Vendor: m.OfficialVendor, Ratio: ratio,
-				}
-				if q.BillingShape == domain.ShapePeakOff {
-					c.Peak, c.Window = peak, windowName(peak)
-				}
-				if q.BillingShape == domain.ShapeTiered {
-					c.Warn = "阶梯计价:按首档标量计"
-				}
-				if ratio == 1.0 {
-					c.Warn = joinWarn(c.Warn, "渠道成本系数未设,按 1.0 计")
-				}
-				return c
-			}
-			// 汇率缺失等:回落兜底价,把原因带上(否则页面显示个兜底数字却不说为什么)。
-			return offerFallbackQuote(offer, "官方价不可用:"+err.Error())
+		if row, err := g.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
+			q = &row
 		}
+	}
+	// 零价标记(issue #26):与启用闸门、计费判定同源(pricing.ZeroPriced),
+	// 前端据此置灰开关;服务端闸门才是权威。
+	if zero, reason := pricing.ZeroPriced(q, offer, settings, at); zero {
+		c := offerFallbackQuote(offer, "")
+		c.ZeroPrice, c.ZeroReason = true, reason
+		if q == nil {
+			c.Warn = "未绑定官方价,成本按兜底价计"
+		}
+		return c
+	}
+	if q != nil {
+		ratio := g.costRatio(offer.ChannelID, m.OfficialVendor)
+		cin, cout, ccr, ccw, peak, err := pricing.WholesalePriceAt(*q, at, settings.TZOffsetMin,
+			settings.DisplayCurrency, settings.USDPerCNY, ratio)
+		if err == nil {
+			c := domain.CostQuote{
+				In: cin, Out: cout, CacheRead: ccr, CacheWrite: ccw,
+				Source: domain.CostFromOfficial, Vendor: m.OfficialVendor, Ratio: ratio,
+			}
+			if q.BillingShape == domain.ShapePeakOff {
+				c.Peak, c.Window = peak, windowName(peak)
+			}
+			if q.BillingShape == domain.ShapeTiered {
+				c.Warn = "阶梯计价:按首档标量计"
+			}
+			if ratio == 1.0 {
+				c.Warn = joinWarn(c.Warn, "渠道成本系数未设,按 1.0 计")
+			}
+			return c
+		}
+		// 汇率缺失等:回落兜底价,把原因带上(否则页面显示个兜底数字却不说为什么)。
+		return offerFallbackQuote(offer, "官方价不可用:"+err.Error())
 	}
 	return offerFallbackQuote(offer, "未绑定官方价,成本按兜底价计")
 }
@@ -195,7 +210,7 @@ func offerFallbackQuote(offer domain.OfferRead, warn string) domain.CostQuote {
 		CacheRead: offer.CacheReadPriceUsd, CacheWrite: offer.CacheWritePriceUsd,
 		Source: domain.CostFromOffer, Warn: warn,
 	}
-	if c.In == 0 && c.Out == 0 && c.CacheRead == 0 && c.CacheWrite == 0 {
+	if pricing.OfferHasNoPrice(offer) {
 		c.Source = domain.CostUnknown
 	}
 	return c

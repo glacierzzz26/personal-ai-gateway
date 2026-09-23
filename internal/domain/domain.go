@@ -536,6 +536,13 @@ type CostQuote struct {
 	Window string `json:"window,omitempty"`
 	// Warn 非致命提示(阶梯按首档计 / 系数未设 / 未绑定官方价)。
 	Warn string `json:"warn,omitempty"`
+	// ZeroPrice 该供给源「零价」——官方价与兜底四价都拿不出非 0 数字,
+	// 启用即免费放流量。**true 时禁止启用**(服务端闸门,见 issue #26);
+	// 前端据此置灰开关并展示 ZeroReason。
+	ZeroPrice bool `json:"zeroPrice,omitempty"`
+	// ZeroReason 零价成因(未绑官方价 / 官方价为 0 / 汇率缺失 / 兜底四价全 0),
+	// 供前端 tooltip 直接展示「差什么」。
+	ZeroReason string `json:"zeroReason,omitempty"`
 }
 
 // ModelRead 模型目录条目 = models 行 + 关联 offers + 展示字段。

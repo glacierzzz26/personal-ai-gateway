@@ -55,6 +55,15 @@ func (s *Server) handleModelsCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mr)
 }
 
+// modelUpdateResp 模型 PATCH 响应 = 模型读结构 + 联动启用时被跳过的零价供给源(渠道名)。
+//
+// 内嵌 ModelRead 保持既有字段平铺在顶层(前端按 ModelCatalogItem 消费,形状不变);
+// 仅在确有跳过时才带 skippedZeroPrice,否则响应与改造前逐字节一致。
+type modelUpdateResp struct {
+	domain.ModelRead
+	SkippedZeroPrice []string `json:"skippedZeroPrice,omitempty"`
+}
+
 // handleModelsUpdate 更新模型(名称/上下文/能力/启停)。
 func (s *Server) handleModelsUpdate(w http.ResponseWriter, r *http.Request) {
 	id, ok := paramID(r, "id")
@@ -77,16 +86,53 @@ func (s *Server) handleModelsUpdate(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	// 模型由停用切到启用时,联动打开其下全部供给源;单独关/开供给源不受父级锁死。
+	// 模型由停用切到启用时,联动打开其下供给源;单独关/开供给源不受父级锁死。
+	//
+	// **跳过零价供给源**(issue #26):模型启用只是目录可见性,真正放流量的是供给源 ——
+	// 把零价的顺手打开等于免费放量。这里逐条判定,只开有价的那几条,并回报被跳过的清单,
+	// 由前端提示管理员去补价(不是整批失败,也不整批放行)。
+	var skipped []domain.OfferRead
 	if !cur.Enabled && enabledAfter {
-		if err := s.st.SetModelOffersEnabled(id, true); err != nil {
+		offers, err := s.st.ListModelOffers(id)
+		if err != nil {
 			writeStoreErr(w, err)
 			return
+		}
+		settings, err := s.st.GetSettings()
+		if err != nil {
+			writeStoreErr(w, err)
+			return
+		}
+		var q *domain.OfficialPriceRow
+		if cur.OfficialVendor != "" && cur.OfficialModelName != "" {
+			if row, err := s.st.GetOfficialPriceByName(cur.OfficialVendor, cur.OfficialModelName); err == nil {
+				q = &row
+			}
+		}
+		now := time.Now().UTC()
+		for _, of := range offers {
+			if zero, _ := pricing.ZeroPriced(q, of, settings, now); zero {
+				skipped = append(skipped, of)
+				continue
+			}
+			if err := s.st.SetOfferEnabled(of.ID, true); err != nil {
+				writeStoreErr(w, err)
+				return
+			}
 		}
 	}
 	mr, err := s.singleModelRead(id)
 	if err != nil {
 		writeStoreErr(w, err)
+		return
+	}
+	// 附上被跳过的零价供给源(条数 + 渠道名),供前端提示;无跳过时不加字段。
+	if len(skipped) > 0 {
+		names := make([]string, 0, len(skipped))
+		for _, of := range skipped {
+			names = append(names, of.ChannelName)
+		}
+		writeJSON(w, http.StatusOK, modelUpdateResp{ModelRead: mr, SkippedZeroPrice: names})
 		return
 	}
 	writeJSON(w, http.StatusOK, mr)
@@ -250,6 +296,32 @@ func mergeChannelUsage(dst, add []domain.ModelChannelUsage) []domain.ModelChanne
 
 // ---------------- 供给源 ----------------
 
+// zeroPriceReason 判定「该模型下、按此报价」的供给源是否为零价(启用即免费放流量),
+// 是则返回成因。判定复用计费同一条换算链(见 pricing.ZeroPriced),不另写判据。
+//
+// modelID 取 0 或查不到模型 → 按未绑定官方价处理(与 writeOffer 的零值回落同规矩)。
+func (s *Server) zeroPriceReason(modelID int64, in domain.OfferInput) (bool, string) {
+	m, err := s.st.GetModel(modelID)
+	if err != nil {
+		m = domain.ModelRow{}
+	}
+	settings, err := s.st.GetSettings()
+	if err != nil {
+		return false, "" // 设置读不到时不拦(宁可放行也不误伤现网)
+	}
+	offer := domain.OfferRead{
+		InputPriceUsd: in.InputPriceUsd, OutputPriceUsd: in.OutputPriceUsd,
+		CacheReadPriceUsd: in.CacheReadPriceUsd, CacheWritePriceUsd: in.CacheWritePriceUsd,
+	}
+	var q *domain.OfficialPriceRow
+	if m.OfficialVendor != "" && m.OfficialModelName != "" {
+		if row, err := s.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
+			q = &row
+		}
+	}
+	return pricing.ZeroPriced(q, offer, settings, time.Now().UTC())
+}
+
 // writeOffer 单条供给源读响应(create/update 用):自己补齐成本派生所需的模型行。
 //
 // 查不到模型时按零值模型走 —— 成本会落到「未绑定官方价」的兜底分支,不会漏字段,
@@ -281,6 +353,14 @@ func (s *Server) handleOffersCreate(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, http.StatusBadRequest, "validation", "channel does not exist")
 		return
 	}
+	// 零价闸门:启用即放流量,而 cost/charge 都为 0 —— 拒绝(缺省 enabled=true,同样受限)。
+	enabledAfter := in.Enabled == nil || *in.Enabled
+	if enabledAfter {
+		if zero, reason := s.zeroPriceReason(modelID, in); zero {
+			apiErr(w, http.StatusBadRequest, "zero_price", "该供给源无成本依据,不能启用:"+reason)
+			return
+		}
+	}
 	of, err := s.st.CreateOffer(modelID, in)
 	if err != nil {
 		writeStoreErr(w, err)
@@ -300,6 +380,20 @@ func (s *Server) handleOffersUpdate(w http.ResponseWriter, r *http.Request) {
 	var in domain.OfferInput
 	if !decodeBody(w, r, &in) {
 		return
+	}
+	// 零价闸门:改价改成 0 而仍 enabled=true 时必须拦下 —— 否则可从「有价启用」改成
+	// 「零价启用」绕过创建闸门。取当前模型的官方价绑定来判定(与计费同源)。
+	enabledAfter := in.Enabled == nil || *in.Enabled
+	if enabledAfter {
+		cur, err := s.st.GetOffer(oid)
+		if err != nil {
+			writeStoreErr(w, err)
+			return
+		}
+		if zero, reason := s.zeroPriceReason(cur.ModelID, in); zero {
+			apiErr(w, http.StatusBadRequest, "zero_price", "该供给源无成本依据,不能启用:"+reason)
+			return
+		}
 	}
 	of, err := s.st.UpdateOffer(oid, in)
 	if err != nil {

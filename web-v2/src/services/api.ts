@@ -172,10 +172,16 @@ export const api = {
   getModelUsage(id: number, days = 7): Promise<ModelUsageData> {
     return http.get(`/models/${id}/usage${qs({ days })}`);
   },
-  async toggleModel(modelId: number, enabled: boolean): Promise<void> {
+  /**
+   * 模型启停。启用时后端会联动打开其下供给源,但**跳过零价供给源**
+   * (issue #26:无成本依据,开了等于免费放流量),被跳过者经 skippedZeroPrice 回传渠道名。
+   */
+  async toggleModel(modelId: number, enabled: boolean): Promise<{ skippedZeroPrice: string[] }> {
     const m = (await api.getModels()).find(x => x.id === modelId);
     if (!m) throw new Error('模型不存在');
-    await api.updateModel(modelId, api.modelDraft(m, { enabled }));
+    const raw = await http.patch<ModelCatalogItem & { skippedZeroPrice?: string[] }>(
+      `/models/${modelId}`, api.modelDraft(m, { enabled }));
+    return { skippedZeroPrice: raw.skippedZeroPrice ?? [] };
   },
   /**
    * 模型编辑全量草稿(基于当前快照)。
