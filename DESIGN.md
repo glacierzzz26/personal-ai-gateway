@@ -338,6 +338,11 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   (令牌表「可用模型」列;旧版用 `flexWrap` 徽标,单个长模型名会溢出画到右边「额度使用」列、挡住进度条),
   或自套 `overflow:hidden` 容器。别指望 `gw-table` 那套 `td{overflow:hidden}`(它只作用于 Dashboard
   自建的 `<table>`,管不到 antd `<Table>`)。
+- **发布版本展示**:侧栏底部渲染**发布版本**(`AppLayout.tsx` footer),取自既有的 `GET /healthz` 的
+  `version` 字段(由构建期 `APP_VERSION`/`-ldflags` 注入,形如 `v0.0.0-4de1cde`),不再写死
+  `个人网关 · v2`(v2 是技术分代、不表意)。**降级**:`version` 缺失(本地 `go run` 未注入、或网关
+  不可达)时回退 `v0.0.0`,绝不显示 `undefined`;折叠态只放短 hash(取串中首个 7+ 位 hex 段),
+  避免在 64px 宽里挤成空白破版。
 
 ## 8. 运行与联调
 
