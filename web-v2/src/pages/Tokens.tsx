@@ -16,16 +16,11 @@ import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { copyText } from '@/utils/clipboard';
 import { fmt } from '@/utils/format';
+import { QUOTA_ALERT } from '@/utils/quota';
 import { TOKENS } from '@/styles/tokens';
 import type { GatewayToken, ProbeCheck, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
-
-/**
- * 额度阈值集中一处，避免各页各写一套。
- * 逼近=≥60%（概览「额度逼近」块用它），告警=≥85%（顶栏与状态条用它）。
- */
-const QUOTA_ALERT = 0.85;
 
 interface TokenFormValues {
   name: string;

@@ -1202,8 +1202,22 @@ type QuotaBalance struct {
 	Currency string  `json:"currency"` // 上游原币种(CNY/USD),原样展示
 }
 
-// ChannelQuotaResp GET /channels/{id}/quota 返回。windows 仅含 status=ok 的窗口
-// (缺失/非 ok = 该窗口/该渠道不提供额度)。Available=false 时 error 给出原因。
+// QuotaErrorKind 额度查询失败的原因类别。前端据此区分「查不了」(常态,不该告警)
+// 与「查失败」(真故障) —— 靠 error 文案字符串匹配太脆,上游换个措辞就失效。
+type QuotaErrorKind string
+
+const (
+	// QuotaErrNotConfigured 第三方渠道尚未手工配置额度查询路径。**常态**,不是故障。
+	QuotaErrNotConfigured QuotaErrorKind = "not_configured"
+	// QuotaErrUnsupported 该渠道类型没有已知的额度接口。**常态**,不是故障。
+	QuotaErrUnsupported QuotaErrorKind = "unsupported"
+	// QuotaErrFetch 已配置/本应可查,但这次查询失败(超时、非 2xx、解析不出)。真故障。
+	QuotaErrFetch QuotaErrorKind = "fetch"
+)
+
+// ChannelQuotaResp GET /channels/{id}/quota 与 GET /channels/quota(批量)的元素形状。
+// windows 仅含 status=ok 的窗口(缺失/非 ok = 该窗口/该渠道不提供额度)。
+// Available=false 时 error 给出原因、errorKind 给出原因类别。
 // Balance 与 Windows 互斥:窗口型上游(rolling/weekly/monthly)用 Windows,
 // 余额型上游(DeepSeek / one-api)用 Balance。
 type ChannelQuotaResp struct {
@@ -1213,4 +1227,5 @@ type ChannelQuotaResp struct {
 	Balance   *QuotaBalance          `json:"balance,omitempty"`
 	LatencyMs int64                  `json:"latencyMs"`
 	Error     string                 `json:"error,omitempty"`
+	ErrorKind QuotaErrorKind         `json:"errorKind,omitempty"`
 }

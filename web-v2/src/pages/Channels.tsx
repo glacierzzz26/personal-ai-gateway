@@ -17,10 +17,11 @@ import { api } from '@/services/api';
 import { channelTypes, egressProtos, providers, quotaShapes } from '@/constants';
 import { channelLabel, channelMark, egressLabel } from '@/utils/channel';
 import { fmt } from '@/utils/format';
+import { QUOTA_ALERT, QUOTA_WINS, pctText, quotaRatio, quotaTone } from '@/utils/quota';
 import { TOKENS } from '@/styles/tokens';
 import type {
   Channel, ChannelDraft, ChannelQuota, ChannelType, EgressProto, FetchPricingResult,
-  HealthStatus, Provider, QuotaShape, QuotaWindowKey,
+  HealthStatus, Provider, QuotaShape, QuotaWindow, QuotaWindowKey,
 } from '@/types';
 
 /** 官方定价抓取结果弹窗载荷(失败即失败:error 非空时 models 为空)。 */
@@ -80,21 +81,8 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败,请稍后重试';
 }
 
-/** 额度窗口展示顺序与标签(rolling≈近5h)。 */
-const QUOTA_WINS: Array<{ key: QuotaWindowKey; label: string }> = [
-  { key: 'rolling', label: '5h' },
-  { key: 'weekly', label: '周' },
-  { key: 'monthly', label: '月' },
-];
-
-/**
- * 额度告警阈值：与令牌侧统一为 85%。
- * （此处原是 50/80%，与概览页的 60/85% 不一致，会让同一个额度在两个页面显示成不同的严重程度。）
- */
-const QUOTA_ALERT = 85;
-
-/** 百分比展示:整数不带小数,否则保留 1 位。 */
-const pctText = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+/** 额度窗口展示顺序与标签(rolling≈近5h)。键序与 utils/quota.ts 的 QUOTA_WINS 同源。 */
+const QUOTA_WIN_LABELS: Record<QuotaWindowKey, string> = { rolling: '5h', weekly: '周', monthly: '月' };
 
 const dash = <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
 
@@ -120,11 +108,29 @@ function quotaEnabled(ch: Channel): boolean {
   return ch.channelType !== 'thirdparty' || !!ch.quotaPath;
 }
 
+/** 可用窗口(按展示顺序过滤出 status==='ok' 的)。 */
+function okWindows(q: ChannelQuota | undefined): Array<{ key: QuotaWindowKey; label: string; win: QuotaWindow }> {
+  return QUOTA_WINS.flatMap(key => {
+    const win = q?.windows?.[key];
+    return win && win.status === 'ok' ? [{ key, label: QUOTA_WIN_LABELS[key], win }] : [];
+  });
+}
+
+/** 工具提示里「已用 12/14」的原始用量串(上游给得出才有)。 */
+function usedCapText(win: QuotaWindow, currency: string): string {
+  if (win.cap == null || win.cap <= 0) return '';
+  return `${money(win.used ?? 0, currency)} / ${money(win.cap, currency)}`;
+}
+
 /**
- * 额度单元格。三种形态:
- *   1. 窗口型(commandcode/opencode/通用信封)→ "5h 12% · 周 34%" + 逐窗口 tooltip;
- *   2. 余额型(deepseek/one-api)→ 余额金额 + 余额 tooltip(可能同时有窗口);
- *   3. 不可用 → 灰色占位,未配置额度路径时给出可点提示。
+ * 额度单元格。行内**不依赖悬停**即可看到:百分比、已用/上限、重置时间 ——
+ * 窗口上限与重置时间原本只藏在 tooltip 里,渠道一多就得逐个悬停才扫得出来。
+ *
+ * 四态:
+ *   1. 窗口型(commandcode/opencode/通用信封)→ 每窗口「标签 + 条 + %」,告警行摊开「已用/上限」与重置;
+ *   2. 余额型(deepseek/one-api)→ 余额金额 + %(若有窗口)+ tooltip 明细;
+ *   3. 不可查(未配置/不支持)→ 灰色占位 + 可点提示;
+ *   4. 查询失败(超时等)→ 灰色占位 + 失败原因(不与「未配置」混为一谈)。
  */
 function QuotaCell({ q, ch }: { q: UseQueryResult<ChannelQuota, Error>; ch: Channel }) {
   // 不查的渠道直接给指路占位。用 quotaEnabled 判定而非 fetchStatus ——
@@ -136,13 +142,14 @@ function QuotaCell({ q, ch }: { q: UseQueryResult<ChannelQuota, Error>; ch: Chan
   if (q.isPending) return <span style={{ color: 'var(--gw-text-3)' }}>读取中…</span>;
   const quota = q.data;
   if (q.isError || !quota || !quota.available) {
-    const notConfigured = !!quota?.error?.includes('未配置额度查询路径');
-    const tip = notConfigured
-      ? `${quota?.error} —— 点「编辑」进入渠道,填第三方额度路径`
-      : quota?.error || '额度接口未响应';
+    const tip = quota?.error
+      ? quota.errorKind === 'not_configured'
+        ? `${quota.error} —— 点「编辑」进入渠道,填第三方额度路径`
+        : quota.error
+      : '额度接口未响应';
     return <Tooltip title={tip}>{dash}</Tooltip>;
   }
-  const wins = QUOTA_WINS.filter(w => quota.windows?.[w.key]?.status === 'ok');
+  const wins = okWindows(quota);
   const balance = quota.balance;
   if (wins.length === 0 && !balance) {
     return <Tooltip title="该渠道未返回可用额度窗口(不支持或已耗尽未上报)">{dash}</Tooltip>;
@@ -158,14 +165,13 @@ function QuotaCell({ q, ch }: { q: UseQueryResult<ChannelQuota, Error>; ch: Chan
         </div>
       )}
       {wins.map(w => {
-        const win = quota.windows![w.key]!;
-        const raw = win.cap != null && win.cap > 0 ? `(${money(win.used ?? 0, balance?.currency ?? 'USD')} / ${money(win.cap, balance?.currency ?? 'USD')})` : '';
+        const raw = usedCapText(w.win, balance?.currency ?? 'USD');
         return (
           <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
             <span>{w.label} 窗口</span>
             <span className="gw-num">
-              已用 {pctText(win.percent)}%{raw ? ` ${raw}` : ''}
-              {win.resetAt ? ` · ${resetText(win.resetAt)} 重置` : ''}
+              已用 {pctText(w.win.percent)}%{raw ? ` (${raw})` : ''}
+              {w.win.resetAt ? ` · ${resetText(w.win.resetAt)} 重置` : ''}
             </span>
           </div>
         );
@@ -175,22 +181,32 @@ function QuotaCell({ q, ch }: { q: UseQueryResult<ChannelQuota, Error>; ch: Chan
 
   return (
     <Tooltip title={detail}>
-      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
         {balance && (
           <span className="gw-num" style={{ fontSize: 12.5 }}>{money(balance.amount, balance.currency)}</span>
         )}
         {wins.map(w => {
-          const pct = quota.windows![w.key]!.percent;
-          const warn = pct >= QUOTA_ALERT;
+          const warn = w.win.percent >= QUOTA_ALERT * 100;
+          const raw = usedCapText(w.win, balance?.currency ?? 'USD');
           return (
-            <span key={w.key} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <span style={{ width: 22, color: 'var(--gw-text-3)', fontSize: 12.5 }}>{w.label}</span>
-              <span className="gw-bar" style={{ width: 62 }} role="img" aria-label={`${w.label} 额度已用 ${pctText(pct)}%`}>
-                <i style={{ width: `${Math.min(pct, 100)}%`, background: warn ? TOKENS.warn : TOKENS.c1 }} />
+            <span key={w.key} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ width: 22, color: 'var(--gw-text-3)', fontSize: 12.5 }}>{w.label}</span>
+                <span className="gw-bar" style={{ width: 62 }} role="img" aria-label={`${w.label} 额度已用 ${pctText(w.win.percent)}%`}>
+                  <i style={{ width: `${Math.min(w.win.percent, 100)}%`, background: warn ? TOKENS.warn : TOKENS.c1 }} />
+                </span>
+                <span className="gw-num" style={{ fontSize: 12.5, color: warn ? 'var(--gw-warn)' : 'var(--gw-text-2)' }}>
+                  {pctText(w.win.percent)}%
+                </span>
               </span>
-              <span className="gw-num" style={{ fontSize: 12.5, color: warn ? 'var(--gw-warn)' : 'var(--gw-text-2)' }}>
-                {pctText(pct)}%
-              </span>
+              {/* 告警行把「已用/上限」与重置时间摊到行内 —— 不用悬停就能判断还有多久见底 */}
+              {warn && (raw || w.win.resetAt) && (
+                <span style={{ fontSize: 11.5, color: 'var(--gw-text-3)' }}>
+                  {raw}
+                  {raw && w.win.resetAt ? ' · ' : ''}
+                  {w.win.resetAt ? `${resetText(w.win.resetAt)} 重置` : ''}
+                </span>
+              )}
             </span>
           );
         })}
@@ -209,6 +225,7 @@ export default function Channels() {
   const [kw, setKw] = useState('');
   const [provider, setProvider] = useState('');
   const [status, setStatus] = useState('');
+  const [quotaFilter, setQuotaFilter] = useState('');
   const [testingId, setTestingId] = useState<number | null>(null);
   const [syncingId, setSyncingId] = useState<number | null>(null);
   const [pricingId, setPricingId] = useState<number | null>(null);
@@ -240,8 +257,8 @@ export default function Channels() {
   });
   const vendorInfo = (p: Provider) => officialVendors.find(v => v.provider === p);
 
-  // 额度:按渠道类型分发到对应上游接口。第三方渠道没配「额度路径」时不查
-  // (后端会直接返回「未配置」),避免整列无谓报错。失败静默,UI 显示灰色占位。
+  // 额度:按渠道类型分发到对应上游接口。后端带短 TTL 缓存(见 quota_cache.go),
+  // 故这里放宽 staleTime、关掉窗口聚焦重取 —— 免得切回标签页就重打一轮上游。
   const quotaQueries = useQueries({
     queries: channels.map(ch => ({
       queryKey: ['channel-quota', ch.id],
@@ -249,6 +266,7 @@ export default function Channels() {
       enabled: quotaEnabled(ch),
       retry: 0,
       staleTime: 60_000,
+      refetchOnWindowFocus: false,
     })),
   });
   const quotaById = useMemo(() => {
@@ -414,6 +432,13 @@ export default function Channels() {
     if (provider === '__none__') { if (c.provider) return false; }
     else if (provider && c.provider !== provider) return false;
     if (status && c.status !== status) return false;
+    // 额度筛选:只看告警(≥85%)/ 只看逼近(≥60%)。查不到额度的渠道(未配置/失败)
+    // 一律不算告警 —— 不能把「查不了」误报成「快没额度了」。
+    if (quotaFilter) {
+      const tone = quotaTone(quotaById.get(c.id)?.data);
+      if (quotaFilter === 'alert' && tone !== 'alert') return false;
+      if (quotaFilter === 'warn' && tone !== 'alert' && tone !== 'warn') return false;
+    }
     return true;
   });
 
@@ -477,7 +502,10 @@ export default function Channels() {
       ),
     },
     {
-      title: '额度', key: 'quota', width: 140,
+      // 额度:窗口型逐条(标签+条+%),余额型直接给金额。表头可排序 ——
+      // 余量比率 = 各可用窗口已用率的最大值(见 quotaRatio),与高亮/筛选同一口径。
+      title: '额度', key: 'quota', width: 200,
+      sorter: (a, b) => (quotaRatio(quotaById.get(a.id)?.data) ?? -1) - (quotaRatio(quotaById.get(b.id)?.data) ?? -1),
       render: (_, r) => {
         const q = quotaById.get(r.id);
         return q ? <QuotaCell q={q} ch={r} /> : dash;
@@ -534,7 +562,7 @@ export default function Channels() {
     },
   ];
 
-  const filtering = !!(kw || provider || status);
+  const filtering = !!(kw || provider || status || quotaFilter);
 
   const emptyNode = isError ? (
     <ErrorState
@@ -551,8 +579,8 @@ export default function Channels() {
   ) : (
     <NoResultState
       title="没有符合条件的渠道"
-      desc="当前筛选（关键字 / 供应商 / 状态）没有命中。"
-      action={<Button size="small" onClick={() => { setKw(''); setProvider(''); setStatus(''); }}>清除筛选</Button>}
+      desc="当前筛选（关键字 / 供应商 / 状态 / 额度）没有命中。"
+      action={<Button size="small" onClick={() => { setKw(''); setProvider(''); setStatus(''); setQuotaFilter(''); }}>清除筛选</Button>}
     />
   );
 
@@ -586,6 +614,14 @@ export default function Channels() {
                 { value: 'down' satisfies HealthStatus, label: '不可用' },
                 { value: 'unknown' satisfies HealthStatus, label: '待观察' },
                 { value: 'disabled' satisfies HealthStatus, label: '已停用' },
+              ]}
+            />
+            <Select
+              style={{ width: 160 }} value={quotaFilter} onChange={setQuotaFilter}
+              options={[
+                { value: '', label: '全部额度' },
+                { value: 'alert', label: '额度告警 ≥85%' },
+                { value: 'warn', label: '额度逼近 ≥60%' },
               ]}
             />
             <span className="count">

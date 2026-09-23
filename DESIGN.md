@@ -224,6 +224,30 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 `channel_type` 为空按 `thirdparty` 处理(老行/未回填);第三方没配路径时明确回「未配置额度查询路径」,
 前端 `useQueries` 的 `enabled` 也据此不发起请求。
 
+**失败原因分类(`errorKind`,issue #18)。** 响应在 `error` 之外另给 `errorKind`,取值三选一:
+
+| `errorKind` | 含义 | 是否该告警 |
+|---|---|---|
+| `not_configured` | 第三方渠道未配 `quota_path` | **否**(常态) |
+| `unsupported` | 该 `channel_type` 没有已知额度接口 | **否**(常态) |
+| `fetch` | 已配置/本应可查,但这次查询失败(超时、非 2xx、解析不出) | 是(真故障) |
+
+分类用 `errors.Is(err, proxy.ErrQuota*)` 判定,**不匹配 `error` 文案** —— 上游换个措辞就失效。
+前端据此区分「查不了」与「查失败」;首页告警只认「有余量百分比且超阈值」,**`errorKind` 非空一律不算告警**
+(否则第三方「未配置」这个常态会让首页永远喊狼来了)。
+
+**网关级缓存与批量端点(issue #18)。** 额度查询是逐渠道打上游外网(每家 6s 超时),而首页每 15s 刷新、
+渠道页每渠道各一次 —— 不加缓冲会把上游打成密集轮询,且每次都等满 6s。故在管理面加一层
+**网关级短 TTL 缓存 + 在途去重**(`internal/server/quota_cache.go`):
+
+- 同一渠道的并发调用**只打一次上游**(在途去重);成功缓存 `quotaCacheTTL=60s`,失败缓存 `quotaFailTTL=20s`
+  (故障期不至于疯狂重试);调用方放弃(客户端断开 / 批量整体超时)的那次**不入缓存**,下次重打。
+- **逐渠道端点与批量端点共用此原语**,故两页看到同一份缓存、同一套口径。
+- `GET /api/v1/channels/quota` 批量端点(首页用):一次返回全渠道额度,服务端并发(上限 `quotaBatchLimit=4`)
+  且整体限制 `quotaBatchCap=10s`;个别慢上游由 ctx 取消 → 回 `errorKind=fetch`,不拖住整个首页。
+  元素形状 `{id, quota}`(与单渠道端点 `quota` 完全一致)。
+- 批量路径对**没配额度路径**的第三方渠道**不发请求**,直接给 `not_configured` 占位(与前端 `quotaEnabled` 同判据)。
+
 ### 关键坑位(实现时对照)
 - 管理端 PATCH 是**全量替换**(Update* 仓库方法会清零未传字段)。前端启停类操作用「先取全量快照再整包提交」
   (services/api.ts 的 toggle*/offerDraft 帮助器),勿发部分 body。
@@ -276,7 +300,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `GET/POST /users` · `PATCH /users/{id}/password` · `DELETE /users/{id}` | 用户管理(仅 admin):建号/列号/重置密码/删号 |
 | `GET/POST /channels` · `GET/PATCH/DELETE /channels/{id}` | 渠道 CRUD(改时 apiKey 留空=保持) |
 | `POST /channels/{id}/test` · `/sync-models` | 连通探测 `{ok,latencyMs}`;拉 `/v1/models` 补目录+停用 offer |
-| `GET /channels/{id}/quota` | 用该渠道自己的 Key 问上游额度(按 `channel_type` 分发,见 §5.3) |
+| `GET /channels/{id}/quota` | 用该渠道自己的 Key 问上游额度(按 `channel_type` 分发,见 §5.3);走网关级短 TTL 缓存 |
+| `GET /channels/quota` | 批量渠道额度(首页用):一次拿全渠道,服务端并发 + 短路未配置渠道(见 §5.3) |
 | `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(`name`=统一名、`originalName`=真实名)/新增/改(全量,`displayName` 非传=不变)/删;GET 全站可读 |
 | `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删 |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |
@@ -305,6 +330,13 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 展示词表(providers/channelTypes/egressProtos/quotaShapes/capabilities 标签)属前端常量,与后端枚举一致;
   不作为运行时数据。渠道的展示名/徽标统一走 `utils/channel.ts` 的 `channelLabel`/`channelMark`
   (有厂商显示厂商,聚合渠道回落渠道类型),勿在页面里直接渲染 `ch.provider`(为空会显示空白)。
+- **额度阈值单一来源**:`utils/quota.ts` 的 `QUOTA_WARN=0.6` / `QUOTA_ALERT=0.85`(0..1 小数)。
+  令牌额度、上游渠道额度、渠道页高亮、首页状态条**全部引用这一份**,勿在页面里各写一套 ——
+  同一个额度在两个页面显示成不同严重程度会被当成两个 bug(渠道页历史上踩过一次 50/80% vs 60/85%)。
+  该模块另提供 `quotaRatio`(各窗口已用率最大值,余额型返回 `null`)与 `quotaTone`,排序/告警/筛选共用。
+- **「查不到额度」不是告警**:`quotaRatio` 返回 `null`(未配置/不支持/查询失败/无窗口)时,
+  渠道页不入选「额度告警」筛选、首页状态条与「额度逼近」块也不计入。首页首屏额度查询在途(最长 6s)时,
+  状态条回「读取中」而**不**断言「全部正常」—— 没读到的部分不敢担保。
 
 ## 8. 运行与联调
 

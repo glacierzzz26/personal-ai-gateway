@@ -642,7 +642,12 @@ export interface QuotaBalance {
   currency: string;
 }
 
-/** GET /channels/{id}/quota 返回:windows 仅含可用窗口;available=false 时 error 给出原因。
+/** 额度查询失败的原因类别。not_configured/unsupported 是**常态**(不该告警),
+ *  fetch 才是真故障。前端据此区分「查不了」与「查失败」—— 不靠 error 文案匹配。 */
+export type QuotaErrorKind = 'not_configured' | 'unsupported' | 'fetch';
+
+/** GET /channels/{id}/quota 与 GET /channels/quota(批量)的元素形状。
+ *  windows 仅含可用窗口;available=false 时 error 给出原因、errorKind 给出类别。
  *  windows 与 balance 可同时有(one-api 既算得出百分比也报余额)。 */
 export interface ChannelQuota {
   available: boolean;
@@ -651,6 +656,13 @@ export interface ChannelQuota {
   balance?: QuotaBalance;
   latencyMs: number;
   error?: string;
+  errorKind?: QuotaErrorKind;
+}
+
+/** GET /channels/quota 批量响应的一个元素(形状与单渠道端点一致)。 */
+export interface ChannelQuotaItem {
+  id: number;
+  quota: ChannelQuota;
 }
 
 export interface TokenCreateResult {
