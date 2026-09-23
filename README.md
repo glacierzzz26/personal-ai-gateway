@@ -135,12 +135,17 @@ tls:
 
 ```bash
 deploy/scripts/gen-certs.sh          # 生成自签 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
-deploy/scripts/deploy.sh [GW_HOST]   # 本地构建镜像 → docker save 经 ssh 推目标主机 → compose up(默认 rguo@192.168.0.202)
-deploy/scripts/backup.sh             # SQLite 在线快照(REMOTE_DIR=~/ai-gateway)
+ssh aliyun 'bash /opt/ai-gateway-v2/upgrade.sh <版本>'   # 生产一键升级/回滚(ghcr 链路;见 deploy/README.md)
+deploy/scripts/deploy.sh [GW_HOST]   # 应急/离线链路:本地构建镜像 → docker save 经 ssh 推目标主机(默认 aliyun)
+deploy/scripts/backup.sh             # SQLite 快照(REMOTE_DIR=/opt/ai-gateway-v2)
 # 域名边缘(公网入口)在独立仓库 host-infra:cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 ```
 
-- 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);镜像本地构建,版本由 `git describe` 注入 `/healthz`。
+- 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);**常规升级走 ghcr + `upgrade.sh`**(按版本切换、
+  自动备份、健康校验、失败回滚、降级护栏),`deploy.sh` 的 `save|ssh|load` 留作 ghcr 不可达时的兜底。
+- **版本标识**:由 `deploy/scripts/lib-version.sh` 单一提供 —— HEAD 在 `v*` tag 上为 `v<tag>-<sha7>`,
+  否则恒为 `v0.0.0-<sha7>`(未发版不给版本号);镜像内烘焙 `APP_VERSION`/`GIT_SHORT`,
+  `/healthz` 回 `version` 与 `schema`(库已应用迁移号)。
 - 自签证书 SAN 含各主机 IP,`deploy/certs/` 保留作 **Nginx 回源**用(容器内自签 TLS 同时承担两面隔离);客户端走公信证书,无需导 CA。
 - **灾备(家主机断电 / 云入口故障):** 方案与分阶段落地见 [`deploy/DR.md`](deploy/DR.md)(异地加密快照 + 云冷备同 IP 接管,RPO ≤15min / RTO ≤2min,客户端零改动)。
 - **改造方向(个人网关 → 中转站):** 角色/定价/钱包/可见面的方案见 [`PLAN.md`](PLAN.md)(admin=自己、user=客户;售价 = 官方价 × 倍率、成本仅自己可见;用户级钱包)。**尚未实施。**

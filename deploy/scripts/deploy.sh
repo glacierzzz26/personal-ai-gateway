@@ -8,14 +8,18 @@
 #   - 远端 .env(GW_MASTER_KEY / GW_IMAGE_TAG)与 data/(DB)只在缺失时创建,不随重部署覆盖。
 #
 # 前置:目标主机可免密 ssh;远端 docker compose v2;宿主发布口 17081/17090 空闲。
-# 用法:deploy/scripts/deploy.sh [GW_HOST]         (默认 rguo@192.168.0.202)
+# 用法:deploy/scripts/deploy.sh [GW_HOST]         (默认 aliyun;旧默认 lab 192.168.0.202 已非生产)
 #       REMOTE_DIR=/path deploy.sh [GW_HOST]       (覆盖远端目录,默认 <远端家目录>/ai-gateway)
+#
+# 定位:这是**应急/离线**链路(本地构建 → save|ssh|load),常规升级走 ghcr + upgrade.sh。
+#       与 upgrade.sh 的取舍:本脚本不经 registry,适合 ghcr 不可达时用;代价是每次全量传镜像。
 # =====================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
-HOST="${1:-${GW_HOST:-rguo@192.168.0.202}}"
+. "$SCRIPT_DIR/lib-version.sh"
+HOST="${1:-${GW_HOST:-aliyun}}"
 CERTS_DIR="$REPO/deploy/certs"
 
 echo "==> [1/6] 证书就绪(无则生成)"
@@ -23,7 +27,7 @@ echo "==> [1/6] 证书就绪(无则生成)"
   || bash "$SCRIPT_DIR/gen-certs.sh"
 
 echo "==> [2/6] 构建镜像"
-VER="$(cd "$REPO" && git describe --tags --always --dirty)"
+VER="$(gw_version "$REPO")"
 VER="$VER" bash "$SCRIPT_DIR/build.sh"
 IMAGE="ai-gateway:$VER"
 
@@ -59,7 +63,7 @@ ssh "$HOST" "cd '$REMOTE_DIR' && GW_IMAGE=ai-gateway docker compose up -d"
 echo
 echo "部署完成(image=$IMAGE,host=$HOST,dir=$REMOTE_DIR)。"
 
-# 清理构建/部署产物:本机的 ai-gateway 镜像与 lab 上非运行中的旧版本镜像。
+# 清理构建/部署产物:本机的 ai-gateway 镜像与目标主机上非运行中的旧版本镜像。
 # 刚部署的版本在运行,必然被跳过。留产物排查用 KEEP_ARTIFACTS=1 关掉。
 # 清理是尽力而为 —— 失败也不影响本次部署结果。
 if [ "${KEEP_ARTIFACTS:-0}" = "1" ] || [ "${NO_CLEAN:-0}" = "1" ]; then

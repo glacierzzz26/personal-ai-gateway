@@ -42,7 +42,7 @@ func TestHandlerFacesIsolation(t *testing.T) {
 		})
 	}
 
-	// 两面的 /healthz 都可用,且回显注入的版本号。
+	// 两面的 /healthz 都可用,且回显注入的版本号 + 已应用的迁移号(schema)。
 	for _, base := range []string{api.URL, admin.URL} {
 		resp, err := http.Get(base + "/healthz")
 		if err != nil {
@@ -56,6 +56,11 @@ func TestHandlerFacesIsolation(t *testing.T) {
 		}
 		if _, ok := got["version"]; !ok {
 			t.Fatalf("healthz %s 缺 version 字段: %v", base, got)
+		}
+		// 升级脚本据 schema 判「降级是否会越过 DB 迁移」——缺失会让护栏失效。
+		sv, ok := got["schema"].(float64)
+		if !ok || sv < 1 {
+			t.Fatalf("healthz %s schema = %v, want 已应用迁移号(≥1)", base, got["schema"])
 		}
 	}
 }
