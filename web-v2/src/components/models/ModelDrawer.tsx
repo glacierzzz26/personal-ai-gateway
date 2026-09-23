@@ -23,7 +23,7 @@ import type { Capability, Channel, ModelCatalogItem, ModelDraft, ModelOffer, Mod
 /* —— 成本 / 本站价 / 毛利 三列 ——
  *
  * 这三列是同一个问题的三个切面。计费侧:
- *   - 成本  = 官方价 × 渠道系数 ratio (绑定官方价时) / offer 手填三价 (未绑定)
+ *   - 成本  = 官方价 × 渠道系数 ratio (绑定官方价时) / offer 手填四价 (未绑定)
  *   - 本站价 = 官方价 × 倍率 rate
  *   - 毛利  = 1 − 成本/售价 = 1 − ratio/rate   (官方价在分子分母里约掉了)
  *
@@ -36,7 +36,7 @@ function CostCell({ r }: { r: ModelOffer }) {
   const c = r.cost;
   if (!c || c.source === 'unknown') {
     return (
-      <Tooltip title="未绑定官方价,且该供给源三价为空 —— 没有成本依据。到「官方定价」页把模型绑定到官方价,或手工填兜底价。">
+      <Tooltip title="未绑定官方价,且该供给源四价为空 —— 没有成本依据。到「官方定价」页把模型绑定到官方价,或手工填兜底价。">
         <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>未知</span>
       </Tooltip>
     );
@@ -46,7 +46,11 @@ function CostCell({ r }: { r: ModelOffer }) {
     <Tooltip
       title={
         <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-          <div>输入 {fmt.price(c.in)} · 输出 {fmt.price(c.out)}{c.cacheRead ? ` · 缓存 ${fmt.price(c.cacheRead)}` : ''}</div>
+          <div>
+            输入 {fmt.price(c.in)} · 输出 {fmt.price(c.out)}
+            {c.cacheRead ? ` · 缓存读 ${fmt.price(c.cacheRead)}` : ''}
+            {c.cacheWrite ? ` · 缓存写 ${fmt.price(c.cacheWrite)}` : ''}
+          </div>
           {derived
             ? <div>官方价 × {c.ratio}{c.ratio === 1 ? '(未设系数,按 1.0 计 —— 会高估成本)' : `(${c.vendor} 渠道系数)`}</div>
             : <div>手填兜底价(未绑定官方价)</div>}
@@ -69,7 +73,7 @@ function RetailCell({ r, rate }: { r: ModelOffer; rate: number }) {
   const c = r.cost;
   if (!c || c.source === 'unknown') {
     return (
-      <Tooltip title="无成本依据,本站价无从对照。左列三价是该供给源手填值。">
+      <Tooltip title="无成本依据,本站价无从对照。左列四价是该供给源手填值。">
         <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{fmt.price(r.inputPriceUsd)}</span>
       </Tooltip>
     );
@@ -133,6 +137,7 @@ interface OfferFormValues {
   inputPriceUsd?: number;
   outputPriceUsd?: number;
   cacheReadPriceUsd?: number;
+  cacheWritePriceUsd?: number;
   overridePrice?: boolean;
   rateLimitRpm?: number;
   enabled?: boolean;
@@ -162,6 +167,7 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
         inputPriceUsd: editing.inputPriceUsd,
         outputPriceUsd: editing.outputPriceUsd,
         cacheReadPriceUsd: editing.cacheReadPriceUsd ?? 0,
+        cacheWritePriceUsd: editing.cacheWritePriceUsd ?? 0,
         overridePrice: editing.overridePrice,
         rateLimitRpm: editing.rateLimitRpm,
         enabled: editing.enabled,
@@ -186,6 +192,7 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
         inputPriceUsd: Number(values.inputPriceUsd) || 0,
         outputPriceUsd: Number(values.outputPriceUsd) || 0,
         cacheReadPriceUsd: Number(values.cacheReadPriceUsd) || 0,
+        cacheWritePriceUsd: Number(values.cacheWritePriceUsd) || 0,
         overridePrice: values.overridePrice ?? false,
         rateLimitRpm: values.rateLimitRpm || 60,
         enabled: values.enabled ?? true,
@@ -233,6 +240,7 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
           inputPriceUsd: 0,
           outputPriceUsd: 0,
           cacheReadPriceUsd: 0,
+          cacheWritePriceUsd: 0,
           overridePrice: false,
           rateLimitRpm: 60,
           enabled: true,
@@ -290,10 +298,25 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
         </Row>
         <Row gutter={16}>
           <Col span={12}>
-            <Form.Item name="cacheReadPriceUsd" label="缓存命中读价（$/1M tokens）">
+            <Form.Item
+              name="cacheReadPriceUsd"
+              label="缓存命中读价（$/1M tokens）"
+              extra="留 0 = 无依据"
+            >
               <InputNumber min={0} precision={4} step={0.01} style={{ width: '100%' }} placeholder="0.0000" />
             </Form.Item>
           </Col>
+          <Col span={12}>
+            <Form.Item
+              name="cacheWritePriceUsd"
+              label="缓存写入价（$/1M tokens）"
+              extra="留 0 = 无依据（按输入价计）"
+            >
+              <InputNumber min={0} precision={4} step={0.01} style={{ width: '100%' }} placeholder="0.0000" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
           <Col span={12}>
             <Form.Item name="rateLimitRpm" label="限流（RPM）">
               <InputNumber min={1} max={100000} step={10} style={{ width: '100%' }} />
@@ -561,6 +584,10 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
     },
     {
+      title: '缓存写价', dataIndex: 'cacheWritePriceUsd', align: 'right',
+      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
+    },
+    {
       // 成本与本站价都贴着左边三列(手填报价)读 —— 他们回答的是同一个问题:
       // 「这行数字是手填的还是派生的,本站价定得合不合理」。
       title: '成本', key: 'cost', align: 'right',
@@ -754,7 +781,7 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
       title: '毛利', key: 'margin', align: 'right',
       render: (_, r) => {
         if (r.costUsd <= 0) {
-          return <Tooltip title="该渠道无成本依据(未绑官方价且手填三价为空),算不出毛利。"><span style={{ color: 'var(--gw-text-3)' }}>—</span></Tooltip>;
+          return <Tooltip title="该渠道无成本依据(未绑官方价且手填四价为空),算不出毛利。"><span style={{ color: 'var(--gw-text-3)' }}>—</span></Tooltip>;
         }
         const m = (r.chargeUsd - r.costUsd) / r.chargeUsd;
         if (r.chargeUsd <= 0) {
@@ -1029,6 +1056,10 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
                         {
                           title: '缓存读价', align: 'right',
                           render: (_, r) => <span className="gw-num">{r.cacheReadPriceUsd ? fmt.price(r.cacheReadPriceUsd) : '—'}</span>,
+                        },
+                        {
+                          title: '缓存写价', align: 'right',
+                          render: (_, r) => <span className="gw-num">{r.cacheWritePriceUsd ? fmt.price(r.cacheWritePriceUsd) : '—'}</span>,
                         },
                         {
                           title: '备注', dataIndex: 'note',

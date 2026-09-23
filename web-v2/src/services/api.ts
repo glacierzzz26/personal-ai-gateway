@@ -226,6 +226,8 @@ export const api = {
       inputPriceUsd: o.inputPriceUsd,
       outputPriceUsd: o.outputPriceUsd,
       cacheReadPriceUsd: o.cacheReadPriceUsd ?? 0,
+      // 缓存写价同理必须回传:PATCH 全量替换语义下漏传即清零(0=无依据→按 input 价回落)
+      cacheWritePriceUsd: o.cacheWritePriceUsd ?? 0,
       overridePrice: o.overridePrice,
       rateLimitRpm: o.rateLimitRpm,
       enabled,
@@ -263,17 +265,19 @@ export const api = {
   manualOfficialPrice(body: ManualPriceDraft): Promise<OfficialPriceView> {
     return http.post('/official-prices/manual', body);
   },
-  /** 应用官方价到某 offer(写三价 + 来源留证;手工覆盖价需 confirmOverride) */
+  /** 应用官方价到某 offer(写四价 + 来源留证;手工覆盖价需 confirmOverride) */
   applyOfficialPrice(id: number, offerId: number, confirmOverride = false): Promise<ModelOffer> {
     return http.post<ModelOffer>(`/official-prices/${id}/apply`, { offerId, confirmOverride }).then(offer);
   },
   /** 删除一条官方参考价(已应用到 offer 的价与留证不受影响) */
   deleteOfficialPrice(id: number): Promise<unknown> { return http.del(`/official-prices/${id}`); },
   /**
-   * 批量重抓官方价并回填模型绑定。providers 为空 = 全部可抓厂商。
+   * 重抓官方价并回填模型绑定。providers 留空 = 只抓 commandcode 单页锚点(issue #27 后的主力来源);
+   * 显式给 providers 时,CC 之后再把它们走旧逐厂商路径。
    *
    * 逐厂商独立成败:某厂商失败只记在它自己的结果里,不影响其他厂商 —— 所以整请求
-   * 仍是 200,前端要看 `results[].error` 才知道谁失败。
+   * 仍是 200,前端要看 `results[].error` 才知道谁失败。CC 的成败单拎在
+   * `commandCode` / `commandCodeError` 两个字段。
    *
    * ⚠️ 抓取有破坏性:内部会删掉官网已下架、页面上不再列出的模型行。
    *

@@ -194,7 +194,7 @@ func TestApplyOfficialPriceBindsModelAndSnapshot(t *testing.T) {
 	mustStatus(t, code, http.StatusOK, "manual price: "+string(body))
 	op := decode[domain.OfficialPriceView](t, body)
 
-	// 绑定前:成本是 unknown(三价全 0),不能算毛利。
+	// 绑定前:成本是 unknown(四价全 0),不能算毛利。
 	before := decode[[]map[string]any](t, mustGet(t, admin, base+"/api/v1/models"))
 	c0 := before[0]["offers"].([]any)[0].(map[string]any)["cost"].(map[string]any)
 	if c0["source"] != "unknown" {
@@ -215,7 +215,7 @@ func TestApplyOfficialPriceBindsModelAndSnapshot(t *testing.T) {
 	if mr.OfficialVendor != domain.ProviderDeepSeek || mr.OfficialModelName != "deepseek-v4-pro" {
 		t.Fatalf("绑定未写入: %+v", mr)
 	}
-	// 顺带快照了三价(官方价原币 = 计价币种 CNY,故原值落库)—— 仅在派生不可用时兜底,
+	// 顺带快照了四价(官方价原币 = 计价币种 CNY,故原值落库)—— 仅在派生不可用时兜底,
 	// 不参与正常计费。
 	of, err := st.GetOffer(offerID)
 	if err != nil {

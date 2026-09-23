@@ -37,7 +37,7 @@ cd web-v2 && npm run typecheck && npm run build    # 前端类型检查 + 构建
 |---|---|
 | 用户 | 管理台账号,分 `admin`(全部权限)与 `user`(仅能管理自己的访问令牌)。管理员在「用户管理」建号设初始密码,用户登录后可改自己密码。 |
 | 渠道 | 一个上游 API 端点 + 凭据(供应商、Base URL、API key、优先级/权重、超时、熔断参数)。API key AES-GCM 加密落库。渠道上的「超时」只在路由规则里当排序权重用,**不约束请求本身的等待时长**——单次请求的超时取「系统设置」的 `request_timeout_ms`(或规则/供给源上的覆盖值),详见 DESIGN §5.1。渠道可用该渠道自己的 Key **只读查询上游额度**(5h/周/月窗口或剩余余额),按渠道类型分发协议;查询走网关级短 TTL 缓存,首页「运行总览」与渠道页共用一份,详见 DESIGN §5.3。 |
-| 供给源(offer) | 某模型挂在某渠道上的报价(输入/输出/缓存读价,$/1M tokens)、RPM、启用与否;顺序 = 请求尝试次序。 |
+| 供给源(offer) | 某模型挂在某渠道上的报价(输入/输出/缓存读/缓存写价,$/1M tokens)、RPM、启用与否;顺序 = 请求尝试次序。缓存写价留 0 = 无依据,该部分 token 按输入价计(见 DESIGN §5.7)。 |
 | 模型目录 | 网关对客户端暴露的模型集合(contextWindow / capabilities / 启停)。可由渠道 `/v1/models` 同步而来,也可手工新增。每个模型可设**统一名称**(`displayName`):模型级生效、多渠道共用,只作用于网关侧展示/选路/日志,不改渠道侧真实模型名;留空=用真实名,原始名始终可在管理台查看。 |
 | 路由规则 | 可选,按模型名(前缀/通配/正则)把请求限定到某些渠道并定策略(优先级/权重/低延迟),支持兜底渠道与重试。无命中规则时按供给源顺序。 |
 | 访问令牌 | 给 Claude Code / 脚本用的模型面 Key(`sk-gw-` 前缀)。可设允许模型、额度上限(USD)、RPM、有效期;可归属某个用户。库内存 sha256(鉴权)与 AES-GCM 密文(回显/生成配置),明文在创建时返回一次。列表每行可「生成配置」导出可直接粘的 `~/.claude/settings.json` 片段。 |
@@ -69,7 +69,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 
 - 后端直接静态托管 `web_dir`(默认 `web-v2`)下的 `dist/`,SPA 路由回退到 `index.html`;`/` 打开即管理台。
 - 开发期可 `cd web-v2 && npm run dev`(Vite :5178,`/api`、`/v1` 已代理到 :8787),改前端热更。
-- 页面覆盖:运行总览(默认**近 1 天**,以「经营」为中心 —— 营收/成本/毛利 + 客户余额风险 + 渠道健康 + 明细;预设可切 7/30 天或自定义区间)/ 渠道管理(CRUD + 连通测试 + 同步模型)/ 模型广场(供给源管理、定价、拖拽排序、设为首选、用量)/ 路由规则 / 访问令牌(归属与筛选、生成 Claude 配置)/ 请求日志(服务端分页/筛选/详情)/ 用户管理(建号/角色/充值/余额)/ 系统设置(超时、重试、自动降级、代理、TLS、日志保留/采样、时区、对外基址、清空日志)。侧栏底部显示**发布版本**(取自 `/healthz` 的 `version`,形如 `v0.0.0-4de1cde`),据此一眼确认生产跑的是哪一版。
+- 页面覆盖:运行总览(默认**近 1 天**,以「经营」为中心 —— 营收/成本/毛利 + 客户余额风险 + 渠道健康 + 明细;预设可切 7/30 天或自定义区间)/ 渠道管理(CRUD + 连通测试 + 同步模型)/ 模型广场(供给源管理、定价、拖拽排序、设为首选、用量)/ 官方定价(官方参考价锚点 —— 从 commandcode 单页抓取全厂商价 + 手工录入 + 反查引用模型) / 路由规则 / 访问令牌(归属与筛选、生成 Claude 配置)/ 请求日志(服务端分页/筛选/详情)/ 用户管理(建号/角色/充值/余额)/ 系统设置(超时、重试、自动降级、代理、TLS、日志保留/采样、时区、对外基址、清空日志)。侧栏底部显示**发布版本**(取自 `/healthz` 的 `version`,形如 `v0.0.0-4de1cde`),据此一眼确认生产跑的是哪一版。
 - 角色:普通用户登录后仅见「访问令牌」页,只能管理自己的 Key;其余页面与接口对其实admin-only(前端隐藏 + 服务端 403 双重约束)。
 
 > 页面读到的数值口径:成功率等一律 0..100 百分数经服务层换算成 0..1 小数;日志/曲线时间戳按设置里的
@@ -80,9 +80,10 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 - `cmd/gateway` 入口(组装 config → 主密钥 → store → server;版本经 `-ldflags -X main.version` 注入,按 `tls` 配置叠加双口)
 - `internal/config` 只读 `listen/db_path/web_dir/tls`(业务数据全部在 DB)
 - `internal/domain` v2 实体 DTO(兼 API body)
-- `internal/store` SQLite(schema 版本化 + channels/models/offers/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合)
+- `internal/store` SQLite(schema 版本化 + channels/models/offers/official_prices/channel_vendor_costs/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合)
 - `internal/secret` AES-GCM 渠道密钥(主密钥 `GW_MASTER_KEY` 或 DB 同目录 `gateway.master.key` 0600)
 - `internal/engine` 选路决策:候选(启用供给源 ∩ 未熔断渠道 ∩ 命中规则)→ 策略排序 → 重试/兜底
+- `internal/pricing` 官方价来源:commandcode 单页锚点抓取(唯一可抓来源,见 DESIGN §5.6)+ 厂商登记表 + 手工录入 + 分时选价
 - `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
 - `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管

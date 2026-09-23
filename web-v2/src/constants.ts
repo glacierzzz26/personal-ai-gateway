@@ -1,9 +1,14 @@
 import type { Capability, ChannelType, EgressProto, Provider, QuotaShape } from '@/types';
 
 /** 真实厂商全集(与后端 domain.Providers 一致,勿单独增删)。
- *  已不含 Azure / 聚合中转 —— 前者按区域部署定价不是厂商,后者根本是渠道而非厂商。 */
+ *  已不含 Azure / 聚合中转 —— 前者按区域部署定价不是厂商,后者根本是渠道而非厂商。
+ *  commandcode 单页含 20 家模型来源(见 issue #27),后 14 家据此扩容;
+ *  厂商归属按 CC 详情页 JSON-LD 的 brand 逐模型核对(LongCat→Meituan)。 */
 export const providers: Provider[] = [
   'OpenAI', 'Anthropic', 'DeepSeek', '通义千问', '智谱', 'Moonshot',
+  'Google', 'xAI', 'Xiaomi', 'Meta', 'MiniMax',
+  'NVIDIA', 'Tencent', 'StepFun', 'Meituan',
+  'Thinking Machines', 'Sakana AI', 'Poolside', 'InclusionAI', 'Jev',
 ];
 
 /** 渠道类型全集(与后端 domain.ChannelTypes 一致)。决定上游额度怎么查。

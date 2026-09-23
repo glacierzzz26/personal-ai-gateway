@@ -32,13 +32,13 @@ func (s *Store) SettleRequest(log domain.LogRow, chargeWallet bool) error {
 	res, err := tx.Exec(`INSERT INTO request_logs (
 		ts, model, channel_id, channel_name, token_id, token_name, owner_id,
 		client_tool, protocol, stream, status,
-		prompt_tokens, completion_tokens, cache_read_tokens, cost, charge_usd,
+		prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, cost, charge_usd,
 		cost_source, price_window,
 		first_token_ms, total_ms, ip, err
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		formatRFC3339(log.TS), log.Model, log.ChannelID, log.ChannelName, log.TokenID, log.TokenName, log.OwnerID,
 		log.ClientTool, log.Protocol, b2i(log.Stream), log.Status,
-		log.PromptTokens, log.Completion, log.CacheRead, log.CostUsd, log.ChargeUsd,
+		log.PromptTokens, log.Completion, log.CacheRead, log.CacheWrite, log.CostUsd, log.ChargeUsd,
 		log.CostSource, log.PriceWindow,
 		log.FirstTokenMs, log.TotalMs, log.IP, errField)
 	if err != nil {

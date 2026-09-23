@@ -334,25 +334,28 @@ func convertO2ANonStream(raw []byte) (outBody []byte, tok Usage, err error) {
 	if err != nil {
 		return nil, Usage{}, fmt.Errorf("translate o2a: marshal openai response: %w", err)
 	}
-	return outBody, Usage{Prompt: u.Prompt, Completion: u.Completion, CacheRead: u.CacheRead}, nil
+	return outBody, Usage{Prompt: u.Prompt, Completion: u.Completion, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}, nil
 }
 
 // anthropicToOUsage:anthropic usage(input 不含缓存)→ 归一化 Usage。
-// 遵守 Usage 不变式:Prompt 只含按正常输入价计费的部分(InputTokens + CacheCreation),
-// 缓存命中单列 CacheRead —— 否则 costUsd 会对缓存命中既按输入价、又按缓存价各收一次。
+// 遵守 Usage 不变式:Prompt 只含按正常输入价计费的部分(InputTokens),
+// 缓存命中单列 CacheRead、缓存写单列 CacheWrite —— 否则 costUsd 会把它们错按输入价计
+// (缓存读会既按输入价又按缓存价各收一次;缓存写则系统性低估,Anthropic 按 1.25× 收)。
 // openai 客户端要看的 prompt_tokens(含全部输入)在 o2aUsageJSON 里由 Prompt+CacheRead 还原。
 func anthropicToOUsage(a *anthropicUsage) Usage {
 	return Usage{
-		Prompt:     a.InputTokens + a.CacheCreation,
+		Prompt:     a.InputTokens,
 		Completion: a.OutputTokens,
 		CacheRead:  a.CacheRead,
+		CacheWrite: a.CacheCreation,
 	}
 }
 
 func o2aUsageJSON(u Usage) map[string]any {
-	// openai 口径:prompt_tokens 含全部输入(含缓存命中),cached_tokens 单列明细。
+	// openai 口径:prompt_tokens 含全部输入(含缓存命中与缓存写),cached_tokens 单列明细。
+	// 缓存写必须并回 prompt_tokens —— openai 侧没有独立字段,漏掉就是少报输入。
 	return map[string]any{
-		"prompt_tokens":         u.Prompt + u.CacheRead,
+		"prompt_tokens":         u.Prompt + u.CacheRead + u.CacheWrite,
 		"completion_tokens":     u.Completion,
 		"prompt_tokens_details": map[string]any{"cached_tokens": u.CacheRead},
 	}
@@ -457,6 +460,7 @@ func (s *o2aStream) feed(payload string) error {
 			u := anthropicToOUsage(ev.Message.Usage)
 			s.usage.Prompt = u.Prompt
 			s.usage.CacheRead = u.CacheRead
+			s.usage.CacheWrite = u.CacheWrite
 		}
 	case "content_block_start":
 		if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {

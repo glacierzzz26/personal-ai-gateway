@@ -188,6 +188,32 @@ func anthropicUpstream(t *testing.T, echo string, status int) *httptest.Server {
 	return up
 }
 
+// anthropicUpstreamUsage 同 anthropicUpstream,但 usage 可定制(缓存写/缓存读计费用)。
+func anthropicUpstreamUsage(t *testing.T, echo string, status int, usage map[string]any) *httptest.Server {
+	t.Helper()
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if status != http.StatusOK {
+			_, _ = fmt.Fprintf(w, `{"type":"error","error":{"type":"api_error","message":"boom"}}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "msg_e2e", "type": "message", "role": "assistant", "model": "m",
+			"content":     []any{map[string]any{"type": "text", "text": echo}},
+			"usage":       usage,
+			"stop_reason": "end_turn",
+		})
+	})
+	up := httptest.NewServer(h)
+	t.Cleanup(up.Close)
+	return up
+}
+
 const chatBody = `{"model":"%s","messages":[{"role":"user","content":"hi"}]}`
 const messagesBody = `{"model":"%s","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
 
@@ -652,6 +678,112 @@ func TestE2ERetailPriceBilledFromOfficial(t *testing.T) {
 	// flat 形态不该记档位 —— 只有分时模型才有峰谷。
 	if logs[0].PriceWindow != "" {
 		t.Errorf("flat 模型不该有 priceWindow, got %q", logs[0].PriceWindow)
+	}
+}
+
+// TestE2ECacheWriteBilledAtItsOwnPrice 缓存写(cache_creation)按**自己的价**计费,
+// 不再折进输入 token 按输入价计 —— 补 m0013 的核心验收(issue #27 commit 2)。
+//
+// 上游是 Anthropic(客户端也是 anthropic 协议,走同协议 fast path),固定
+// input=12 / output=8 / cache_creation=4 / cache_read=3。
+// 官方价 USD in 3 / out 15 / cacheRead 0.3 / cacheWrite 3.75;计价 CNY 汇率 0.1 → 每百万
+// ¥30/¥150/¥3/¥37.5。倍率 1、渠道系数 1(未设)= 收支同价,便于逐项核对。
+//
+//	成本 = 12×30 + 8×150 + 3×3 + 4×37.5 = 360+1200+9+150 = 1719(/1e6 = 0.001719)
+//
+// 若缓存写被折进 input(旧行为):prompt 会变成 16,成本 = 16×30+… = 0.001839 —— 高 0.00012,
+// 且随缓存写 token 数线性放大。这条正是「成本被系统性低估」的回归钉子。
+func TestE2ECacheWriteBilledAtItsOwnPrice(t *testing.T) {
+	e := newE2E(t)
+	up := anthropicUpstreamUsage(t, "pong", http.StatusOK, map[string]any{
+		"input_tokens": 12, "output_tokens": 8,
+		"cache_creation_input_tokens": 4, "cache_read_input_tokens": 3,
+	})
+	chID := e.addChannel("oa", domain.ProviderAnthropic, up.URL, "sk-oa", 1)
+	model := "claude-sonnet-5"
+	e.addModelOffer(model, chID, 1)
+
+	e.bindOfficial(model, domain.ProviderAnthropic, "claude-sonnet-5-20250929", domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15, CacheReadPrice: 0.3, CacheWritePrice: 3.75,
+	})
+	settings, err := e.st.GetSettings()
+	if err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	settings.DisplayCurrency = domain.CurrencyCNY
+	settings.USDPerCNY = 0.1
+	settings.PriceMultiplier = 1
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/messages", key, true, fmt.Sprintf(messagesBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	// 归一化口径:prompt 只含 input(12),缓存写单列 4,缓存读单列 3。
+	if logs[0].InTokens != 12 || logs[0].CacheWrite != 4 || logs[0].CacheRead != 3 {
+		t.Errorf("token 口径 = in:%d cw:%d cr:%d, want in 12 cw 4 cr 3",
+			logs[0].InTokens, logs[0].CacheWrite, logs[0].CacheRead)
+	}
+	const want = 0.001719
+	if d := logs[0].CostUsd - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want %v(缓存写按自身价 4×¥37.5 计)", logs[0].CostUsd, want)
+	}
+	if d := logs[0].ChargeUsd - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("charge = %v, want %v(倍率 1)", logs[0].ChargeUsd, want)
+	}
+}
+
+// TestE2ECacheWriteFallsBackToInputPrice 官方价没给缓存写价(0 = 无依据)时,
+// 缓存写 token 按**输入价**计 —— 与「cache_creation 折进 input」的旧账面逐位一致,
+// 所以补 m0013 对未提供该价的厂商不是回归。
+//
+// 同 fixture 但 CacheWritePrice=0:成本 = (12+4)×30 + 8×150 + 3×3 = 480+1200+9 = 1689。
+func TestE2ECacheWriteFallsBackToInputPrice(t *testing.T) {
+	e := newE2E(t)
+	up := anthropicUpstreamUsage(t, "pong", http.StatusOK, map[string]any{
+		"input_tokens": 12, "output_tokens": 8,
+		"cache_creation_input_tokens": 4, "cache_read_input_tokens": 3,
+	})
+	chID := e.addChannel("oa", domain.ProviderAnthropic, up.URL, "sk-oa", 1)
+	model := "claude-sonnet-5"
+	e.addModelOffer(model, chID, 1)
+
+	e.bindOfficial(model, domain.ProviderAnthropic, "claude-sonnet-5-20250929", domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15, CacheReadPrice: 0.3, CacheWritePrice: 0, // 未给 → 回落 input
+	})
+	settings, err := e.st.GetSettings()
+	if err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	settings.DisplayCurrency = domain.CurrencyCNY
+	settings.USDPerCNY = 0.1
+	settings.PriceMultiplier = 1
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	code, body := e.post("/v1/messages", key, true, fmt.Sprintf(messagesBody, model))
+	if code != http.StatusOK {
+		t.Fatalf("status %d body %s", code, body)
+	}
+	logs := e.logsFor()
+	if len(logs) != 1 {
+		t.Fatalf("logs = %+v", logs)
+	}
+	const want = 0.001689
+	if d := logs[0].CostUsd - want; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("cost = %v, want %v(缓存写价缺失 → 按 input 价)", logs[0].CostUsd, want)
 	}
 }
 

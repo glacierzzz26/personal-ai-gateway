@@ -62,6 +62,7 @@ export default function ManualPriceModal({
       inputPrice: 0,
       outputPrice: 0,
       cacheReadPrice: 0,
+      cacheWritePrice: 0,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultProvider, defaultModelName]);
@@ -124,7 +125,12 @@ export default function ManualPriceModal({
           <Form.Item name="outputPrice" label="输出价(每百万 tokens)" rules={[{ required: true, message: '必填' }]} style={{ flex: 1 }}>
             <InputNumber min={0} precision={4} step={0.01} style={{ width: 160 }} />
           </Form.Item>
+        </Space>
+        <Space size={12} style={{ display: 'flex' }}>
           <Form.Item name="cacheReadPrice" label="缓存命中读价" style={{ flex: 1 }}>
+            <InputNumber min={0} precision={4} step={0.01} style={{ width: 160 }} />
+          </Form.Item>
+          <Form.Item name="cacheWritePrice" label="缓存写入价" tooltip="留 0 = 无依据(计费按输入价回落)" style={{ flex: 1 }}>
             <InputNumber min={0} precision={4} step={0.01} style={{ width: 160 }} />
           </Form.Item>
         </Space>

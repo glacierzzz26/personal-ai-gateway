@@ -1,8 +1,13 @@
 /** 真实厂商(卖的是谁的模型)。已不含 Azure / 聚合中转 —— 出站协议见 EgressProto,
- *  渠道上游归属见 ChannelType。空串 = 不是单一厂商(多厂商聚合渠道)。 */
+ *  渠道上游归属见 ChannelType。空串 = 不是单一厂商(多厂商聚合渠道)。
+ *  与后端 domain.Providers 一致(commandcode 单页含 20 家,见 issue #27)。 */
 export type Provider =
   | 'OpenAI' | 'Anthropic' | 'DeepSeek'
-  | '通义千问' | '智谱' | 'Moonshot' | '';
+  | '通义千问' | '智谱' | 'Moonshot'
+  | 'Google' | 'xAI' | 'Xiaomi' | 'Meta' | 'MiniMax'
+  | 'NVIDIA' | 'Tencent' | 'StepFun' | 'Meituan'
+  | 'Thinking Machines' | 'Sakana AI' | 'Poolside' | 'InclusionAI' | 'Jev'
+  | '';
 
 /** 渠道类型:决定上游额度怎么查。 */
 export type ChannelType = 'deepseek' | 'commandcode' | 'opencode' | 'thirdparty';
@@ -80,6 +85,8 @@ export interface ModelOffer {
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd?: number;
+  /** 手填兜底成本里的缓存写价(0/缺省 = 无依据 → 缓存写 token 按 input 价计) */
+  cacheWritePriceUsd?: number;
   overridePrice: boolean;
   latencyMs: number;
   successRate: number;
@@ -109,12 +116,14 @@ export type CostSource = 'official' | 'offer' | 'unknown';
  * 供给源成本的派生视图(每百万 token,计价币种)。
  *
  * 成本不落库,是「官方价 × 渠道系数」现算的 —— 官方价一变、系数一改即时生效。
- * source='unknown' 时三价恒为 0,前端据此显示「成本未知」而非「成本 0」。
+ * source='unknown' 时四价恒为 0,前端据此显示「成本未知」而非「成本 0」。
  */
 export interface CostQuote {
   in: number;
   out: number;
   cacheRead: number;
+  /** 缓存写价;0 = 该行/该 offer 无依据(计费时按 in 价回落) */
+  cacheWrite?: number;
   source: CostSource;
   /** 仅 source='official' 时有值 */
   vendor?: Provider;
@@ -133,6 +142,8 @@ export interface OfferDraft {
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd?: number;
+  /** 手填兜底成本里的缓存写价(0/缺省 = 无依据 → 缓存写 token 按 input 价计) */
+  cacheWritePriceUsd?: number;
   overridePrice?: boolean;
   rateLimitRpm: number;
   enabled?: boolean;
@@ -206,11 +217,13 @@ export interface UserModelItem {
   priceNote?: string;
 }
 
-/** 用户面每百万 token 的三价(计价币种) */
+/** 用户面每百万 token 的四价(计价币种) */
 export interface UserPrice {
   input: number;
   output: number;
   cacheRead: number;
+  /** 缓存写价;0 = 无依据(计费按 input 价回落) */
+  cacheWrite?: number;
   currency: string;
 }
 
@@ -273,6 +286,10 @@ export interface RefreshPricingResp {
   backfillError?: string;
   totalUpserted: number;
   totalRemoved?: number;
+  /** commandcode 单页锚点抓取结果(issue #27;现已取代逐厂商抓取) */
+  commandCode?: CommandCodeFetchResult;
+  /** commandcode 抓取失败原因(不影响 results 里的其他结果) */
+  commandCodeError?: string;
 }
 
 export interface GatewayToken {
@@ -346,6 +363,8 @@ export interface RequestLogItem {
   inTokens: number;
   outTokens: number;
   cacheReadTokens?: number;
+  /** 缓存写 token(cache_creation);已从 inTokens 中拆出,不再折进输入 */
+  cacheWriteTokens?: number;
   costUsd: number;
   /** 实际向归属用户钱包扣的金额(计价币种,= 官方价 × 归属用户倍率;无官方价时回落成本 × 倍率);0 = 未结算(失败请求 / 管理员键) */
   chargeUsd?: number;
@@ -502,6 +521,8 @@ export interface OfficialPrice {
   inputPrice: number;
   outputPrice: number;
   cacheReadPrice: number;
+  /** 缓存写价(官方原币种);0 = 页面未给(计费按 input 价回落) */
+  cacheWritePrice?: number;
   /** 缓存价由官方规则推导(非官方列,如通义) */
   cacheDerived: boolean;
   nativeText?: string;
@@ -520,10 +541,32 @@ export interface OfficialPriceView extends OfficialPrice {
   inputPriceUsd: number;
   outputPriceUsd: number;
   cacheReadPriceUsd: number;
+  /** 缓存写价;0 = 该行没给(计费按 input 价回落) */
+  cacheWritePriceUsd: number;
   /** 金额可用:原币种与计价币种一致,或已按汇率折算成功 */
   rateSet: boolean;
   /** 已应用该官方价(来源 URL + 抓取时间匹配)的 offer */
   appliedOfferIds: number[];
+}
+
+/** 一个厂商的落库行数(commandcode 抓取结果按厂商分行展示) */
+export interface ProviderCount {
+  provider: Provider;
+  count: number;
+}
+
+/** POST /official-prices/fetch-commandcode 返回(issue #27) */
+export interface CommandCodeFetchResult {
+  sourceUrl: string;
+  contentSha256?: string;
+  /** 表内数据行数(含免费行) */
+  totalRows: number;
+  /** 落库行数(不含免费行) */
+  upserted: number;
+  removed?: number;
+  perVendor: ProviderCount[];
+  /** 被跳过、未落库的免费模型("显示名(slug)") */
+  freeSkipped?: string[];
 }
 
 /** POST /channels/{id}/fetch-pricing 返回。失败即失败:failed 非空且 upserted=0。 */
@@ -547,6 +590,8 @@ export interface ManualPriceDraft {
   inputPrice: number;
   outputPrice: number;
   cacheReadPrice?: number;
+  /** 缓存写价;0/缺省 = 无依据(计费按输入价回落) */
+  cacheWritePrice?: number;
   nativeText?: string;
   note?: string;
 }

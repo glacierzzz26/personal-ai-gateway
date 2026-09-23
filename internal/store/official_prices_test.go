@@ -76,11 +76,11 @@ func TestApplyOfficialPriceWritesProvenanceNotOverride(t *testing.T) {
 	q, err := st.UpsertOfficialPrice(mkOfficialPrice(domain.ProviderDeepSeek, "deepseek-flash", "https://api-docs.deepseek.com/x", 1, 4))
 	mustNoErr(t, err, "upsert")
 
-	mustNoErr(t, st.ApplyOfficialPrice(of.ID, q, 0.14, 0.56, 0.0028), "apply")
+	mustNoErr(t, st.ApplyOfficialPrice(of.ID, q, 0.14, 0.56, 0.0028, 0.0175), "apply")
 
 	got, err := st.GetOffer(of.ID)
 	mustNoErr(t, err, "get offer")
-	if got.InputPriceUsd != 0.14 || got.OutputPriceUsd != 0.56 || got.CacheReadPriceUsd != 0.0028 {
+	if got.InputPriceUsd != 0.14 || got.OutputPriceUsd != 0.56 || got.CacheReadPriceUsd != 0.0028 || got.CacheWritePriceUsd != 0.0175 {
 		t.Errorf("prices not applied: %+v", got)
 	}
 	if !got.OverridePrice {

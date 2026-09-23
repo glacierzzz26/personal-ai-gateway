@@ -42,10 +42,11 @@ func TestInferVendor(t *testing.T) {
 
 func TestVendors(t *testing.T) {
 	vs := Vendors()
-	// S4 后:DeepSeek/通义(可抓)+ 智谱/Anthropic/OpenAI/Moonshot(仅手工)= 6。
-	// (Azure 已从 provider 枚举移除 —— 按区域部署定价,不是厂商。)
-	if len(vs) != 6 {
-		t.Fatalf("Vendors() len = %d, want 6: %+v", len(vs), vs)
+	// issue #27 后:逐厂商官网抓取停用,官方价唯一锚点来源是 commandcode 单页
+	// (见 commandcode.go)。本表收窄为「厂商登记表」—— 覆盖 CC 上全部 20 家,
+	// 全部 ManualOnly(抓取由 CC 路径负责,这里的 URL 供人工核对与手工录入)。
+	if len(vs) != len(domain.Providers) {
+		t.Fatalf("Vendors() len = %d, want %d: %+v", len(vs), len(domain.Providers), vs)
 	}
 	// 字典序稳定输出。
 	for i := 1; i < len(vs); i++ {
@@ -60,23 +61,23 @@ func TestVendors(t *testing.T) {
 		}
 		byP[v.Provider] = v
 	}
-	// 仅手工厂商:抓不了,但支持手工录入,且带出默认原币。
+	// 全部厂商均仅手工(自动抓取已收敛到 CC 单页一处)。
+	for _, v := range vs {
+		if !v.ManualOnly {
+			t.Errorf("%s 应为仅手工(逐厂商抓取已停用,官方价由 CC 锚点写入)", v.Provider)
+		}
+	}
+	// 仅手工厂商带出默认原币。
 	for p, cur := range map[domain.Provider]domain.Currency{
 		domain.ProviderZhipu:     domain.CurrencyCNY,
 		domain.ProviderAnthropic: domain.CurrencyUSD,
 		domain.ProviderOpenAI:    domain.CurrencyUSD,
 		domain.ProviderMoonshot:  domain.CurrencyCNY,
+		domain.ProviderDeepSeek:  domain.CurrencyCNY,
+		domain.ProviderQwen:      domain.CurrencyCNY,
 	} {
-		if !byP[p].ManualOnly {
-			t.Errorf("%s should be manual-only", p)
-		}
 		if byP[p].ManualCurrency != cur {
 			t.Errorf("%s manualCurrency = %q, want %q", p, byP[p].ManualCurrency, cur)
-		}
-	}
-	for _, p := range []domain.Provider{domain.ProviderDeepSeek, domain.ProviderQwen} {
-		if byP[p].ManualOnly {
-			t.Errorf("%s should be fetchable", p)
 		}
 	}
 }

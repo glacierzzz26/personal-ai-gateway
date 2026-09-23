@@ -51,7 +51,7 @@ func TestShapePricePeakOffpeakByTime(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, out, _, peak, err := ShapePrice(q, c.at, 480)
+			_, out, _, _, peak, err := ShapePrice(q, c.at, 480)
 			if err != nil {
 				t.Fatalf("ShapePrice: %v", err)
 			}
@@ -70,20 +70,20 @@ func TestShapePriceLegacyDetailWithoutWindows(t *testing.T) {
 	if _, ok := q.Detail["windows"]; ok {
 		t.Fatal("夹具不该带 windows")
 	}
-	if _, out, _, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480); err != nil || !peak || out != 8 {
+	if _, out, _, _, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480); err != nil || !peak || out != 8 {
 		t.Errorf("旧行高峰选价: peak=%v out=%v err=%v, want peak=true out=8", peak, out, err)
 	}
-	if _, out, _, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 3, 0), 480); err != nil || peak || out != 4 {
+	if _, out, _, _, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 3, 0), 480); err != nil || peak || out != 4 {
 		t.Errorf("旧行谷段选价: peak=%v out=%v err=%v, want peak=false out=4", peak, out, err)
 	}
 }
 
 // TestShapePriceUnknownPeakHoursFallsBackToScalar peakHours 非空但**不是**本仓库写死的那个
-// 字面量时,一律不猜(厂商可能真改了时段)→ 回落标量三价(生效默认价)。
+// 字面量时,一律不猜(厂商可能真改了时段)→ 回落标量四价(生效默认价)。
 func TestShapePriceUnknownPeakHoursFallsBackToScalar(t *testing.T) {
 	q := deepseekRow(true)
 	q.Detail["peakHours"] = "每晚 20:00-22:00"
-	_, out, _, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480)
+	_, out, _, _, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480)
 	if err != nil {
 		t.Fatalf("ShapePrice: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestShapePriceUnknownPeakHoursFallsBackToScalar(t *testing.T) {
 	mustClose(t, "out", out, q.OutputPrice) // = 标量
 }
 
-// TestShapePriceTieredIgnoresTiers 阶梯价**必须**等价于标量三价 —— 绝不消费 detail["tiers"]。
+// TestShapePriceTieredIgnoresTiers 阶梯价**必须**等价于标量四价 —— 绝不消费 detail["tiers"]。
 //
 // 生产 166 行通义官方价的 tiers 是坏的(qwen3-max 15 档里 0<Token≤32K 重复 4 次且价不同;
 // qwen3.7-plus 的 range 全为空串)。这条单测钉住「选价器不碰 tiers」这个红线。
@@ -113,7 +113,7 @@ func TestShapePriceTieredIgnoresTiers(t *testing.T) {
 		},
 	}
 	// 故意挑高峰时刻:若实现误按 windows 选价,out 会变。
-	in, out, cache, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480)
+	in, out, cache, cacheW, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480)
 	if err != nil {
 		t.Fatalf("ShapePrice: %v", err)
 	}
@@ -123,12 +123,38 @@ func TestShapePriceTieredIgnoresTiers(t *testing.T) {
 	mustClose(t, "in", in, 2.5)
 	mustClose(t, "out", out, 10.0)
 	mustClose(t, "cache", cache, 0.5)
+	// 该行没给缓存写价(0)→ 回落 input 价 2.5,与「折进 prompt」的旧行为一致。
+	mustClose(t, "cacheWrite", cacheW, 2.5)
+}
+
+// TestShapePriceCacheWritePeakFallback 缓存写价是**行级标量**,不随档位变;但为 0(无依据)时
+// 必须回落到**该时刻生效的输入价** —— 峰时回落峰价、谷时回落谷价,而不是永远回落谷价标量。
+func TestShapePriceCacheWritePeakFallback(t *testing.T) {
+	// ① 行给了缓存写价:峰谷两档都用它,不随档位走。
+	q := deepseekRow(false)
+	q.CacheWritePrice = 3.0
+	_, _, _, cw, peak, err := ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480)
+	if err != nil || !peak || cw != 3.0 {
+		t.Errorf("峰时给定缓存写价: cw=%v peak=%v err=%v, want cw=3 peak=true", cw, peak, err)
+	}
+	_, _, _, cw, _, err = ShapePrice(q, beijing(2026, time.September, 14, 3, 0), 480)
+	if err != nil || cw != 3.0 {
+		t.Errorf("谷时给定缓存写价: cw=%v err=%v, want cw=3", cw, err)
+	}
+
+	// ② 行没给(0):峰时回落峰输入价 2.0、谷时回落谷输入价 1.0。
+	q.CacheWritePrice = 0
+	_, _, _, cw, _, _ = ShapePrice(q, beijing(2026, time.September, 14, 10, 0), 480)
+	mustClose(t, "峰时回落缓存写价", cw, 2.0)
+	_, _, _, cw, _, _ = ShapePrice(q, beijing(2026, time.September, 14, 3, 0), 480)
+	mustClose(t, "谷时回落缓存写价", cw, 1.0)
 }
 
 // TestIsPeakWindowTimezoneWins 窗口自带的 tzOffsetMin 优先于调用方回退时区。
 // 峰谷时段是厂商属性(DeepSeek 按北京时间),站点展示时区不该改写它。
 func TestIsPeakWindowTimezoneWins(t *testing.T) {
-	ws := []PriceWindow{{Days: []int{1}, Start: "09:00", End: "12:00", TZOffsetMin: 480}}
+	// TZSet 表示「该偏移是显式给定的」—— 内存构造的窗口必须显式置位(见 PriceWindow.TZSet 注释)。
+	ws := []PriceWindow{{Days: []int{1}, Start: "09:00", End: "12:00", TZOffsetMin: 480, TZSet: true}}
 	// 北京周一 10:00 = UTC 02:00。若误用 UTC(+0)判定会落到周一 02:00 → 谷段。
 	at := time.Date(2026, time.September, 14, 2, 0, 0, 0, time.UTC)
 	peak, err := IsPeak(ws, at, 0)

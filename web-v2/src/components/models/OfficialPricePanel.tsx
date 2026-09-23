@@ -93,7 +93,7 @@ export default function OfficialPricePanel({ model, offers }: Props) {
    * 改造前它把官方价**写进该 offer 的三价**,而那正是「成本 = 官方挂牌价」这个 bug 的来源
    * (生产里模型 20 的 1.0/4.0/0.02 就是这么来的)。现在成本 = 官方价 × 渠道系数,是现算的,
    * 真正让成本生效的动作是写 models.official_vendor/official_model_name —— 即本按钮。
-   * 后端顺带把三价快照进该模型全部 offer,仅作派生不可用时的兜底。
+   * 后端顺带把四价快照进该模型全部 offer,仅作派生不可用时的兜底。
    */
   function handleApply(o: ModelOffer, op: OfficialPriceView) {
     if (!op.rateSet) {
@@ -149,6 +149,13 @@ export default function OfficialPricePanel({ model, offers }: Props) {
             <div className="gw-num" style={{ color: 'var(--gw-text-2)' }}>
               {cur}{op.inputPrice} / {cur}{op.outputPrice}
             </div>
+            {(op.cacheReadPrice || op.cacheWritePrice) && (
+              <div className="gw-num" style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
+                {op.cacheReadPrice ? `缓存读 ${cur}${op.cacheReadPrice}` : ''}
+                {op.cacheReadPrice && op.cacheWritePrice ? ' · ' : ''}
+                {op.cacheWritePrice ? `缓存写 ${cur}${op.cacheWritePrice}` : ''}
+              </div>
+            )}
             {needsConvert && op.rateSet && (
               <div className="gw-num" style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
                 ≈ {fmt.price(op.inputPriceUsd)} / {fmt.price(op.outputPriceUsd)}
@@ -215,7 +222,7 @@ export default function OfficialPricePanel({ model, offers }: Props) {
     >
       <DegradedNote title="成本由官方价派生,此处只做绑定">
         成本 = 官方价 × 渠道系数,售价 = 官方价 × 倍率,都是现算的 —— 官方价一变、系数一改,全站即时重算。
-        点「绑定到模型」写下绑定关系(这是让派生成本生效的动作),并顺带把三价快照进供给源,
+        点「绑定到模型」写下绑定关系(这是让派生成本生效的动作),并顺带把四价快照进供给源,
         仅在该模型派生不可用(未设汇率等)时作兜底。来源 URL 与抓取时间可一键跳转核对。
       </DegradedNote>
 

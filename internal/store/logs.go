@@ -50,7 +50,7 @@ func (s *Store) ListLogs(f LogFilter, tzOffMin int) ([]domain.LogItem, int, erro
 	}
 
 	sqlStr := `SELECT id, ts, model, channel_name, token_name,
-		prompt_tokens, completion_tokens, cache_read_tokens, cost, charge_usd,
+		prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, cost, charge_usd,
 		cost_source, price_window,
 		first_token_ms, total_ms, status, ip, err
 		FROM request_logs` + where + ` ORDER BY id DESC LIMIT ? OFFSET ?`
@@ -125,7 +125,7 @@ func scanLog(row scanner, off time.Duration) (domain.LogItem, error) {
 	var it domain.LogItem
 	var ts, errText sql.NullString
 	if err := row.Scan(&it.ID, &ts, &it.Model, &it.ChannelName, &it.TokenName,
-		&it.InTokens, &it.OutTokens, &it.CacheRead, &it.CostUsd, &it.ChargeUsd,
+		&it.InTokens, &it.OutTokens, &it.CacheRead, &it.CacheWrite, &it.CostUsd, &it.ChargeUsd,
 		&it.CostSource, &it.PriceWindow,
 		&it.FirstTokenMs, &it.TotalMs, &it.StatusCode, &it.IP, &errText); err != nil {
 		return domain.LogItem{}, err
@@ -334,7 +334,7 @@ func (s *Store) ChannelStatsSince(sinceUTC time.Time) (map[int64]ChannelStat, er
 			COUNT(*),
 			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
 			COALESCE(SUM(total_ms),0),
-			COALESCE(SUM(prompt_tokens + completion_tokens + cache_read_tokens),0),
+			COALESCE(SUM(prompt_tokens + completion_tokens + cache_read_tokens + cache_write_tokens),0),
 			COALESCE(SUM(cost),0)
 		FROM request_logs
 		WHERE channel_id > 0 AND ts >= ?

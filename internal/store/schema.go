@@ -32,7 +32,32 @@ var migrations = []string{
 	m0011ChannelQuota,
 	// v12:渠道 × 厂商成本系数 + 成本口径审计(成本从「手填标量」改为「官方价 × 渠道系数」)
 	m0012ChannelVendorCost,
+	// v13:缓存写价(官方价/兜底价各一列 + 日志的缓存写 token)—— 补上被折进输入价的 cache_creation
+	m0013CacheWritePrice,
 }
+
+// m0013CacheWritePrice 给计费链补上「缓存写」(Anthropic cache_creation)这一项。
+//
+// 为什么必须补:改造前 cache_creation 被折进 prompt 按**普通输入价**计(见 proxy/usage.go),
+// 而厂商实际按**更高的缓存写价**收(Anthropic 约 1.25× 输入价)。于是 Claude 系请求的
+// `in` 口径系统性**低估** —— 多轮/长上下文的真实场景恰好最依赖缓存写,偏差最大。
+//
+// 三处新增列,语义各不相同,勿混:
+//   - official_prices.cache_write_price  官方价锚点的缓存写单价(CC 单页有该列;缺失记 0)
+//   - model_offers.cache_write_price_usd 手填兜底成本的缓存写单价(与既有四价同层)
+//   - request_logs.cache_write_tokens    该笔的缓存写 token 数(原被并进 prompt_tokens)
+//
+// 兼容与取舍(务必写清楚,否则日后对账会踩):
+//   - 存量 `official_prices` 行 cache_write 一律 0。CC 抓取会重写这些行并带上真值;
+//     在那之前,缓存写 token 按 input 价计(与改造前**逐位一致**,不是回归)。
+//   - 存量 `model_offers` 行同理为 0(兜底路径同规则回落 input 价)。
+//   - 存量 `request_logs.cache_write_tokens` 一律 0,旧行无法回溯拆分
+//     (prompt_tokens 里那部分是 cache_creation 还是真输入,已无从区分)—— 不臆造。
+const m0013CacheWritePrice = `
+ALTER TABLE official_prices ADD COLUMN cache_write_price REAL NOT NULL DEFAULT 0;
+ALTER TABLE model_offers    ADD COLUMN cache_write_price_usd REAL NOT NULL DEFAULT 0;
+ALTER TABLE request_logs    ADD COLUMN cache_write_tokens  INTEGER NOT NULL DEFAULT 0;
+`
 
 // m0012ChannelVendorCost 把成本从「每供给源手填三个标量」改成「官方价 × 渠道系数」:
 //
