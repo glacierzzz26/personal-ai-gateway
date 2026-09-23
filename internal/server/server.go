@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"personal-ai-gateway/internal/config"
 	"personal-ai-gateway/internal/domain"
@@ -33,13 +34,22 @@ type Server struct {
 	// pricingBase 覆盖官方定价抓取的基础 client(仅测试注入;生产 nil → 用 s.rl.Client)。
 	// 官方域名白名单在此之上照常套用,注入的 base 也不例外。
 	pricingBase func(p domain.Provider, settings domain.Settings) *http.Client
+
+	// 渠道额度网关级缓存(短 TTL + 在途去重;见 quota_cache.go)。
+	// 逐渠道与批量两条路径共用,避免首页/渠道页把上游打成密集轮询。
+	qmu    sync.Mutex
+	qcache map[int64]*quotaEntry
 }
 
 func New(cfg config.Config, st *store.Store) *Server {
 	eng := engine.New(st)
 	rl := proxy.NewRelay(st)
 	gw := proxy.NewGateway(st, eng, rl)
-	return &Server{cfg: cfg, st: st, log: slog.Default(), eng: eng, gw: gw, rl: rl}
+	return &Server{
+		cfg: cfg, st: st, log: slog.Default(),
+		eng: eng, gw: gw, rl: rl,
+		qcache: map[int64]*quotaEntry{},
+	}
 }
 
 // Handler 组装根路由(管理面 + 数据面 + 静态托管合并于一个 mux,dev/测试/明文口用)。
@@ -146,6 +156,9 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("GET /api/v1/customers/focus", adm(s.handleCustomersFocus))
 
 	m.HandleFunc("GET /api/v1/channels", adm(s.handleChannelsList))
+	// 批量额度必须注册在 {id} 之前:Go 1.22 ServeMux 的 "channels/quota" 与 "channels/{id}"
+	// 同为单段模式,更具体的字面量优先,故不会把 "quota" 当成一个渠道 id。
+	m.HandleFunc("GET /api/v1/channels/quota", adm(s.handleChannelsQuotaList))
 	m.HandleFunc("POST /api/v1/channels", adm(s.handleChannelsCreate))
 	m.HandleFunc("PATCH /api/v1/channels/{id}", adm(s.handleChannelsUpdate))
 	m.HandleFunc("DELETE /api/v1/channels/{id}", adm(s.handleChannelsDelete))

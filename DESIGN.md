@@ -104,7 +104,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 1. 入站:模型名必在 `models` 目录且 enabled;令牌 `allowed_models!='*'` 需匹配(精确或前缀通配),否则 404/403。
    模型名解析支持**统一名**(`display_name`)与真实名:`GetModelByPublicName` 先命中统一名,再回落真实名。
    令牌 `allowed_models` 同样对请求名与统一名各比对一次,重命名后按统一名配置的规则继续生效。
-2. 选路候选 = `offers(m).enabled ∧ offer.channel.enabled ∧ 渠道未熔断`。
+2. 选路候选 = `offers(m).enabled ∧ offer.channel.enabled ∧ 渠道未熔断`(熔断判定见 §5.4)。
    - 无命中规则 → 按 offer.priority 升序(= 抽屉拖拽序)逐个尝试。
    - 命中规则 → 候选收缩到 `rule.channel_ids ∩ offers`;策略:priority=渠道 priority 再 offer.priority;
      weight=按 `rule.weights`(缺省 channel.weight)加权;latency=按 EWMA 延迟升序。
@@ -224,6 +224,30 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 `channel_type` 为空按 `thirdparty` 处理(老行/未回填);第三方没配路径时明确回「未配置额度查询路径」,
 前端 `useQueries` 的 `enabled` 也据此不发起请求。
 
+**失败原因分类(`errorKind`,issue #18)。** 响应在 `error` 之外另给 `errorKind`,取值三选一:
+
+| `errorKind` | 含义 | 是否该告警 |
+|---|---|---|
+| `not_configured` | 第三方渠道未配 `quota_path` | **否**(常态) |
+| `unsupported` | 该 `channel_type` 没有已知额度接口 | **否**(常态) |
+| `fetch` | 已配置/本应可查,但这次查询失败(超时、非 2xx、解析不出) | 是(真故障) |
+
+分类用 `errors.Is(err, proxy.ErrQuota*)` 判定,**不匹配 `error` 文案** —— 上游换个措辞就失效。
+前端据此区分「查不了」与「查失败」;首页告警只认「有余量百分比且超阈值」,**`errorKind` 非空一律不算告警**
+(否则第三方「未配置」这个常态会让首页永远喊狼来了)。
+
+**网关级缓存与批量端点(issue #18)。** 额度查询是逐渠道打上游外网(每家 6s 超时),而首页每 15s 刷新、
+渠道页每渠道各一次 —— 不加缓冲会把上游打成密集轮询,且每次都等满 6s。故在管理面加一层
+**网关级短 TTL 缓存 + 在途去重**(`internal/server/quota_cache.go`):
+
+- 同一渠道的并发调用**只打一次上游**(在途去重);成功缓存 `quotaCacheTTL=60s`,失败缓存 `quotaFailTTL=20s`
+  (故障期不至于疯狂重试);调用方放弃(客户端断开 / 批量整体超时)的那次**不入缓存**,下次重打。
+- **逐渠道端点与批量端点共用此原语**,故两页看到同一份缓存、同一套口径。
+- `GET /api/v1/channels/quota` 批量端点(首页用):一次返回全渠道额度,服务端并发(上限 `quotaBatchLimit=4`)
+  且整体限制 `quotaBatchCap=10s`;个别慢上游由 ctx 取消 → 回 `errorKind=fetch`,不拖住整个首页。
+  元素形状 `{id, quota}`(与单渠道端点 `quota` 完全一致)。
+- 批量路径对**没配额度路径**的第三方渠道**不发请求**,直接给 `not_configured` 占位(与前端 `quotaEnabled` 同判据)。
+
 ### 关键坑位(实现时对照)
 - 管理端 PATCH 是**全量替换**(Update* 仓库方法会清零未传字段)。前端启停类操作用「先取全量快照再整包提交」
   (services/api.ts 的 toggle*/offerDraft 帮助器),勿发部分 body。
@@ -240,6 +264,32 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   否则会把该字段塞给不认识它的上游(OpenAI 官方/Azure)而新增 400。
 - SQLite WAL,个人读多写少足够;管理端写操作集中在事务内(额度扣减等)。
 
+### 5.4 熔断状态机与健康度口径(issue #17)
+
+渠道熔断是引擎里的**显式状态**(`circuit.openUntil`),三个态由 `engine.Claim` / `engine.CircuitState`
+统一表达 —— 选路的「能否选中」与读接口的「显示什么态」**共用同一个原语**,不再各判各的:
+
+| 态 | 条件 | 选路 | 列表展示 |
+|---|---|---|---|
+| `closed` 未熔断 | `openUntil` 零值;或冷却后有近期成功证据 | 放行 | `healthy`(有流量）/ `degraded`(成功率 < 80%) |
+| `down` 冷却中 | `now < openUntil` | **剔除** | `down` + `circuitOpen=true` + `availableFrom` |
+| `probing` 待复检 | 曾熔断、冷却已过、尚无近成功证据 | **只放行一次探测** | `unknown`(前端「待观察」) |
+
+要点与踩过的坑:
+
+- **「无流量 ≠ 健康」。** 旧实现里近 15 分钟统计为空就直接 `healthy`/100%,而冷却窗口(`cooldown_sec`)
+  常配得远大于 15 分钟 —— 一条刚熔断又恰好静默的渠道会显示回健康,引擎却仍在剔除它(issue #17)。
+  现在无流量一律 `unknown`,除非近期确有一次成功。
+- **半开只放行一次。** `Claim` 判定「冷却已过」时会把 `openUntil` 往后推一个冷却(原子占位),并发的
+  第二个请求随即被拒 —— 否则一条渠道下多个供给源会同时涌入刚恢复的上游。同渠道多个 offer 共用一次机会
+  (`Evaluate` 内按 `ChannelID` 去重)。
+- **管理台「测试」成功即算复检证据。** 探测走 `RecordSuccess`(与真实转发同一原语),引擎记
+  `circuit.lastOK`;于是无流量的渠道凭一次真实成功即可判 `healthy`,不必永远 `unknown`。
+  证据有效期:`failures==0` 取 15 分钟(对齐展示窗口),否则取 30s(对齐最小冷却)。
+- **失败的探测(499/中断)不写成功也不写失败**,`probing` 会持续到证据过期 —— 最多再等一个冷却,不漏判。
+- 前端 `HealthStatus` 增加 `unknown`(文案「待观察」,灰色),渠道页状态筛选与 latency 占位同步更新;
+  `unknown`/`down`/`disabled` 均无有效成功率与延迟,展示 `—`。
+
 ## 6. 管理 REST 契约(v2;会话鉴权)
 
 | 方法与路径 | 作用 |
@@ -250,7 +300,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `GET/POST /users` · `PATCH /users/{id}/password` · `DELETE /users/{id}` | 用户管理(仅 admin):建号/列号/重置密码/删号 |
 | `GET/POST /channels` · `GET/PATCH/DELETE /channels/{id}` | 渠道 CRUD(改时 apiKey 留空=保持) |
 | `POST /channels/{id}/test` · `/sync-models` | 连通探测 `{ok,latencyMs}`;拉 `/v1/models` 补目录+停用 offer |
-| `GET /channels/{id}/quota` | 用该渠道自己的 Key 问上游额度(按 `channel_type` 分发,见 §5.3) |
+| `GET /channels/{id}/quota` | 用该渠道自己的 Key 问上游额度(按 `channel_type` 分发,见 §5.3);走网关级短 TTL 缓存 |
+| `GET /channels/quota` | 批量渠道额度(首页用):一次拿全渠道,服务端并发 + 短路未配置渠道(见 §5.3) |
 | `GET/POST /models` · `PATCH/DELETE /models/{id}` | 目录(`name`=统一名、`originalName`=真实名)/新增/改(全量,`displayName` 非传=不变)/删;GET 全站可读 |
 | `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删 |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |

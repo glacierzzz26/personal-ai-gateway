@@ -576,8 +576,8 @@ func TestE2ETranslationErrorNotChannelFailure(t *testing.T) {
 	if code != http.StatusBadGateway {
 		t.Fatalf("status = %d body %s, want 502(翻译失败)", code, body)
 	}
-	if open, _ := e.gw.eng.CircuitOpen(ch.ID); open {
-		t.Fatalf("翻译失败被误记为渠道故障:渠道已熔断")
+	if state, _ := e.gw.eng.CircuitState(ch.ID); state != engine.CircuitClosed {
+		t.Fatalf("翻译失败被误记为渠道故障:渠道熔断态 = %s", state)
 	}
 }
 
