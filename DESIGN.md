@@ -104,7 +104,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 1. 入站:模型名必在 `models` 目录且 enabled;令牌 `allowed_models!='*'` 需匹配(精确或前缀通配),否则 404/403。
    模型名解析支持**统一名**(`display_name`)与真实名:`GetModelByPublicName` 先命中统一名,再回落真实名。
    令牌 `allowed_models` 同样对请求名与统一名各比对一次,重命名后按统一名配置的规则继续生效。
-2. 选路候选 = `offers(m).enabled ∧ offer.channel.enabled ∧ 渠道未熔断`。
+2. 选路候选 = `offers(m).enabled ∧ offer.channel.enabled ∧ 渠道未熔断`(熔断判定见 §5.4)。
    - 无命中规则 → 按 offer.priority 升序(= 抽屉拖拽序)逐个尝试。
    - 命中规则 → 候选收缩到 `rule.channel_ids ∩ offers`;策略:priority=渠道 priority 再 offer.priority;
      weight=按 `rule.weights`(缺省 channel.weight)加权;latency=按 EWMA 延迟升序。
@@ -239,6 +239,32 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - a2o 回填的 `reasoning_content` **只在缓存命中时注入**(§5.2)。改动谓词时务必保留这个前提,
   否则会把该字段塞给不认识它的上游(OpenAI 官方/Azure)而新增 400。
 - SQLite WAL,个人读多写少足够;管理端写操作集中在事务内(额度扣减等)。
+
+### 5.4 熔断状态机与健康度口径(issue #17)
+
+渠道熔断是引擎里的**显式状态**(`circuit.openUntil`),三个态由 `engine.Claim` / `engine.CircuitState`
+统一表达 —— 选路的「能否选中」与读接口的「显示什么态」**共用同一个原语**,不再各判各的:
+
+| 态 | 条件 | 选路 | 列表展示 |
+|---|---|---|---|
+| `closed` 未熔断 | `openUntil` 零值;或冷却后有近期成功证据 | 放行 | `healthy`(有流量）/ `degraded`(成功率 < 80%) |
+| `down` 冷却中 | `now < openUntil` | **剔除** | `down` + `circuitOpen=true` + `availableFrom` |
+| `probing` 待复检 | 曾熔断、冷却已过、尚无近成功证据 | **只放行一次探测** | `unknown`(前端「待观察」) |
+
+要点与踩过的坑:
+
+- **「无流量 ≠ 健康」。** 旧实现里近 15 分钟统计为空就直接 `healthy`/100%,而冷却窗口(`cooldown_sec`)
+  常配得远大于 15 分钟 —— 一条刚熔断又恰好静默的渠道会显示回健康,引擎却仍在剔除它(issue #17)。
+  现在无流量一律 `unknown`,除非近期确有一次成功。
+- **半开只放行一次。** `Claim` 判定「冷却已过」时会把 `openUntil` 往后推一个冷却(原子占位),并发的
+  第二个请求随即被拒 —— 否则一条渠道下多个供给源会同时涌入刚恢复的上游。同渠道多个 offer 共用一次机会
+  (`Evaluate` 内按 `ChannelID` 去重)。
+- **管理台「测试」成功即算复检证据。** 探测走 `RecordSuccess`(与真实转发同一原语),引擎记
+  `circuit.lastOK`;于是无流量的渠道凭一次真实成功即可判 `healthy`,不必永远 `unknown`。
+  证据有效期:`failures==0` 取 15 分钟(对齐展示窗口),否则取 30s(对齐最小冷却)。
+- **失败的探测(499/中断)不写成功也不写失败**,`probing` 会持续到证据过期 —— 最多再等一个冷却,不漏判。
+- 前端 `HealthStatus` 增加 `unknown`(文案「待观察」,灰色),渠道页状态筛选与 latency 占位同步更新;
+  `unknown`/`down`/`disabled` 均无有效成功率与延迟,展示 `—`。
 
 ## 6. 管理 REST 契约(v2;会话鉴权)
 

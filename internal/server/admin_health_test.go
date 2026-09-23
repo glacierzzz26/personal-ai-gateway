@@ -94,6 +94,52 @@ func TestChannelTestWritesBackHealth(t *testing.T) {
 	}
 }
 
+// TestChannelCircuitSurvivesIdle issue #17 回归:渠道熔断后即使**完全没有流量**,
+// 列表也必须如实反映熔断态 —— 旧实现里近 15 分钟统计为空就回 healthy/100%,
+// 于是空闲渠道(尤其低频/兜底)静默一会儿就「自愈」成健康,实际仍在被剔除。
+//
+// 两个阶段:
+//   - 冷却中(600s)→ down + circuitOpen=true;
+//   - 冷却已过但未复检(用 -1s 冷却模拟)→ unknown「待观察」,绝不显示 healthy。
+func TestChannelCircuitSurvivesIdle(t *testing.T) {
+	srv, c, s := newTestServerWithEng(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+
+	up := fakeUpstream(t, []string{"m1"})
+	id := createChannel(t, c, base, "idle-trip", up.URL)
+
+	// 阶段一:熔断 600s,期间不产生任何请求日志。
+	s.eng.RecordFailure(id, 1, 600)
+	ch := channelByID(t, c, base, id)
+	if ch["status"] != "down" || ch["circuitOpen"] != true {
+		t.Fatalf("cooling channel = %v, want down + circuitOpen", ch)
+	}
+	if ch["availableFrom"] == nil || ch["availableFrom"] == "" {
+		t.Fatalf("cooling channel must expose availableFrom: %v", ch)
+	}
+
+	// 阶段二:冷却已过、仍未复检 → 不得回 healthy。
+	s.eng.RecordFailure(id, 1, -1)
+	ch = channelByID(t, c, base, id)
+	if ch["status"] == "healthy" {
+		t.Fatalf("idle half-open channel reported healthy (issue #17): %v", ch)
+	}
+	if ch["status"] != "unknown" {
+		t.Fatalf("half-open channel status = %v, want unknown", ch["status"])
+	}
+	if open, _ := ch["circuitOpen"].(bool); open {
+		t.Fatalf("half-open channel must not be flagged circuitOpen: %v", ch)
+	}
+
+	// 复检成功后才回到健康。
+	s.eng.RecordSuccess(id, 42)
+	ch = channelByID(t, c, base, id)
+	if ch["status"] != "healthy" {
+		t.Fatalf("after successful probe status = %v, want healthy", ch["status"])
+	}
+}
+
 // TestChannelSyncModelCount Bug2:同步响应 modelCount 与渠道列表「N 个模型」一致,
 // 幂等重同步不重复计入 added。
 func TestChannelSyncModelCount(t *testing.T) {

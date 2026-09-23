@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"personal-ai-gateway/internal/domain"
+	"personal-ai-gateway/internal/engine"
 	"personal-ai-gateway/internal/pricing"
 	"personal-ai-gateway/internal/store"
 )
@@ -75,17 +76,31 @@ func (s *Server) modelTodayStats(nowUTC time.Time, tz int) (map[string]domain.Us
 	return m, nil
 }
 
-// channelHealth 由最近窗口请求算成功率/延迟/状态。enabled=false 直接 disabled。
+// channelHealth 由熔断态 + 最近窗口请求算成功率/延迟/状态。enabled=false 直接 disabled。
+//
+// 熔断态优先于窗口统计:冷却中 → down;冷却已过待复检(半开)→ 不算健康,
+// 用 StatusUnknown 表达「尚无流量验证」。**没有流量 ≠ 健康** —— 空闲渠道(低频、
+// 兜底)的成功率无从验证,只能记 unknown 等它自己跑一次;否则一条刚熔断又恰好
+// 静默的渠道会被窗口统计判成 healthy,而引擎仍在按半开剔除它。
 func (s *Server) channelHealth(v *adminView, id int64, enabled bool) (successRate float64, latencyMs int64, status domain.HealthStatus, open bool, availableFrom time.Time) {
 	if !enabled {
 		return 0, 0, domain.StatusDisabled, false, time.Time{}
 	}
-	if open, at := s.eng.CircuitOpen(id); open {
+	switch state, at := s.eng.CircuitState(id); state {
+	case engine.CircuitDown:
 		return 0, s.eng.LatencyMS(id), domain.StatusDown, true, at
+	case engine.CircuitProbing:
+		// 半开:曾熔断、冷却已过、等待一次真实复检。不报健康,也不报熔断中。
+		return 0, s.eng.LatencyMS(id), domain.StatusUnknown, false, time.Time{}
 	}
 	st, has := v.chRecent[id]
 	if !has || st.Requests == 0 {
-		return 100, s.eng.LatencyMS(id), domain.StatusHealthy, false, time.Time{}
+		// 无近期流量:只在最近确有一次成功(真实转发或管理台探测)时才敢报健康,
+		// 否则无从验证 → unknown。**没有流量 ≠ 健康**,空闲渠道不冒充已验证。
+		if !s.eng.LastSuccessAt(id).IsZero() {
+			return 100, s.eng.LatencyMS(id), domain.StatusHealthy, false, time.Time{}
+		}
+		return 0, s.eng.LatencyMS(id), domain.StatusUnknown, false, time.Time{}
 	}
 	rate := 100.0
 	if st.Requests > 0 {
