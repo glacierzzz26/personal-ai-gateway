@@ -1,10 +1,11 @@
-# release: 把 main / tag 编译打包成镜像推到 ghcr。lab 侧 gw-updater 轮询 :latest
-# 的 digest,变了才 pull + compose up —— 部署路径上没有编译。方案见 deploy/CI.md。
+# release: 把 main / tag 编译打包成镜像推到 ghcr。生产(aliyun)按版本用 upgrade.sh 拉取重建 ——
+# 部署路径上没有编译,也不是自动轮询(按需一键升级;见 deploy/README.md)。
 #
-#   push main       → ghcr.io/<repo>:<sha> 与 :latest
-#   push tag v*     → ghcr.io/<repo>:<sha> 与 :<tag>(latest 只跟 main)
-#   workflow_dispatch → 同上按分支处理(打 :<sha> + :latest)
+#   push main       → ghcr.io/<repo>:<ver> 与 :latest     (ver = v0.0.0-<sha7>,未发版恒 v0.0.0)
+#   push tag v*     → ghcr.io/<repo>:<ver> 与 :<tag>      (ver = v<tag>-<sha7>;latest 只跟 main)
+#   workflow_dispatch → 同上按分支处理(打 :<ver> + :latest)
 #
+# 版本号口径由 deploy/scripts/lib-version.sh 单一提供(与本地 build.sh、升级脚本一致)。
 # 推送用仓库内置 GITHUB_TOKEN(packages: write),无需自建 PAT。
 
 name: release
@@ -51,19 +52,28 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # 版本号 = 短 sha,与 /healthz、git describe --always 口径一致。
+      # 版本号 = lib-version.sh 的 gw_version(单一来源,与 build.sh / 升级脚本同口径):
+      #   push tag v*  → v<tag>-<sha7>     如 v0.9.0-4de1cde
+      #   其它(main)  → v0.0.0-<sha7>     如 v0.0.0-4de1cde(未发版恒为 v0.0.0)
+      # 发布纪律:镜像标签 = 版本号 + 短 hash;「光有短 hash 不够」。
       - name: Resolve version
         id: ver
-        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          . deploy/scripts/lib-version.sh
+          VER="$(gw_version .)"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          echo "版本号 $VER"
 
       - name: Build frontend
         run: cd web-v2 && npm ci --no-audit --no-fund && npm run build
 
       # 复用 build.sh:GETFRONT=0 跳过它内部的 npm(上面已构建),只做 Go 交叉编译
-      # + 组装上下文 + docker build。镜像名走 IMAGE(ghcr 全名)。
+      # + 组装上下文 + docker build。镜像名走 IMAGE(ghcr 全名);
+      # GIT_SHORT/SCHEMA_HEAD 由 build.sh 经 lib-version.sh 自行计算并烘焙。
       - name: Build image
         env:
-          VER: ${{ steps.ver.outputs.sha }}
+          VER: ${{ steps.ver.outputs.ver }}
           GETFRONT: '0'
         run: bash deploy/scripts/build.sh
 
@@ -72,15 +82,15 @@ jobs:
 
       - name: Tag and push
         env:
-          VER: ${{ steps.ver.outputs.sha }}
+          VER: ${{ steps.ver.outputs.ver }}
         run: |
           set -euo pipefail
+          docker push "$IMAGE:$VER"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # 正式发版:额外打语义化 tag(如 :v0.9.0);latest 只跟 main。
             docker tag "$IMAGE:$VER" "$IMAGE:${GITHUB_REF_NAME}"
-            docker push "$IMAGE:$VER"
             docker push "$IMAGE:${GITHUB_REF_NAME}"
           else
-            docker push "$IMAGE:$VER"
             docker push "$IMAGE:latest"
           fi
           echo "已推送 $IMAGE ($VER)"

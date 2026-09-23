@@ -52,6 +52,16 @@ func Open(path string) (*Store, error) {
 // Close 关闭底层连接。
 func (s *Store) Close() error { return s.db.Close() }
 
+// SchemaVersion 返回本库已应用的最大迁移号(0 = 空库/未迁移)。
+// 供 /healthz 回显与升级脚本判「降级是否会越过 DB 迁移」——迁移单向,旧版本读不了新库。
+func (s *Store) SchemaVersion() (int, error) {
+	var v int
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v); err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
 func (s *Store) DB() *sql.DB { return s.db }
 
 func (s *Store) nowUTC() time.Time { return s.now().UTC() }

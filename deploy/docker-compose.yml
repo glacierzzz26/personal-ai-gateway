@@ -5,13 +5,13 @@
 #     宿主发布口用 17081(非 17080)是必需的:与 Nginx 抢同一个 17080 会 bind 冲突。
 #   - 管理台:Nginx 回源 127.0.0.1:17090 —— **不再发布到 0.0.0.0**,
 #     旧「裸 IP:17090」入口已随域名上线退役(见 deploy/README.md「域名边缘」)。
-# 用法(常规,ghcr 链路):lab 上 GW_IMAGE_TAG=<sha> docker compose up -d;镜像自 ghcr.io。
+# 用法(常规,ghcr 链路):生产 `aliyun` 上 bash /opt/ai-gateway-v2/upgrade.sh <版本>;镜像自 ghcr.io。
 # 用法(应急/回滚,本地链路):deploy/scripts/deploy.sh —— 它显式设 GW_IMAGE=ai-gateway
 #   (本地短名)并把镜像 docker save 推过去,覆盖下方缺省值。
 # 密钥/证书不入 git;镜像自带 config.yaml 与前端产物,compose 只提供端口/证书/DB 挂载。
 services:
   gateway:
-    # 缺省走 ghcr 全名(lab 匿名可拉);deploy.sh 用 GW_IMAGE=ai-gateway 覆盖为本地短名。
+    # 缺省走 ghcr 全名(aliyun 匿名可拉);deploy.sh 用 GW_IMAGE=ai-gateway 覆盖为本地短名。
     image: ${GW_IMAGE:-ghcr.io/glacierzzz26/personal-ai-gateway}:${GW_IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: .env                      # GW_MASTER_KEY(渠道密钥主密钥;不换 key 则勿删)

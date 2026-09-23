@@ -1,10 +1,15 @@
-# CI/CD 方案:Actions 打包 → ghcr → lab 轮询自更新
+# CI/CD 方案:Actions 打包 → ghcr → 生产按版本升级
 
-> 状态:**已实施**(2026-09-15)。方案定稿于 2026-09-14,当日落地:见 `.github/workflows/release.yml`、
-> `deploy/scripts/update-from-ghcr.sh`、`deploy/gw-updater.{service,timer}`、`deploy/README.md`。
-> 一次性初始化(ghcr 包转 public、lab 装 timer)见 `README.md`。本文保留为方案与决策记录。
+> **勘误(2026-09-23,核实)**:本文原写的目标是 **`lab`(192.168.0.202)轮询自更新**,与实际不符 ——
+> 现网生产是 **`aliyun`(47.116.65.140,`/opt/ai-gateway-v2`)**,且 **`gw-updater` 从未安装**,
+> `release.yml` 当时也不在 `main`(从未真正产出过 ghcr 包)。故:
+> - **轮询自更新(`update-from-ghcr.sh` + `gw-updater.{service,timer}`)方案已弃用**,仅保留文件作历史;
+>   日常升级改用 **`upgrade.sh`**(按指定版本升级/回滚 + 备份 + 健康校验 + 降级护栏),见 `deploy/README.md`。
+> - 本文 §1 的实测约束表里,**「lab ...」诸行的主机名应读作「aliyun」**,其余(能拉 ghcr、不通 Docker Hub)对 aliyun 同样成立。
+> - 触发/标签口径已在 `release.yml` 落地,版本号单一来源改为 `deploy/scripts/lib-version.sh` 的 `gw_version`。
+>
 > 目标:push/打 tag 后**快速**把新版本送上生产。编译慢无所谓 —— 云端 runner 编译,
-> lab 只做「拉镜像 + 重建」,部署路径上没有编译。
+> 生产只做「拉镜像 + 重建」,部署路径上没有编译。
 
 ## 1. 约束(实测,决定了方案形状)
 
@@ -39,7 +44,7 @@ lab: gw-updater 定时器(每 60s)
 
 - GitHub 侧只负责**编译打包上传**(你的原话:「编译无所谓」)。
 - lab 侧只负责**拉取 + 重建**,永远不编译。
-- `version` 注入 `<sha>`,`/healthz` 与现有 `git describe --always` 口径一致,便于核对。
+- `version` 由 `lib-version.sh` 的 `gw_version` 注入(`v0.0.0-<sha7>` / `v<tag>-<sha7>`),`/healthz` 一并回 `schema`。
 
 ## 3. 已定决策
 

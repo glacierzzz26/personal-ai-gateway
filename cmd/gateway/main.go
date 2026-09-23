@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,26 @@ import (
 
 // version 由构建注入:go build -ldflags "-X main.version=v0.0.1";仅回显在 /healthz 与启动日志。
 var version = "dev"
+
+// resolveVersion 组装对外版本串。优先级:
+//  1. 镜像烘焙的 APP_VERSION + GIT_SHORT(生产镜像走这条,口径 v0.0.0-<sha7>,见 lib-version.sh)
+//  2. -ldflags 注入的 version(本地 go build / 旧构建)
+//  3. "dev"(都不存在)
+//
+// 结果同时含版本号与短 hash —— 发布纪律要求「光有短 hash 不够」。
+func resolveVersion() string {
+	app := strings.TrimSpace(os.Getenv("APP_VERSION"))
+	short := strings.TrimSpace(os.Getenv("GIT_SHORT"))
+	switch {
+	case app != "" && short != "" && !strings.Contains(app, short):
+		// APP_VERSION 已是 <tag> 形态时补短 hash;若已含(如 v0.0.0-abc1234)则不重复。
+		return app + "-" + short
+	case app != "":
+		return app
+	default:
+		return version
+	}
+}
 
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "path to YAML config")
@@ -41,7 +62,7 @@ func main() {
 		cfg.DBPath = "gateway-v2.db"
 		logger.Info("no config file, using defaults", "listen", cfg.Listen, "db", cfg.DBPath)
 	}
-	cfg.Version = version
+	cfg.Version = resolveVersion()
 
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
@@ -80,7 +101,7 @@ func main() {
 		)
 	}
 
-	logger.Info("gateway starting", "version", version, "listen", cfg.Listen, "db", cfg.DBPath)
+	logger.Info("gateway starting", "version", cfg.Version, "listen", cfg.Listen, "db", cfg.DBPath)
 	for _, in := range insts[1:] {
 		logger.Info("tls listening", "addr", in.srv.Addr)
 	}
