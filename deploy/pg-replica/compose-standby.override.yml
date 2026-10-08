@@ -1,0 +1,10 @@
+# 从库宿主（aliyun）本地 override —— 部署为 /opt/ai-gateway-v2/docker-compose.override.yml。
+#
+# 作用:让 db 容器能用 host.docker.internal 连到宿主上的 SSH 隧道(:15432 → tencent PG)。
+# bridge 网络下 host.docker.internal 默认不解析,须显式映射 host-gateway。
+# gateway 服务此阶段【不起】(从库只读);提升后才 up。
+# 见 deploy/pg-replica/README.md §4。
+services:
+  db:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

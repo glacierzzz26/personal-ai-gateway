@@ -1,6 +1,8 @@
 # deploy/ — 生产部署
 
-生产主机 = 云主机 **`aliyun`**(`47.116.65.140`,`ssh aliyun`,root),目录 **`/opt/ai-gateway-v2`**。
+生产主机 = 云主机 **`tencent`**(`124.223.188.186`,`ssh tencent`,root),目录 **`/opt/ai-gateway-v2`**。
+> **`aliyun`**(`47.116.65.140`)现为其**流复制热备**:同一 compose,但 `db` 是**只读从库**、`gateway` 停用 ——
+> 见下「[PG 主从流复制](#pg-主从流复制aliyun-热备)」。2026-10-08 绿地切换后角色**对调**,本文旧处写「生产 = aliyun」的以本节为准。
 > 注:`lab`(192.168.0.202)已**不是**生产 —— 旧文档写的「lab 轮询自更新」在现网从未启用
 > (无 `gw-updater` 定时器)。现网入口只有两个域名(2026-09-21 上线),见下。
 
@@ -113,6 +115,26 @@ cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 - **回滚旧入口**(要恢复裸 IP / 非标端口):compose 端口绑定改回 `17080:17080` / `17090:17090`
   → `docker compose up -d`,同时在 host-infra 的 vhost 里补回 `listen 17080` 块并重新渲染。
   两块都要动,只改一边会出现「端口开着但 Nginx 没接」或「bind 冲突」。
+
+## PG 主从流复制(aliyun 热备)
+
+生产 PG 主在 **`tencent`**;**`aliyun`** 是它的**流复制热备**(standby,只读)。复制走 **SSH 隧道**(`aliyun`→`tencent`),
+PG 端口只在主机 loopback 发布,不暴露公网。资产与完整操作手册见 [`pg-replica/README.md`](pg-replica/README.md),
+自动化脚本 [`scripts/pg-replication.sh`](scripts/pg-replication.sh)。
+
+```bash
+# 核验(主/从各跑一次;主看槽与 lag,从看 recovery 与回放位点)
+ssh tencent 'bash /opt/ai-gateway-v2/pg-replication.sh status'
+ssh aliyun  'bash /opt/ai-gateway-v2/pg-replication.sh status'
+
+# 故障切换:确认 tencent 不可达后,在 aliyun 上提升 + 起网关,随后切 DNS
+ssh aliyun 'bash /opt/ai-gateway-v2/pg-replication.sh promote'
+```
+
+- **主机侧资产**(此前只落在两台主机上,现纳入仓库):隧道单元 `pg-replica/gw-pg-tunnel.service`、两份 compose override
+  (`compose-primary.override.yml` = 主库发布 loopback:5433 供隧道回连;`compose-standby.override.yml` = 从库容器经 `host.docker.internal` 连隧道)。
+- **前提**:两机 `.env` 的 `GW_MASTER_KEY` 与 `GW_PG_PASSWORD` **必须同值**(`gw` 口令随 `pg_basebackup` 复制到从库,不同则提升后网关连不上)。
+- **防脑裂**:promote 前必须确认旧主不可达;旧主恢复须 `pg_rewind`/重做 `pg_basebackup` 降级为新从库,**不可直接重启**。
 
 ## 一次性初始化(启用 ghcr 一键升级的前置)
 

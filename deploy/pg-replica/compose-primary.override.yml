@@ -1,0 +1,10 @@
+# 主库宿主（tencent）本地 override —— 部署为 /opt/ai-gateway-v2/docker-compose.override.yml。
+#
+# 作用:把 PG 发布到【仅 loopback】的 5433,供 aliyun 侧 SSH 隧道回连做流复制。
+#   - 容器内仍是 5432;宿主可见口用 5433(不占 5432)。
+#   - 绑 127.0.0.1:**公网不可达**(隧道从主机内连入)。安全组亦不应放行 5433。
+# 见 deploy/pg-replica/README.md §3。
+services:
+  db:
+    ports:
+      - "127.0.0.1:5433:5432"
