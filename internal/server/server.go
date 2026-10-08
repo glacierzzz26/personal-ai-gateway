@@ -182,6 +182,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("GET /api/v1/official-prices", adm(s.handleOfficialPricesAll))
 	m.HandleFunc("POST /api/v1/official-prices/fetch", adm(s.handleOfficialPricesFetch))
 	m.HandleFunc("POST /api/v1/official-prices/fetch-commandcode", adm(s.handleOfficialPricesFetchCommandCode))
+	m.HandleFunc("POST /api/v1/official-prices/fetch-opencode", adm(s.handleOfficialPricesFetchOpenCode))
 	m.HandleFunc("POST /api/v1/official-prices/refresh", adm(s.handleOfficialPricesRefresh))
 	m.HandleFunc("GET /api/v1/official-prices/vendors", adm(s.handleOfficialVendors))
 	m.HandleFunc("POST /api/v1/official-prices/manual", adm(s.handleOfficialPriceManual))

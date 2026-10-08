@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/secret"
 )
 
@@ -154,5 +156,90 @@ func TestM0011BackfillsLegacyChannels(t *testing.T) {
 		if string(ch.ChannelType) != w.ctype {
 			t.Errorf("%s channel_type = %q, want %q", c.name, ch.ChannelType, w.ctype)
 		}
+	}
+}
+
+// TestM0014OfficialPriceSourceRebuild 迁移给 official_prices 加 source 维度并**整表重建**:
+// 存量行 source 回填 'commandcode'、id 与四价(含 m0013 的 cache_write_price)原样保留,
+// 且新唯一键允许同一 (厂商, 模型) 双来源并存。表重建最容易丢列/丢 id/丢约束,故逐项断言。
+func TestM0014OfficialPriceSourceRebuild(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m0014.db")
+
+	// 按**内容**定位 m0014(勿用 len(migrations)-1,追加迁移会让断言静默测错版本)。
+	const wantBefore = m0014OfficialPriceSource
+	nBefore := 0
+	for i, step := range migrations {
+		if step == wantBefore {
+			nBefore = i // 只跑 m0014 之前的各步 → 库停在 m0013(有 cache_write_price、无 source)
+			break
+		}
+	}
+	if nBefore == 0 {
+		t.Fatal("未在 migrations 中找到 m0014 —— 断言过时,请更新本用例")
+	}
+	dsn, err := sqliteDSN(path)
+	mustNoErr(t, err, "dsn")
+	db, err := sql.Open("sqlite", dsn)
+	mustNoErr(t, err, "open raw")
+	_, err = db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`)
+	mustNoErr(t, err, "create schema_migrations")
+	for i, step := range migrations[:nBefore] {
+		_, err = db.Exec(step)
+		mustNoErr(t, err, fmt.Sprintf("apply migration %d", i+1))
+		_, err = db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, i+1, nowRFC3339())
+		mustNoErr(t, err, "record migration")
+	}
+
+	now := nowRFC3339()
+	seed := []struct {
+		id              int64
+		provider, model string
+		in, out, cr, cw float64
+	}{
+		{7, "Anthropic", "claude-sonnet-5", 2, 10, 0.2, 2.5},
+		{9, "DeepSeek", "deepseek-v4-1-flash", 0.15, 0.6, 0.014, 0},
+	}
+	for _, r := range seed {
+		_, err := db.Exec(`INSERT INTO official_prices
+			(id, provider, model_name, source_url, fetched_at, currency, billing_shape,
+			 in_price, out_price, cache_read_price, cache_write_price, cache_derived, native_text,
+			 detail_json, content_sha256, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			r.id, r.provider, r.model, "https://commandcode.ai/models", now, "USD", "flat",
+			r.in, r.out, r.cr, r.cw, 0, "native", "{}", "sha", now, now)
+		mustNoErr(t, err, "seed official price")
+	}
+	db.Close()
+
+	st, err := Open(path) // 触发 m0014
+	mustNoErr(t, err, "reopen to apply m0014")
+	defer st.Close()
+
+	// 存量行:source 回填 commandcode;id 与四价(cache_write 尤须)原样。
+	got, err := st.GetOfficialPriceBySource(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceCommandCode)
+	mustNoErr(t, err, "read rebuilt row")
+	if got.ID != 7 {
+		t.Errorf("id 未保留: %d, want 7", got.ID)
+	}
+	if got.InputPrice != 2 || got.OutputPrice != 10 || got.CacheReadPrice != 0.2 || got.CacheWritePrice != 2.5 {
+		t.Errorf("四价未保留: %+v", got)
+	}
+
+	// 新唯一键允许双来源并存:同 (厂商, 模型) 再写一行 opencode。
+	// (重跑迁移应幂等 —— Open 已保证;此处顺带覆盖建表/建索引后的可写性。)
+	oc, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+		Source: domain.PriceSourceOpenCode, SourceURL: "https://opencode.ai/docs/zen/",
+		FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
+		BillingShape: domain.ShapeFlat, InputPrice: 3, OutputPrice: 15,
+	})
+	mustNoErr(t, err, "upsert opencode row")
+	if oc.Source != domain.PriceSourceOpenCode {
+		t.Errorf("source = %q, want opencode", oc.Source)
+	}
+	rows, err := st.ListOfficialPrices(domain.ProviderAnthropic)
+	mustNoErr(t, err, "list anthropic")
+	if len(rows) != 2 {
+		t.Fatalf("双来源应存 2 行(CC + opencode), got %d: %+v", len(rows), rows)
 	}
 }

@@ -14,7 +14,7 @@
 | 无用户级账户 | `admins` 无余额概念;无钱包、无充值、无账变流水 |
 | 币种 | 全站单一币种 `settings.displayCurrency`;`model_offers.*_price_usd` / `official_prices.*_price` 是**历史命名**,装的是「当前计价币种金额」;`costUsd()` 直接乘 token,**不做换算**(`gateway.go:632`) |
 | 对外暴露面 | `GET /api/v1/models` **登录即可**(`server.go:153`),对客户**全量**返回渠道名、每个供给源的上游真实名、官方价来源 URL、以及**全站** `todayRequests/successRate`(`reads.go:136-177`) |
-| 官方价覆盖 | **issue #27 起:官方价锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。`BuildManual` 已对 Anthropic/OpenAI 等 20 家放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`) |
+| 官方价覆盖 | **issue #27 起:官方价主锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。**增补:opencode zen 定价页为第二来源**(`internal/pricing/opencode.go`,与 CC 并存各存一行;`source=opencode` 渠道按其价派生成本),厂商枚举增至 21 家(Mistral)。`BuildManual` 已对全部厂商放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`) |
 
 ## 2. 定价模型(定稿:就 3 个数)
 
@@ -22,13 +22,14 @@
 
 | 数 | 含义 | 存哪 | 币种 | 谁可见 |
 |---|---|---|---|---|
-| **官方价** | 厂商官网挂牌(如 Anthropic `$3/$15`,**输入/输出,每百万 token**)。**实际锚点**取 commandcode 单页单价(issue #27;CC 靠高缓存命中率可能低于挂牌价) | `official_prices`(已有) | USD 原币 | 用户(划线原价) |
+| **官方价** | 厂商官网挂牌(如 Anthropic `$3/$15`,**输入/输出,每百万 token**)。**实际锚点**按渠道取:opencode 渠道取 opencode zen 定价页,其余取 commandcode 单页单价(issue #27;CC 靠高缓存命中率可能低于挂牌价) | `official_prices`(已有) | USD 原币 | 用户(划线原价) |
 | **本站价** = 官方价 × 倍率 | 你卖给客户的价 | **现算**,不落库(改倍率即时生效) | ¥ | 用户 |
 | **成本** | 你实付上游(command code ai)的钱。**已落地为**(m0012):**成本 = 官方价 × `channel_vendor_costs.ratio`**(键是渠道 × 厂商),不再逐供给源手填 | `channel_vendor_costs`(已有) | ¥ | **仅 admin** |
 
 > **实际锚点(issue #27)**:官方价来源已从「逐厂商官网抓取」换成 **commandcode 单页单价**(一页覆盖 20 家
-> 厂商)。CC 单价是本站**采购锚点**,靠高缓存命中率可能低于厂商挂牌价;「$10 买 $60」这类折扣走上面的
-> `channel_vendor_costs.ratio`,**不**改进 CC 单价。详见 DESIGN §5.6。
+> 厂商),**并新增 opencode zen 定价页为第二来源**(双来源并存,同一 (厂商, 模型) 各存一行;opencode 渠道按
+> 其价、其余按 CC 价派生成本)。CC 单价是本站**采购锚点**,靠高缓存命中率可能低于厂商挂牌价;「$10 买 $60」这类
+> 折扣走上面的 `channel_vendor_costs.ratio`,**不**改进锚点单价。详见 DESIGN §5.6。
 
 - **倍率**:`settings.price_multiplier`(全局默认);`model_offers.rate_override`(可空,单模型覆盖)—— 仿现有 `override_price` 套路。本期只做全局,单模型字段留而不用。
 - **毛利** = 本站价 − 成本,**只在管理面**出现,绝不出现在用户面。

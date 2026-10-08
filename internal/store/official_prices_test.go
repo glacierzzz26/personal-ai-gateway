@@ -162,6 +162,97 @@ func TestReconcileOfficialPrices(t *testing.T) {
 	}
 }
 
+// TestOfficialPriceSourceUnique 双来源并存(CC 与 opencode 各存一行,仅 source 不同):
+// 同来源 upsert 复用行、不同来源互不覆盖;多来源时按名查必须报歧义而非猜。
+func TestOfficialPriceSourceUnique(t *testing.T) {
+	st := newTestStore(t)
+	cc, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+		Source: domain.PriceSourceCommandCode, SourceURL: "https://commandcode.ai/models",
+		FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
+		BillingShape: domain.ShapeFlat, InputPrice: 2, OutputPrice: 10,
+	})
+	mustNoErr(t, err, "cc upsert")
+	oc, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+		Source: domain.PriceSourceOpenCode, SourceURL: "https://opencode.ai/docs/zen/",
+		FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
+		BillingShape: domain.ShapeFlat, InputPrice: 3, OutputPrice: 15,
+	})
+	mustNoErr(t, err, "oc upsert")
+	if cc.ID == oc.ID {
+		t.Fatalf("双来源应各存一行,却共用 id %d", cc.ID)
+	}
+
+	// 同来源再写:更新复用,且不影响另一来源行。
+	cc2, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+		Source: domain.PriceSourceCommandCode, SourceURL: "https://commandcode.ai/models",
+		FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
+		BillingShape: domain.ShapeFlat, InputPrice: 2.5, OutputPrice: 12,
+	})
+	mustNoErr(t, err, "cc re-upsert")
+	if cc2.ID != cc.ID {
+		t.Errorf("同来源 upsert 应复用行: id %d vs %d", cc2.ID, cc.ID)
+	}
+	ocAgain, err := st.GetOfficialPriceBySource(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceOpenCode)
+	mustNoErr(t, err, "read oc")
+	if ocAgain.InputPrice != 3 || ocAgain.OutputPrice != 15 {
+		t.Errorf("CC 重写不得影响 opencode 行: %+v", ocAgain)
+	}
+	rows, err := st.ListOfficialPrices(domain.ProviderAnthropic)
+	mustNoErr(t, err, "list")
+	if len(rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(rows))
+	}
+	// 多来源 → 无来源的按名查必须报歧义,不得猜。
+	_, err = st.GetOfficialPriceByName(domain.ProviderAnthropic, "claude-sonnet-5")
+	mustErrIs(t, err, ErrAmbiguousOfficialPrice, "ambiguous by name")
+}
+
+// TestFindOfficialPrice 消歧语义:偏好命中 / 唯一匹配(回落)/ 多行无偏好报歧义 / 零行 ErrNotFound。
+func TestFindOfficialPrice(t *testing.T) {
+	st := newTestStore(t)
+	// 单来源行:preferred 指到不存在的来源也回退返回(该模型只有这一条价)。
+	if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderDeepSeek, ModelName: "deepseek-v4-flash",
+		SourceURL: "u", FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
+		BillingShape: domain.ShapeFlat, InputPrice: 1, OutputPrice: 2,
+	}); err != nil {
+		t.Fatalf("seed single: %v", err)
+	}
+	got, err := st.FindOfficialPrice(domain.ProviderDeepSeek, "deepseek-v4-flash", domain.PriceSourceOpenCode)
+	mustNoErr(t, err, "single row with non-matching preferred")
+	if got.InputPrice != 1 {
+		t.Errorf("单行应回退返回: %+v", got)
+	}
+
+	// 双来源行:偏好精确命中各自来源。
+	for _, s := range []domain.PriceSource{domain.PriceSourceCommandCode, domain.PriceSourceOpenCode} {
+		if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+			Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+			Source: s, SourceURL: string(s), FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
+			BillingShape: domain.ShapeFlat, InputPrice: 1, OutputPrice: 2,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", s, err)
+		}
+	}
+	oc, err := st.FindOfficialPrice(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceOpenCode)
+	mustNoErr(t, err, "preferred opencode")
+	if oc.Source != domain.PriceSourceOpenCode {
+		t.Errorf("偏好命中错行: %q", oc.Source)
+	}
+	cc, err := st.FindOfficialPrice(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceCommandCode)
+	mustNoErr(t, err, "preferred commandcode")
+	if cc.Source != domain.PriceSourceCommandCode {
+		t.Errorf("偏好命中错行: %q", cc.Source)
+	}
+	_, err = st.FindOfficialPrice(domain.ProviderAnthropic, "claude-sonnet-5", "")
+	mustErrIs(t, err, ErrAmbiguousOfficialPrice, "no preferred, multi-row ambiguous")
+	_, err = st.FindOfficialPrice(domain.ProviderAnthropic, "nope", domain.PriceSourceCommandCode)
+	mustErrIs(t, err, ErrNotFound, "missing")
+}
+
 func TestSettingsUSDPerCNY(t *testing.T) {
 	st := newTestStore(t)
 	cfg, err := st.GetSettings()

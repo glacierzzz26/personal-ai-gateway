@@ -98,12 +98,13 @@ func (s *Server) handleChannelCostRatioDelete(w http.ResponseWriter, r *http.Req
 const refreshTimeout = 120 * time.Second
 
 // handleOfficialPricesRefresh 批量刷新官方价:先抓 commandcode 单页锚点(issue #27 后的主力来源),
-// 再把调用方显式指定的 providers 走旧逐厂商路径(为将来可能恢复的逐厂商来源保留),最后回填模型绑定。
+// 再抓 opencode zen 锚点(第二来源,与 CC 并存),随后把调用方显式指定的 providers 走旧逐厂商路径,
+// 最后回填模型绑定。
 //
-// 为什么把 CC 放在最前:它是本站官方价的**唯一可抓来源**(逐厂商官网抓取已停用),批量按钮
-// 若还按 pricing.Vendors() 里非 ManualOnly 的厂商循环,会得到空集、整个按钮变成空操作。
+// 为什么把 CC/opencode 放在最前:它们才是本站官方价的**可抓来源**(逐厂商官网抓取已停用),批量
+// 按钮若还按 pricing.Vendors() 里非 ManualOnly 的厂商循环,会得到空集、整个按钮变成空操作。
 //
-// 逐厂商独立成败的语义保留:显式指定的厂商仍是一个失败不影响其他。
+// 逐厂商独立成败的语义保留:两个锚点来源与显式厂商之间,任一失败不影响其他。
 func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Providers []domain.Provider `json:"providers"`
@@ -133,6 +134,20 @@ func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Requ
 		resp.CommandCode = &cc
 		resp.TotalUpserted += cc.Upserted
 		resp.TotalRemoved += cc.Removed
+	}
+
+	// ①b opencode zen 锚点(第二来源,与 CC 并存,各存一行)。独立成败:CC 失败不影响它,反之亦然。
+	oc, ocStatus, ocTyp, ocErr := s.fetchOpenCode(ctx)
+	switch {
+	case ocErr != nil && ocStatus != 0:
+		resp.OpenCodeError = ocErr.Error()
+		_ = ocTyp
+	case ocErr != nil:
+		resp.OpenCodeError = ocErr.Error()
+	default:
+		resp.OpenCode = &oc
+		resp.TotalUpserted += oc.Upserted
+		resp.TotalRemoved += oc.Removed
 	}
 
 	// ② 显式指定的厂商走旧逐厂商路径(当前全部为 ManualOnly → 会返回 manual_only,属预期)。

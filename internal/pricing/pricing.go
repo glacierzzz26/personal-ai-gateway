@@ -148,6 +148,11 @@ var scrapers = map[domain.Provider]scraper{
 	domain.ProviderJev: {
 		URL: "https://commandcode.ai/docs/resources/pricing-limits", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
 	},
+	// Mistral 由 opencode zen 定价页引入(opencode 页含付费行 Mistral Large 4)。其官网定价页
+	// 为 JS 渲染,只能手工录入;条目的实际意义是让 Supports(Vendors()/手工入口)覆盖该厂商。
+	domain.ProviderMistral: {
+		URL: "https://mistral.ai/pricing", ManualOnly: true, ManualCurrency: domain.CurrencyUSD,
+	},
 }
 
 // Supports 该 provider 是否有受支持的官方来源(可抓或可手工)。

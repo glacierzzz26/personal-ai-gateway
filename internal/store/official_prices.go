@@ -11,21 +11,29 @@ import (
 
 // ---------------- 官方参考价(official_prices) ----------------
 
-// UpsertOfficialPrice 写入/更新一条官方参考价,唯一键 (provider, model_name)。
-// 抓取成功的新价覆盖旧价,但 created_at 保留首次写入时间。
+// ErrAmbiguousOfficialPrice 同 (provider, model_name) 下存在多个来源的行,无法唯一确定。
+// 调用方必须显式指定来源(FindOfficialPrice)或改用三键精确查(GetOfficialPriceBySource)。
+var ErrAmbiguousOfficialPrice = errors.New("official price ambiguous: multiple sources for provider+model")
+
+// UpsertOfficialPrice 写入/更新一条官方参考价,唯一键 (provider, model_name, source)。
+// 抓取成功的新价覆盖旧价(同来源内),但 created_at 保留首次写入时间。
+// source 为空时回落 PriceSourceCommandCode(存量/手工录入未带来源的旧调用视为 CC 锚点)。
 func (s *Store) UpsertOfficialPrice(q domain.OfficialPriceRow) (domain.OfficialPriceRow, error) {
 	if q.Provider == "" || q.ModelName == "" {
 		return domain.OfficialPriceRow{}, fmt.Errorf("provider/model_name 必填")
+	}
+	if q.Source == "" {
+		q.Source = domain.PriceSourceCommandCode
 	}
 	now := formatRFC3339(s.nowUTC())
 	detail := encodeJSON(orEmptyMap(q.Detail))
 	fetched := formatRFC3339(q.FetchedAt)
 	res, err := s.db.Exec(`INSERT INTO official_prices (
-		provider, model_name, source_url, fetched_at, currency, billing_shape,
+		provider, model_name, source, source_url, fetched_at, currency, billing_shape,
 		in_price, out_price, cache_read_price, cache_write_price, cache_derived, native_text,
 		detail_json, content_sha256, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-	ON CONFLICT(provider, model_name) DO UPDATE SET
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	ON CONFLICT(provider, model_name, source) DO UPDATE SET
 		source_url=excluded.source_url, fetched_at=excluded.fetched_at,
 		currency=excluded.currency, billing_shape=excluded.billing_shape,
 		in_price=excluded.in_price, out_price=excluded.out_price,
@@ -33,28 +41,82 @@ func (s *Store) UpsertOfficialPrice(q domain.OfficialPriceRow) (domain.OfficialP
 		cache_derived=excluded.cache_derived,
 		native_text=excluded.native_text, detail_json=excluded.detail_json,
 		content_sha256=excluded.content_sha256, updated_at=excluded.updated_at`,
-		string(q.Provider), q.ModelName, q.SourceURL, fetched, string(q.Currency), string(q.BillingShape),
+		string(q.Provider), q.ModelName, string(q.Source), q.SourceURL, fetched, string(q.Currency), string(q.BillingShape),
 		q.InputPrice, q.OutputPrice, q.CacheReadPrice, q.CacheWritePrice, b2i(q.CacheDerived), q.NativeText,
 		detail, q.ContentSHA256, now, now)
 	if err != nil {
 		return domain.OfficialPriceRow{}, fmt.Errorf("upsert official price: %w", err)
 	}
 	_ = res
-	row, err := s.GetOfficialPriceByName(q.Provider, q.ModelName)
+	row, err := s.GetOfficialPriceBySource(q.Provider, q.ModelName, q.Source)
 	if err != nil {
 		return domain.OfficialPriceRow{}, err
 	}
 	return row, nil
 }
 
-// GetOfficialPriceByName 按 (provider, model_name) 取一条。
-func (s *Store) GetOfficialPriceByName(p domain.Provider, model string) (domain.OfficialPriceRow, error) {
-	row := s.db.QueryRow(officialPriceSelect+` WHERE provider=? AND model_name=?`, string(p), model)
+// GetOfficialPriceBySource 按 (provider, model_name, source) 三键精确取一条。
+func (s *Store) GetOfficialPriceBySource(p domain.Provider, model string, source domain.PriceSource) (domain.OfficialPriceRow, error) {
+	row := s.db.QueryRow(officialPriceSelect+` WHERE provider=? AND model_name=? AND source=?`,
+		string(p), model, string(source))
 	q, err := scanOfficialPrice(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.OfficialPriceRow{}, ErrNotFound
 	}
 	return q, err
+}
+
+// GetOfficialPriceByName 按 (provider, model_name) 取一条 —— 仅当唯一时成立。
+//
+// 加来源维度后同键可能有多行(CC 与 opencode 各一),此时无法唯一确定:返回
+// ErrAmbiguousOfficialPrice,调用方应改用 FindOfficialPrice 指定来源。
+func (s *Store) GetOfficialPriceByName(p domain.Provider, model string) (domain.OfficialPriceRow, error) {
+	rows, err := s.queryOfficialPrices(` WHERE provider=? AND model_name=?`, string(p), model)
+	if err != nil {
+		return domain.OfficialPriceRow{}, err
+	}
+	switch len(rows) {
+	case 0:
+		return domain.OfficialPriceRow{}, ErrNotFound
+	case 1:
+		return rows[0], nil
+	default:
+		return domain.OfficialPriceRow{}, ErrAmbiguousOfficialPrice
+	}
+}
+
+// FindOfficialPrice 取一条官方价,按**来源偏好**消歧 —— 成本派生与展示的取值核心。
+//
+// 语义:
+//   - 0 行            → ErrNotFound;
+//   - 命中 preferred  → 返回该行(常见情形:该 (厂商,模型) 只有 preferred 一条,或同一
+//     (厂商,模型) 存在多来源且 preferred 命中其一 —— 与「按来源唯一查」等价,只查一次库);
+//   - 未命中 preferred 但仅 1 行 → 返回该行(该模型只有另一来源的价,回退使用,避免无价可用);
+//   - 未命中 preferred 且多行 → ErrAmbiguousOfficialPrice(不得猜)。
+//
+// preferred 为空视为未指定(preferred=="" 不参与命中)。
+func (s *Store) FindOfficialPrice(p domain.Provider, model string, preferred domain.PriceSource) (domain.OfficialPriceRow, error) {
+	if p == "" || model == "" {
+		return domain.OfficialPriceRow{}, ErrNotFound
+	}
+	rows, err := s.queryOfficialPrices(` WHERE provider=? AND model_name=?`, string(p), model)
+	if err != nil {
+		return domain.OfficialPriceRow{}, err
+	}
+	switch len(rows) {
+	case 0:
+		return domain.OfficialPriceRow{}, ErrNotFound
+	case 1:
+		return rows[0], nil
+	}
+	if preferred != "" {
+		for _, r := range rows {
+			if r.Source == preferred {
+				return r, nil
+			}
+		}
+	}
+	return domain.OfficialPriceRow{}, ErrAmbiguousOfficialPrice
 }
 
 // GetOfficialPrice 按 id 取一条。
@@ -241,21 +303,22 @@ func (s *Store) OfferPriceSource(offerID int64) (url, fetchedAt, currency string
 	return url, fetchedAt, currency, err
 }
 
-const officialPriceSelect = `SELECT id, provider, model_name, source_url, fetched_at,
+const officialPriceSelect = `SELECT id, provider, model_name, source, source_url, fetched_at,
 	currency, billing_shape, in_price, out_price, cache_read_price, cache_write_price, cache_derived,
 	native_text, detail_json, content_sha256, created_at, updated_at
 	FROM official_prices`
 
 func scanOfficialPrice(row scanner) (domain.OfficialPriceRow, error) {
 	var q domain.OfficialPriceRow
-	var provider, currency, shape, fetched, detail, created, updated string
+	var provider, source, currency, shape, fetched, detail, created, updated string
 	var derived int
-	if err := row.Scan(&q.ID, &provider, &q.ModelName, &q.SourceURL, &fetched,
+	if err := row.Scan(&q.ID, &provider, &q.ModelName, &source, &q.SourceURL, &fetched,
 		&currency, &shape, &q.InputPrice, &q.OutputPrice, &q.CacheReadPrice, &q.CacheWritePrice, &derived,
 		&q.NativeText, &detail, &q.ContentSHA256, &created, &updated); err != nil {
 		return domain.OfficialPriceRow{}, err
 	}
 	q.Provider = domain.Provider(provider)
+	q.Source = domain.PriceSource(source)
 	q.Currency = domain.Currency(currency)
 	q.BillingShape = domain.BillingShape(shape)
 	q.CacheDerived = derived == 1

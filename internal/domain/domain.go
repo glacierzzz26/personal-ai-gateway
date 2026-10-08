@@ -85,6 +85,9 @@ const (
 	ProviderPoolside  Provider = "Poolside"
 	ProviderInclusion Provider = "InclusionAI"
 	ProviderJev       Provider = "Jev"
+	// ProviderMistral 由 opencode zen 定价页引入(opencode 页含付费行 Mistral Large 4)。
+	// CC 单页无 Mistral 显示名,故此值不影响 commandcode 抓取输出。
+	ProviderMistral Provider = "Mistral"
 )
 
 // ProviderNone 「不是单一厂商」(多厂家中转/区域部署)。空串即此语义 —— 用常量而非裸 ""
@@ -98,6 +101,7 @@ var Providers = []Provider{
 	ProviderGoogle, ProviderXAI, ProviderXiaomi, ProviderMeta, ProviderMiniMax,
 	ProviderNVIDIA, ProviderTencent, ProviderStepFun, ProviderMeituan,
 	ProviderThinking, ProviderSakana, ProviderPoolside, ProviderInclusion, ProviderJev,
+	ProviderMistral,
 }
 
 // ChannelType 渠道类型 —— 决定**上游额度怎么查**(各家问法完全不同),与 Provider 正交:
@@ -516,6 +520,33 @@ const (
 	CostUnknown CostSource = "unknown"
 )
 
+// PriceSource 官方价锚点行的**来源**维度。同一 (provider, model_name) 可来自不同来源,
+// 各存一行(如 Anthropic/claude-sonnet-5 在 commandcode 与 opencode 各有一条)。
+//
+// 为什么需要来源维度:opencode zen 与 commandcode 的 Claude 系 slug 完全相同
+// (两边都叫 claude-sonnet-5),而两者的采购单价不同。成本派生必须按「该供给源所属渠道的
+// 类型」选对应来源的价,否则 opencode 渠道会错用 CC 的锚点价。
+type PriceSource string
+
+const (
+	// PriceSourceCommandCode commandcode 单页锚点价(issue #27 起的主力来源,兜底来源)。
+	PriceSourceCommandCode PriceSource = "commandcode"
+	// PriceSourceOpenCode opencode zen 定价页锚点价。
+	PriceSourceOpenCode PriceSource = "opencode"
+)
+
+// PriceSourceForChannelType 按供给源所属**渠道类型**解析其官方价来源。
+//
+// 关键不变量:**永不返回空串**。仅 opencode 渠道取 opencode 来源,其余(deepseek /
+// thirdparty / 空 / 未知)一律回落 commandcode —— 保证非 opencode 路径的成本派生
+// 与加来源维度之前逐位一致。
+func PriceSourceForChannelType(t ChannelType) PriceSource {
+	if t == ChannelTypeOpenCode {
+		return PriceSourceOpenCode
+	}
+	return PriceSourceCommandCode
+}
+
 // CostQuote 供给源成本的派生视图(每百万 token,计价币种)。管理面专用。
 //
 // 成本不再存库,而是「官方价 × 渠道系数」现算 —— 官方价一变、系数一改即时生效,
@@ -611,6 +642,8 @@ type OfficialPriceRow struct {
 	ID             int64        `json:"id"`
 	Provider       Provider     `json:"provider"`
 	ModelName      string       `json:"modelName"`
+	// Source 该行所属官方价来源(commandcode | opencode)。空串 = 迁移前遗留(等价 commandcode)。
+	Source         PriceSource  `json:"source,omitempty"`
 	SourceURL      string       `json:"sourceUrl"`
 	FetchedAt      time.Time    `json:"fetchedAt"`
 	Currency       Currency     `json:"currency"`
@@ -714,6 +747,22 @@ type CommandCodeFetchResult struct {
 	FreeSkipped []string        `json:"freeSkipped,omitempty"`
 }
 
+// OpenCodeFetchResult POST /official-prices/fetch-opencode 返回。
+//
+// 与 CommandCodeFetchResult 同形,另加 opencode 页特有的分档/折扣统计(它们被并进单行或
+// 记入 Detail,必须显式回报,否则是静默丢信息)。
+type OpenCodeFetchResult struct {
+	SourceURL     string          `json:"sourceUrl"`
+	ContentSHA    string          `json:"contentSha256,omitempty"`
+	TotalRows     int             `json:"totalRows"` // 定价表数据行数(含免费行与分档行)
+	Upserted      int             `json:"upserted"`  // 落库行数(免费行剔除、同 slug 分档合并后)
+	Removed       int64           `json:"removed,omitempty"`
+	PerVendor     []ProviderCount `json:"perVendor"`
+	FreeSkipped   []string        `json:"freeSkipped,omitempty"`
+	TieredSlugs   []string        `json:"tieredSlugs,omitempty"`   // 合并了多档的 slug
+	DiscountSlugs []string        `json:"discountSlugs,omitempty"` // 含折扣(<del> 原价)的 slug
+}
+
 // RefreshProviderResult 批量刷新中单个厂商的结果。
 //
 // 逐厂商独立成败:一个厂商抓失败不影响其他厂商(共用一个按钮,单点网络抖动
@@ -744,6 +793,10 @@ type RefreshPricingResp struct {
 	// 失败时 CommandCodeError 记原因,不影响其余结果。
 	CommandCode      *CommandCodeFetchResult `json:"commandCode,omitempty"`
 	CommandCodeError string                  `json:"commandCodeError,omitempty"`
+	// OpenCode opencode zen 定价页锚点抓取的结果(与 CC 并存,各存一行;见 PriceSource)。
+	// 失败时 OpenCodeError 记原因,不影响其余结果。
+	OpenCode      *OpenCodeFetchResult `json:"openCode,omitempty"`
+	OpenCodeError string               `json:"openCodeError,omitempty"`
 }
 
 // ---------- 路由规则 ----------

@@ -51,7 +51,7 @@ internal/store  schema 版本化;channels/models/model_offers/official_prices/ch
                 rules/tokens/admins/users/request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
 internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
 internal/engine 把目录+offers+规则+渠道健康编译为一次转发决策(候选/策略/重试/兜底)
-internal/pricing 官方价来源:commandcode 单页锚点抓取(唯一可抓来源,见 §5.6)+ 厂商登记表 + 手工录入 + 分时选价
+internal/pricing 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 §5.6)+ 厂商登记表 + 手工录入 + 分时选价
 internal/proxy  relay 转发 + translate(anthropic↔openai 双向,流式状态机 + usage 权威计数)+ probe/ping
 internal/server 管理面 CRUD handler(会话)+ 模型面(令牌)+ 静态托管 web-v2/dist(SPA 回退)
 web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist 产物 gitignore
@@ -82,11 +82,14 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - `request_logs(id, ts UTC, model, channel_id/name, token_id/name, protocol, stream, status,
    in/out/cache_read/cache_write tokens, cost, first_token_ms, total_ms, ip, err)` — idx ts/model/channel/token。
    `cache_write_tokens` 于 m0013 从 `prompt_tokens` 中拆出(此前 cache_creation 被折进输入)。
-- `official_prices(id, provider, model_name, source_url, fetched_at, currency, billing_shape,
-   in/out/cache_read/cache_write 单价, cache_derived, native_text, detail_json, content_sha256, …, UNIQUE(provider, model_name))`
+- `official_prices(id, provider, model_name, source, source_url, fetched_at, currency, billing_shape,
+   in/out/cache_read/cache_write 单价, cache_derived, native_text, detail_json, content_sha256, …, UNIQUE(provider, model_name, source))`
    — 官方参考价,与手填的 `model_offers` 报价分表(官价只作默认值与比对源,不改写渠道报价)。
-   `provider` 是 `domain.Provider`(见 §5.6 的 20 家厂商枚举);`model_name` 对 CC 来源存 **slug**。
-   `detail_json` 装分时/阶梯/折扣明细(峰谷窗口、活动原价与到期、档位数)。
+   `provider` 是 `domain.Provider`(见 §5.6 的 21 家厂商枚举);`model_name` 对 CC/opencode 来源存 **slug**。
+   `source` 是 `domain.PriceSource`(`commandcode`/`opencode`,m0014 加列,默认 `commandcode`)—— **同一
+   (厂商, 模型) 可两来源并存各存一行**(典型:Claude 系 slug 在 CC 与 opencode 完全相同);
+   成本派生按 offer 所属渠道的 `channel_type` 选来源(`PriceSourceForChannelType`),非 opencode 一律取 CC。
+   `detail_json` 装分时/阶梯/折扣明细(峰谷窗口、活动原价与到期、档位数;opencode 分档写 `ocTiers`)。
 - `channel_vendor_costs(channel_id FK, vendor, ratio, note, …, UNIQUE(channel_id, vendor))` — 成本系数。
   **成本 = 官方价 × ratio**,键是**厂商**(非渠道),(渠道,厂商)唯一。未配的厂商默认 1.0。
   为什么单列一张表而不并进 `channels`:渠道 PATCH 是整体覆盖语义,系数混进去会被「改个渠道名」误清空。
@@ -302,11 +305,17 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 前端 `HealthStatus` 增加 `unknown`(文案「待观察」,灰色),渠道页状态筛选与 latency 占位同步更新;
   `unknown`/`down`/`disabled` 均无有效成功率与延迟,展示 `—`。
 
-### 5.6 官方价锚点:commandcode 单页(issue #27)
+### 5.6 官方价锚点:commandcode + opencode 双来源(issue #27)
 
-官方参考价的**唯一可抓来源**是 commandcode(CC)模型列表页 `https://commandcode.ai/models` —— 一页
+官方参考价的**主力可抓来源**是 commandcode(CC)模型列表页 `https://commandcode.ai/models` —— 一页
 覆盖 CC 在售的全部模型,也就是本站渠道模型的真实全集。逐厂商官网抓取(DeepSeek/通义)**已停用**:
 它抓到的模型名与 CC 侧对不上(前缀/后缀/命名都不同),绑不上目录模型,等于白抓。
+
+**第二个来源:opencode zen 定价页**(`https://opencode.ai/docs/zen/`)。本站已有 `opencode` 渠道类型
+(`channel_type=opencode`,额度见 §5.3),其官方价此前只能借 CC 锚点;opencode 来源接入后,这些渠道
+按**自己的价**派生成本。CC 与 opencode **并存**(同一 (厂商, 模型) 各存一行,仅 `source` 不同),互不覆盖。
+来源是**按渠道类型**解析的(`domain.PriceSourceForChannelType`):`opencode` 渠道取 opencode 价,
+**其余(deepseek/commandcode/thirdparty/空/未知)一律取 CC 价** —— 保证非 opencode 路径逐位不变。
 
 **为什么是「锚点」而不是「厂商挂牌价」。** CC 页面单价是本站的**采购锚点**(CC 靠高缓存命中率把单价
 压得比厂商挂牌价低),不总是厂商官网挂牌价。⚠️ 将来若要对外展示厂商挂牌价,需另存一列区分 —— 本期不做。
@@ -323,7 +332,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   (81/81 命中,零冲突):**LongCat 的 brand 是 Meituan(不是 ByteDance),Ling 的 brand 是 inclusionAI**。
   `brand` 随行记入 `detail_json` 作留证,便于日后复核;运行时不吃 81 次详情页请求。
 - **`model_name` 落 slug**(`<a href="/models/<slug>">` 的最后一段,`-` 分隔),与 `canonicalModelKey`
-  (取最后 `/` 段小写)同口径;显示名不落库。厂商枚举据此从 6 家扩到 **20 家**(见 §3 `domain.Provider`)。
+  (取最后 `/` 段小写)同口径;显示名不落库。厂商枚举据此从 6 家扩到 **20 家**(opencode 来源再加 Mistral,共 21 家;见 §3 `domain.Provider`)。
 - 价格单元格**四态**必须逐态解析,不能整格 `parseMoney`(会把删除线原价当现价):
   普通 `$0.10` + `+N` 脚注角标(须剥掉);活动 `<s>$0.60</s>$0.30`(`<s>` 是原价,裸数字是**现价**);
   免费单元格文本 `Free`(**排除落库**,计入报告);峰谷首格 `title` 给谷价与时段(显示值即谷价)。
@@ -345,6 +354,29 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 > 会把 UTC 误判成 +480,峰谷整体偏 8 小时。故 `PriceWindow` 加 `TZSet bool`(显式给过才采信),
 > `decodeWindows` 按「键是否存在」置位。CC 写窗口时显式带 `tzOffsetMin:0` + `TZSet:true`。
 > 改 `PriceWindow` 序列化时务必保留这个语义(见 `internal/pricing/window.go` 与 `window_test.go`)。
+
+**opencode 来源实现要点**(`internal/pricing/opencode.go`,由 `internal/server/admin_pricing.go` 调用):
+
+- 页面是**真静态 HTML**(非动态渲染),三张表:清单表 `Model | Model ID | …`、定价表
+  `Model | Input | Output | Cached Read | Cached Write`、弃用表(不使用)。**`Model ID` 即 slug**,
+  落 `model_name`。
+- 与 CC 的三处关键差异:① 定价表**不带 slug**,须先解析清单表得「显示名 → slug」再回填;
+  ② 折扣用 `<del>` 标删除线原价(CC 用活动按钮);③ **免费行混杂付费行之间**。
+- **免费剔除必须在厂商归属之前**(顺序红线):免费昵称模型(`Big Pickle`/`Space Bunny` 等)无厂商前缀,
+  若先归属会被判「未登记厂商」而误报硬错。免费判定 = 输入与输出**都**为 `Free`(单侧 Free 如 `Jev 1.13`
+  输入有价、输出 Free → **保留**,免费侧按 0 计)。
+- **分档合并**:同 slug 多行(如 `Claude Sonnet 4.5 (≤ 200K tokens)` / `(> 200K tokens)`)合并为一行,
+  `billing_shape=tiered`,标量取**基准档**(阈值最小档),明细写 `detail_json["ocTiers"]` +
+  `detail_json["tierBands"]` —— **绝不写 `detail_json["tiers"]`**(该键在旧库已坏,`window.go` 明令禁读)。
+- **折扣**:复用 `ccParsePrice`(已同时处理 `<s>`/`<del>`)取**现价**,`shape=discount`,
+  `detail_json["deal"]` 记原价与折扣百分比(opencode 无百分比原文,由 `1 - 现价/原价` 现算)。
+- 缓存写列缺失(`-`/`—`)→ `cache_write_price=0`(= 无依据,计费回落输入价,见 §5.7)。
+- 厂商前缀表复用 CC 的 `ccVendorPrefixes`,追加 `Mistral`(`opencode` 页有付费行 `Mistral Large 4`);
+  CC 页无 Mistral 显示名 → **CC 输出逐位不变**。厂商枚举据此从 20 家扩到 **21 家**。
+- 入口 `FetchOpenCode`;与 CC 同护栏:**三道闸**(结构硬失败 / 免费行 `validate()` 前剔除 / 行数地板
+  40 + 上次 80%)。对账按 `source_url` 作用域(`ReconcileOfficialPricesFromSource`),**不触碰** CC 与手工行。
+- 端点 `POST /official-prices/fetch-opencode`;批量刷新 `POST /official-prices/refresh` 在 CC 之后跑
+  opencode 第二块,各自独立成败(一方失败不影响另一方,累加 `totalUpserted/totalRemoved`)。
 
 ### 5.7 缓存写计费(cache_creation,m0013)
 
@@ -425,7 +457,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `GET /official-prices/vendors` | 厂商登记表(`{provider, sourceUrl, manualOnly, manualCurrency}`);驱动抓取/手工录入入口与门禁 |
 | `POST /official-prices/fetch` `{provider}` · `POST /official-prices/manual` | 按厂商抓取(逐厂商路径,当前全部 ManualOnly)/ 手工录入(来源 URL 必填,缺省币种按厂商落地) |
 | `POST /official-prices/fetch-commandcode` | **官方价主来源**(issue #27):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped}` |
-| `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点(**破坏性**对账),再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, totalUpserted, totalRemoved}`。超时 120s |
+| `POST /official-prices/fetch-opencode` | **官方价第二来源**:抓 opencode zen 定价页并落库(`source=opencode`,与 CC 并存)+ 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, tieredSlugs, discountSlugs}` |
+| `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点、再抓 opencode 锚点(均**破坏性**对账,各自独立成败),再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, openCode, openCodeError, totalUpserted, totalRemoved}`。超时 120s |
 | `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写四价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
 | `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |
 | `GET /tokens/{id}/claude-config` | 生成可直接粘的 `~/.claude/settings.json` 片段(含真实 key;旧 key 无密文回 409) |
@@ -449,7 +482,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 数据层:react-query(重试 0);mutation 成功后 invalidate 对应 queryKey(`['channels']/['models']/['rules']/
   ['tokens']/['logs',filters,page]/['usage',dim,days]/['overview']/['settings']/['model-usage',id]`)。
 - 展示词表(providers/channelTypes/egressProtos/quotaShapes/capabilities 标签)属前端常量,与后端枚举一致;
-  不作为运行时数据。`providers` 现为 **20 家**(issue #27 扩容,与 `domain.Providers` 逐字对齐),
+  不作为运行时数据。`providers` 现为 **21 家**(issue #27 扩容至 20 家,opencode 来源再加 Mistral,与 `domain.Providers` 逐字对齐),
   增删须同步 `constants.ts` 与 `types/index.ts` 的联合类型。渠道的展示名/徽标统一走 `utils/channel.ts` 的 `channelLabel`/`channelMark`
   (有厂商显示厂商,聚合渠道回落渠道类型),勿在页面里直接渲染 `ch.provider`(为空会显示空白)。
 - **antd 表格列宽**:一律 `tableLayout="fixed"`(见 `styles/tokens.ts`)。fixed 下**没有 `width` 的列会吃掉
@@ -534,4 +567,10 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - m0013 补「缓存写」四项:`official_prices.cache_write_price` / `model_offers.cache_write_price_usd` /
   `request_logs.cache_write_tokens`(均为 `NOT NULL DEFAULT 0`)。存量行为 0 = 无依据 → 按 input 价回落;
   存量日志的 `cache_write_tokens` 一律 0,旧行不回溯拆分(见 §5.7)。同样追加式,老库起新版即自动加列。
+- m0014 给 `official_prices` 加「来源」维度:`source TEXT NOT NULL DEFAULT 'commandcode'`,
+  唯一键 `(provider, model_name)` → `(provider, model_name, source)`(见 §5.6 双来源)。
+  SQLite 不能就地改表级 UNIQUE → **表重建**(建 `_new` → 显式列全量 `INSERT ... SELECT`,**含 m0013 的
+  `cache_write_price`**,`source` 填常量 `'commandcode'`,id 原样保留 → DROP 旧表 → RENAME → 重建
+  `idx_official_prices_provider` + 新增 `idx_official_prices_source`)。存量行 `source` 回填 `commandcode`
+  (等价「迁移前唯一来源」),**行为逐位不变**;无表以 FK 引用 `official_prices`,DROP/RENAME 无牵连。
 - 渠道 api_key 密文依赖主密钥;换主密钥会解不开旧密文 → 保留原密钥即可回放。
