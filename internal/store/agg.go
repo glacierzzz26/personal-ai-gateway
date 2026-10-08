@@ -23,8 +23,9 @@ func (s *Store) AvgFirstTokenMsSinceOwner(sinceUTC time.Time, ownerID int64) (fl
 
 func (s *Store) avgFirstTokenMsSince(sinceUTC time.Time, ownerID int64) (float64, error) {
 	cond, args := ownerCond(ownerID)
+	// AVG(bigint) 在 PG 回 numeric,须显式转 double precision 才能扫进 *float64。
 	var avg sql.NullFloat64
-	err := s.db.QueryRow(`SELECT AVG(first_token_ms) FROM request_logs
+	err := s.db.QueryRow(`SELECT AVG(first_token_ms)::double precision FROM request_logs
 		WHERE ts >= ? AND status BETWEEN 100 AND 399 AND first_token_ms > 0 AND stream = 1`+cond,
 		append([]any{formatRFC3339(sinceUTC)}, args...)...).Scan(&avg)
 	if err != nil {
@@ -39,7 +40,7 @@ func (s *Store) avgFirstTokenMsSince(sinceUTC time.Time, ownerID int64) (float64
 // QueryModelSeries 单一模型的按桶用量曲线(过滤 model = ?)。
 func (s *Store) QueryModelSeries(model, bucket string, fromUTC, toUTC time.Time, tzOffMin int) ([]domain.MetricPoint, error) {
 	n := MetricBucket(bucket)
-	rows, err := s.db.Query(`SELECT substr(datetime(ts, ?), 1, ?) AS bkt,
+	rows, err := s.db.Query(`SELECT to_char((ts::timestamptz + ?::interval) AT TIME ZONE 'UTC', ?) AS bkt,
 			COUNT(*),
 			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
 			COALESCE(SUM(cost), 0)

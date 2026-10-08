@@ -14,22 +14,14 @@ import (
 
 	"personal-ai-gateway/internal/config"
 	"personal-ai-gateway/internal/domain"
-	"personal-ai-gateway/internal/secret"
 	"personal-ai-gateway/internal/store"
+	"personal-ai-gateway/internal/storetest"
 )
 
 // newTestServerS 同 newTestServer,但额外返回 *Server 以便注入 pricingBase(仅测试用)。
 func newTestServerS(t *testing.T) (*httptest.Server, *http.Client, *store.Store, *Server) {
 	t.Helper()
-	dir := t.TempDir()
-	if _, err := secret.BootstrapKey(dir); err != nil {
-		t.Fatalf("bootstrap master key: %v", err)
-	}
-	st, err := store.Open(filepath.Join(dir, "gw.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	s := New(config.Config{}, st)
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

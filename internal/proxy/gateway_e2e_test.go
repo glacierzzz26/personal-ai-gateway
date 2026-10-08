@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,8 +15,8 @@ import (
 	"personal-ai-gateway/internal/auth"
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/engine"
-	"personal-ai-gateway/internal/secret"
 	"personal-ai-gateway/internal/store"
+	"personal-ai-gateway/internal/storetest"
 )
 
 // e2eEnv 一个隔离的数据面测试环境(独立临时库 + 引擎 + 网关)。
@@ -30,15 +29,7 @@ type e2eEnv struct {
 
 func newE2E(t *testing.T) *e2eEnv {
 	t.Helper()
-	dir := t.TempDir()
-	if _, err := secret.BootstrapKey(dir); err != nil {
-		t.Fatalf("bootstrap master key: %v", err)
-	}
-	st, err := store.Open(filepath.Join(dir, "e2e.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	eng := engine.New(st)
 	gw := NewGateway(st, eng, NewRelay(st))
 	srv := httptest.NewServer(gw)

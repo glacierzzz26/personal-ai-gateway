@@ -13,7 +13,8 @@
 #     退回旧二进制会读不了新库 → 崩溃循环且无法自愈。此时**不自动回滚**,交人工。
 #   - .env 只 sed 单行(内含 GW_MASTER_KEY,不可再生),改前先整份备份。
 #
-# 依赖:docker + docker compose v2 + curl(宿主已有)。不依赖 jq/python/sqlite3。
+# 依赖:docker + docker compose v2 + curl(宿主已有)。不依赖 jq/python。
+#       pg_dump/pg_restore 在 db 容器内跑,宿主无需装 PG 客户端。
 #
 # 用法:
 #   upgrade.sh <版本>         升/回滚到指定版本(如 v0.0.0-4de1cde)
@@ -26,6 +27,9 @@
 #   GW_DIR     compose 工程目录       默认 /opt/ai-gateway-v2
 #   GW_IMAGE   ghcr 镜像全名          默认 ghcr.io/glacierzzz26/personal-ai-gateway
 #   GW_SERVICE compose 服务名         默认 gateway
+#   GW_DB_SERVICE db 服务名           默认 db
+#   GW_PG_USER PostgreSQL 用户        默认 gw
+#   GW_PG_DB   PostgreSQL 库名        默认 gateway
 #   GW_HEALTH_TIMEOUT 健康校验总超时   默认 150 秒
 #
 # 退出码:
@@ -39,6 +43,9 @@ set -euo pipefail
 GW_DIR="${GW_DIR:-/opt/ai-gateway-v2}"
 GW_IMAGE="${GW_IMAGE:-ghcr.io/glacierzzz26/personal-ai-gateway}"
 GW_SERVICE="${GW_SERVICE:-gateway}"
+GW_DB_SERVICE="${GW_DB_SERVICE:-db}"
+GW_PG_USER="${GW_PG_USER:-gw}"
+GW_PG_DB="${GW_PG_DB:-gateway}"
 GW_HEALTH_TIMEOUT="${GW_HEALTH_TIMEOUT:-150}"
 
 COMPOSE_FILE="$GW_DIR/docker-compose.yml"
@@ -52,7 +59,7 @@ warn() { printf '[upgrade] ⚠ %s\n' "$*" >&2; }
 die()  { printf '[upgrade] ✗ %s\n' "$1" >&2; exit "${2:-1}"; }
 
 usage() {
-  sed -n '3,35p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 compose() { ( cd "$GW_DIR" && docker compose "$@" ); }
@@ -124,16 +131,16 @@ image_schema() { # $1 = image ref
 image_id() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || true; }
 
 # 最新一份库快照(backup.sh 刚写的那份即最新)。
-newest_backup() { ls -1t "$GW_DIR"/data/backups/gateway-v2-*.db 2>/dev/null | head -1; }
-# restore_db <snapshot>:停容器 → 清 WAL/SHM → 换库。容器停着等后面的 compose up 拉起
-# (停机窗口与升级本身重叠,不额外增加停机)。WAL/SHM 必须删 —— 它们属于库里那份旧
-# 数据,换库后残留会让 SQLite 读到不一致状态。
+newest_backup() { ls -1t "$GW_DIR"/data/backups/gateway-*.dump 2>/dev/null | head -1; }
+# restore_db <snapshot>:停网关容器 → 用 pg_restore 把快照覆盖回 db(--clean --if-exists
+# 先丢对象再重建)。停网关是为了断开活动连接(DROP 需无并发会话);db 服务保持运行
+# (pg_restore 要连它)。容器停着等后面的 compose up 拉起,停机窗口与升级本身重叠。
 restore_db() {
-  local snap="$1" db="$GW_DIR/data/gateway-v2.db"
+  local snap="$1"
   [[ -f "$snap" ]] || return 1
   compose stop "$GW_SERVICE" >/dev/null 2>&1 || true
-  rm -f "$db-wal" "$db-shm"
-  cp -p "$snap" "$db"
+  ( cd "$GW_DIR" && docker compose exec -T "$GW_DB_SERVICE" \
+      pg_restore -U "$GW_PG_USER" -d "$GW_PG_DB" --clean --if-exists --no-owner < "$snap" )
 }
 
 # ---------- --list:列 ghcr tag(匿名拉取 token;不依赖 jq) ----------
@@ -243,7 +250,7 @@ if ! REMOTE_DIR="$GW_DIR" bash "$GW_DIR/backup.sh"; then
 fi
 # 记住这份快照 = 「升级前那份库」;--rollback 要连同它一起还原(迁移单向)。
 PRE_SNAP="$(newest_backup)"
-# backup.sh 在无 sqlite3 时会停容器再拷;确认它把网关重新拉起来了。
+# 确认网关仍在运行(backup.sh 现在是在线 dump,不停容器;此处仅兜底)。
 if [[ -z "$(cur_cid)" ]]; then
   warn "备份后网关未在运行,尝试拉起..."
   compose up -d "$GW_SERVICE" >/dev/null 2>&1 || true

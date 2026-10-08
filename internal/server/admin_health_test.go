@@ -5,26 +5,16 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"personal-ai-gateway/internal/config"
-	"personal-ai-gateway/internal/secret"
-	"personal-ai-gateway/internal/store"
+	"personal-ai-gateway/internal/storetest"
 )
 
 // newTestServerWithEng 同 newTestServer,但额外暴露 *Server(便于测试直接驱动 engine 熔断/EWMA)。
 func newTestServerWithEng(t *testing.T) (*httptest.Server, *http.Client, *Server) {
 	t.Helper()
-	dir := t.TempDir()
-	if _, err := secret.BootstrapKey(dir); err != nil {
-		t.Fatalf("bootstrap master key: %v", err)
-	}
-	st, err := store.Open(filepath.Join(dir, "gw.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	s := New(config.Config{}, st)
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

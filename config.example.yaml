@@ -1,11 +1,16 @@
 # personal-ai-gateway v2 配置示例。
-# config.yaml 只承载网关自身参数(listen/db_path/tls);业务数据(账号/渠道/模型/规则/令牌)全部存 DB。
+# config.yaml 只承载网关自身参数(listen/db_dsn/key_dir/tls);业务数据(账号/渠道/模型/规则/令牌)全部存 DB(PostgreSQL)。
 
 listen: ":8787"          # 明文合并面(dev/测试/容器 healthcheck);生产不对外发布此端口
 
-# v2 换新库文件(默认 gateway-v2.db)。旧 gateway.db(v1 表)原样留档,不做迁移;
-# 想跑 v2 请把旧文件挪走或直接让默认值指向新库,勿让 v1/v2 混用同一文件。
-db_path: "gateway-v2.db"
+# 存储 = PostgreSQL(取代旧 db_path;旧 db_path 键仍解析但被忽略,启动会记一条 warning)。
+# DSN 形如 postgres://<user>:<pass>@<host>:5432/<db>?sslmode=disable;缺省连本机 127.0.0.1:5432。
+# 生产用 compose 的 db 服务名当 host(见 deploy/config.prod.yaml),口令由 .env 的 GW_PG_PASSWORD 注入。
+db_dsn: "postgres://gw:gw@127.0.0.1:5432/gateway?sslmode=disable"
+
+# 主密钥文件目录(由 secret.BootstrapKey 使用)。缺 GW_MASTER_KEY 时在此自动生成 gateway.master.key(0600)。
+# 与库位置解耦(PG 无「库同目录」概念);容器里挂持久卷。缺省 "/data"。
+key_dir: "/data"
 
 # 生产:Go 网关自身终止 TLS 的两个监听口(数据面 / 管理台,两面物理隔离)。
 # 两组 listen+cert+key 全部齐全才生效;缺任一项则只起上面的明文 listen(dev/测试)。
@@ -25,6 +30,6 @@ db_path: "gateway-v2.db"
 # - 管理账号首次启动走「创建管理员」引导(DB 无账号时登录页出现),config 不含任何凭据。
 # - 渠道上游 api_key 经 AES-256-GCM 加密落库,本地主密钥来自:
 #       1) 环境变量 GW_MASTER_KEY(推荐,任意长度会被 sha256 展平);
-#       2) 缺失时自动生成 DB 同目录 gateway.master.key(0600)。
+#       2) 缺失时自动生成 key_dir 下的 gateway.master.key(0600)。
 #   主密钥换过会导致旧密文解不开 —— 保留原密钥即可解密回放。
 # - 访问令牌(模型面 /v1)明文只在创建时返回一次,库里只存 sha256。

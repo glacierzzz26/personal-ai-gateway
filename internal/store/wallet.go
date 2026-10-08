@@ -29,22 +29,22 @@ func (s *Store) SettleRequest(log domain.LogRow, chargeWallet bool) error {
 	defer tx.Rollback()
 
 	var errField *string = log.Err
-	res, err := tx.Exec(`INSERT INTO request_logs (
+	var logID int64
+	err = tx.QueryRow(`INSERT INTO request_logs (
 		ts, model, channel_id, channel_name, token_id, token_name, owner_id,
 		client_tool, protocol, stream, status,
 		prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, cost, charge_usd,
 		cost_source, price_window,
 		first_token_ms, total_ms, ip, err
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 		formatRFC3339(log.TS), log.Model, log.ChannelID, log.ChannelName, log.TokenID, log.TokenName, log.OwnerID,
 		log.ClientTool, log.Protocol, b2i(log.Stream), log.Status,
 		log.PromptTokens, log.Completion, log.CacheRead, log.CacheWrite, log.CostUsd, log.ChargeUsd,
 		log.CostSource, log.PriceWindow,
-		log.FirstTokenMs, log.TotalMs, log.IP, errField)
+		log.FirstTokenMs, log.TotalMs, log.IP, errField).Scan(&logID)
 	if err != nil {
 		return err
 	}
-	logID, _ := res.LastInsertId()
 
 	if log.TokenID > 0 {
 		if _, err := tx.Exec(`UPDATE tokens SET used_usd = used_usd + ?, last_used_at = ?, updated_at = ?
@@ -92,7 +92,8 @@ func (s *Store) TopupBalance(adminID int64, amount float64, note string) (domain
 }
 
 // applyBalance 在一个已有事务内改动余额并记流水。余额可为负(透支)。
-func applyBalance(tx *sql.Tx, adminID int64, delta float64, reason string, logID int64, note string, s *Store) error {
+// tx 取 execer 而非 *sql.Tx,以便 ptx(占位符重绑)传入;调用点零改动。
+func applyBalance(tx execer, adminID int64, delta float64, reason string, logID int64, note string, s *Store) error {
 	res, err := tx.Exec(`UPDATE admins SET balance_usd = balance_usd + ? WHERE id=?`, delta, adminID)
 	if err != nil {
 		return err

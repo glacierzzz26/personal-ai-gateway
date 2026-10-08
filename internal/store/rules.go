@@ -34,17 +34,17 @@ func (s *Store) CreateRule(in domain.RuleInput) (domain.RuleRead, error) {
 	var maxSort int
 	_ = s.db.QueryRow(`SELECT COALESCE(MAX(sort),0) FROM rules`).Scan(&maxSort)
 	now := formatRFC3339(s.nowUTC())
-	res, err := s.db.Exec(`INSERT INTO rules (
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO rules (
 		name, enabled, match_mode, pattern, strategy, channel_ids, weights,
 		fallback_channel_id, retry, timeout_ms, sort, hit, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?) RETURNING id`,
 		in.Name, b2i(*in.Enabled), in.MatchMode, in.Pattern, in.Strategy,
 		encodeJSON(in.ChannelIDs), encodeWeightMap(in.Weights),
-		nullFK(in.FallbackChannelID), in.Retry, in.TimeoutMs, maxSort+1, now, now)
+		nullFK(in.FallbackChannelID), in.Retry, in.TimeoutMs, maxSort+1, now, now).Scan(&id)
 	if err != nil {
 		return domain.RuleRead{}, fmt.Errorf("insert rule: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	return s.GetRule(id)
 }
 
@@ -169,7 +169,8 @@ func (s *Store) HitRule(id int64) error {
 	return err
 }
 
-func renumberRules(q *sql.Tx) error {
+// renumberRules 把规则 sort 重排为 1..N;取 execer 以便 ptx(占位符重绑)传入。
+func renumberRules(q execer) error {
 	rows, err := q.Query(`SELECT id FROM rules ORDER BY sort ASC, id ASC`)
 	if err != nil {
 		return err

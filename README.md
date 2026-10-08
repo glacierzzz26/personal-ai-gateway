@@ -2,26 +2,30 @@
 
 个人 AI 网关(Go):把多厂商模型收敛到一个出口。一个模型可挂多家「渠道」供给源(官方 API / OpenAI 兼容中转),
 请求按「模型目录 + 供给源报价 + 路由规则 + 渠道健康」真实选路转发,统一记账、故障降级、令牌额度/RPM/有效期管控。
-管理端是带账号登录的 Web 管理台(React 18 + antd v5),所有业务数据存 SQLite。设计决策见 [`DESIGN.md`](DESIGN.md)。
+管理端是带账号登录的 Web 管理台(React 18 + antd v5),所有业务数据存 PostgreSQL。设计决策见 [`DESIGN.md`](DESIGN.md)。
 
 ## 快速开始
 
 ```bash
-# 0) 构建前端产物(管理台静态页;dist 已被 gitignore)
+# 0) 先起一个 PostgreSQL(存储 = PG,不再是 SQLite 文件;缺省连本机 127.0.0.1:5432)
+docker run -d --rm --name gw-pg -e POSTGRES_USER=gw -e POSTGRES_PASSWORD=gw -e POSTGRES_DB=gateway \
+  -p 127.0.0.1:5432:5432 postgres:16-alpine
+
+# 1) 构建前端产物(管理台静态页;dist 已被 gitignore)
 cd web-v2 && npm ci && npm run build && cd ..
 
-# 1) 准备本地主密钥(渠道 API key 加密落库用;不设则自动生成 gateway.master.key)
+# 2) 准备本地主密钥(渠道 API key 加密落库用;不设则在 key_dir 自动生成 gateway.master.key)
 export GW_MASTER_KEY=$(openssl rand -hex 24)
 
-# 2) 准备配置(仓库内 config.yaml 已被 gitignore,内容见 config.example.yaml)
+# 3) 准备配置(仓库内 config.yaml 已被 gitignore,内容见 config.example.yaml)
 cp config.example.yaml config.yaml
 
-# 3) 启动
+# 4) 启动(需上面那个 PG 在跑;DSN 见 config 的 db_dsn)
 go run ./cmd/gateway -config config.yaml
 #    浏览器打开 http://127.0.0.1:8787
 ```
 
-**首启引导**:库(`gateway-v2.db`,默认 `db_path`)里没有管理员账号时,登录页自动出现「创建管理员」
+**首启引导**:库里没有管理员账号时,登录页自动出现「创建管理员」
 (或 `POST /api/v1/auth/bootstrap`)。之后的登录走会话 Cookie,`config.yaml` 不含任何凭据。
 
 ## 常用命令
@@ -30,6 +34,9 @@ go run ./cmd/gateway -config config.yaml
 go build ./... && go vet ./... && go test ./...   # 后端全门禁
 cd web-v2 && npm run typecheck && npm run build    # 前端类型检查 + 构建
 ```
+
+> 需数据库的测试读环境变量 `TEST_PG_DSN`;未设时自动 `t.Skip`。本地一把跑全套:`deploy/scripts/test-pg.sh`
+> 会起一个一次性 `postgres:16` 容器、导好 `TEST_PG_DSN` 再 `go test ./...`(数据不留存)。
 
 ## 概念:用户 / 渠道 / 供给源 / 模型 / 规则 / 令牌
 
@@ -78,10 +85,10 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 ## 目录
 
 - `cmd/gateway` 入口(组装 config → 主密钥 → store → server;版本经 `-ldflags -X main.version` 注入,按 `tls` 配置叠加双口)
-- `internal/config` 只读 `listen/db_path/web_dir/tls`(业务数据全部在 DB)
+- `internal/config` 只读 `listen/db_dsn/key_dir/web_dir/tls`(业务数据全部在 DB)
 - `internal/domain` v2 实体 DTO(兼 API body)
-- `internal/store` SQLite(schema 版本化 + channels/models/offers/official_prices/channel_vendor_costs/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合)
-- `internal/secret` AES-GCM 渠道密钥(主密钥 `GW_MASTER_KEY` 或 DB 同目录 `gateway.master.key` 0600)
+- `internal/store` PostgreSQL(schema 版本化 + channels/models/offers/official_prices/channel_vendor_costs/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合);源码 SQL 沿写 `?`,驱动边界统一重绑为 `$n`
+- `internal/secret` AES-GCM 渠道密钥(主密钥 `GW_MASTER_KEY` 或 `key_dir` 下 `gateway.master.key` 0600)
 - `internal/engine` 选路决策:候选(启用供给源 ∩ 未熔断渠道 ∩ 命中规则)→ 策略排序 → 重试/兜底
 - `internal/pricing` 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 DESIGN §5.6)+ 厂商登记表 + 手工录入 + 分时选价
 - `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
@@ -93,7 +100,8 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 
 ```yaml
 listen: ":8787"           # 明文合并面(dev/测试/容器 healthcheck);生产 compose 不发布此端口
-db_path: "gateway-v2.db"   # v2 新库(默认)。旧 gateway.db(v1 表)原样留档,不做迁移
+db_dsn: "postgres://gw:gw@127.0.0.1:5432/gateway?sslmode=disable"  # PostgreSQL 连接串(取代旧 db_path)
+key_dir: "/data"           # 主密钥文件目录(缺 GW_MASTER_KEY 时在此自动生成 gateway.master.key)
 web_dir: "web-v2"          # 管理台源码目录(托管其 dist/);空串 = 关闭静态托管
 # 生产 TLS 双口(齐全才起;两组证书必须独立,不得共用同一套)
 tls:
@@ -105,9 +113,10 @@ tls:
   admin_key: "/certs/admin/key.pem"
 ```
 
-- 渠道 API key:环境变量 `GW_MASTER_KEY`(任意长度,sha256 展平)加密;缺失自动生成 DB 同目录 `gateway.master.key`(0600)。主密钥换过会让旧密文解不开——保留原密钥即可。
+- 渠道 API key:环境变量 `GW_MASTER_KEY`(任意长度,sha256 展平)加密;缺失自动在 `key_dir`(默认 `/data`)生成 `gateway.master.key`(0600)。主密钥换过会让旧密文解不开——保留原密钥即可。
 - 管理账号与访问令牌:**不走配置**。账号靠首启「创建管理员」;令牌在管理台创建,明文只现一次。
-- 存量 v1(`upstreams`/`keys`/`pricing`/`quota` 概念、旧 `/api/v1/upstreams` 管理面、旧 `web/` 前端)已在 v2 演进中退役;旧 `gateway.db` 仅作历史留档。
+- 存储迁移:SQLite 已整体退役(无双驱动),库 = PostgreSQL(pgx / `database/sql`);旧 `db_path` 键仍解析但被忽略(启动时若出现会记一条 warning),请改用 `db_dsn`。
+- 存量 v1(`upstreams`/`keys`/`pricing`/`quota` 概念、旧 `/api/v1/upstreams` 管理面、旧 `web/` 前端)已在 v2 演进中退役;旧的 SQLite 库文件仅作历史留档,需迁到 PG 用 `cmd/gwmigrate`。
 
 ## 生产部署(Go 自终止 TLS 双口 + 域名边缘 Nginx)
 
@@ -138,12 +147,14 @@ tls:
 deploy/scripts/gen-certs.sh          # 生成自签 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
 ssh aliyun 'bash /opt/ai-gateway-v2/upgrade.sh <版本>'   # 生产一键升级/回滚(ghcr 链路;见 deploy/README.md)
 deploy/scripts/deploy.sh [GW_HOST]   # 应急/离线链路:本地构建镜像 → docker save 经 ssh 推目标主机(默认 aliyun)
-deploy/scripts/backup.sh             # SQLite 快照(REMOTE_DIR=/opt/ai-gateway-v2)
+deploy/scripts/backup.sh             # PostgreSQL 快照(pg_dump -Fc;REMOTE_DIR=/opt/ai-gateway-v2)
 # 域名边缘(公网入口)在独立仓库 host-infra:cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 ```
 
 - 目标主机只需 docker + compose(不需 Go/Node/Docker Hub);**常规升级走 ghcr + `upgrade.sh`**(按版本切换、
   自动备份、健康校验、失败回滚、降级护栏),`deploy.sh` 的 `save|ssh|load` 留作 ghcr 不可达时的兜底。
+- **存储 = PostgreSQL**:compose 多一个 `db` 服务(`postgres:16-alpine`,不发布端口,数据卷 `./pgdata`),`gateway` `depends_on` 它;
+  网关经 `db_dsn` 连它,**新增必填密钥 `GW_PG_PASSWORD`**(写进 `.env`,`db` 缺它就拒绝启动)。快照 = db 容器内 `pg_dump -Fc`,`upgrade.sh --rollback` 用 `pg_restore --clean --if-exists` 还原(见 `deploy/README.md`)。
 - **版本标识**:由 `deploy/scripts/lib-version.sh` 单一提供 —— HEAD 在 `v*` tag 上为 `v<tag>-<sha7>`,
   否则恒为 `v0.0.0-<sha7>`(未发版不给版本号);镜像内烘焙 `APP_VERSION`/`GIT_SHORT`,
   `/healthz` 回 `version` 与 `schema`(库已应用迁移号)。

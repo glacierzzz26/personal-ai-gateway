@@ -25,11 +25,15 @@ aliyun: /opt/ai-gateway-v2  ──  docker compose up -d   (镜像自 ghcr 匿�
 - **光有短 hash 不够**:镜像内烘焙 `APP_VERSION`(版本号)与 `GIT_SHORT`(短 hash)两项,
   `/healthz` 回 `version`(如 `v0.0.0-4de1cde`)+ `schema`(本库已应用的最大迁移号)。
 - **部署路径上没有编译**:aliyun 只拉镜像 + 重建。
+- **存储 = PostgreSQL**:compose 除 `gateway` 外多一个 `db` 服务(`postgres:16-alpine`,**不发布端口**,数据卷 `./pgdata`);
+  `gateway` `depends_on: db`。网关经 `db_dsn` 连它(`deploy/config.prod.yaml` 用服务名 `db` 当 host:端口),
+  口令由 `.env` 的 **`GW_PG_PASSWORD`**(必填,缺则 `db` 拒绝启动)注入;`key_dir: "/data"`(主密钥文件落点,与库解耦)。
+  快照 = db 容器内 `pg_dump -Fc`(自定义格式)→ `data/backups/gateway-<stamp>.dump`。
 
 ## 一键升级 / 回滚:`upgrade.sh`
 
 装在 aliyun `/opt/ai-gateway-v2/upgrade.sh`(依赖只用宿主已有的 **docker + compose v2 + curl**,
-不依赖 jq/python/sqlite3)。非交互,可 `ssh` 直调。
+不依赖 jq/python;宿主也无需 PG 客户端 —— `pg_dump`/`pg_restore` 在 `db` 容器内跑)。非交互,可 `ssh` 直调。
 
 ```bash
 ssh aliyun 'bash /opt/ai-gateway-v2/upgrade.sh --list'            # 列出 ghcr 可用版本(标 current/latest)
@@ -45,6 +49,9 @@ ssh aliyun 'bash /opt/ai-gateway-v2/upgrade.sh --rollback'        # 撤销上次
 | `--list` | 列出 ghcr tag(标记 `current` / `latest`;**不声称先后** —— 非发版构建同前缀) |
 | `--rollback` | 撤销上次升级:换回镜像**并还原升级前的库快照** |
 | `--force` | 越过降级护栏(位置随意;跨迁移且无配套快照仍拒绝) |
+
+**库定位环境变量**(缺省即生产值):`GW_DB_SERVICE`(db 服务名,默认 `db`)/ `GW_PG_USER`(PG 用户,默认 `gw`)/
+`GW_PG_DB`(库名,默认 `gateway`);`pg_dump` 备份与 `pg_restore` 还原都经 compose 进 `db` 容器执行。
 
 **升级流程**:解析目标 → 幂等(镜像 ID 相同即「已是该版本」)→ 并发锁 → **强制备份** →
 记录 prev(含库快照路径)→ 拉镜像 → **降级护栏** → 切 `.env` → 重建 → **双重健康校验**
@@ -66,8 +73,10 @@ ssh aliyun 'bash /opt/ai-gateway-v2/upgrade.sh --rollback'        # 撤销上次
 | 3 | 并发锁被占 | 8 | 校验失败且未回滚(跨 schema,需人工 `--rollback`) |
 | 4 | 备份失败 | 9 | `--rollback` 无状态记录 |
 
-> ⚠️ **升级会短暂停机**:aliyun 无 `sqlite3`,`backup.sh` 走「停容器 → 复制 → 起容器」分支(数秒)。
-> 备份是升级的**强制前置**,失败即中止(绝不带着未备份的库升级)。
+> ⚠️ **备份不再停机**:`backup.sh` 在 `db` 容器内跑 `pg_dump -Fc`(自定义格式),是**在线一致快照**,
+> 不停容器(PG 的 MVCC 保证 dump 期间一致)。备份是升级的**强制前置**,失败即中止(绝不带着未备份的库升级)。
+> 回滚(`--rollback`)还原快照时会先 `compose stop` 网关以断开活动连接,再 `pg_restore --clean --if-exists` 覆盖回库,
+> 有数秒停机(`db` 服务保持运行)。
 
 ## 域名边缘(Nginx + 公信证书)
 
@@ -173,7 +182,7 @@ deploy/scripts/deploy.sh [GW_HOST]        # 默认 aliyun
 ## 风险 / 注意
 
 - **首拉延迟**:aliyun 首次拉 ghcr 全量约 46MB;之后仅传变更层,秒级。
-- **升级停机**:无 `sqlite3` → 备份走停机分支,每次升级数秒不可用。要零停机需装 `sqlite3`(宿主 apt,不在本次范围)。
+- **升级停机**:备份**在线**(`pg_dump -Fc`,不停机);仅 `--rollback` 还原库快照时会 `compose stop` 网关数秒。
 - **备份保留**:`data/backups/` 只留最近 `KEEP`(缺省 7)份;`--rollback` 依赖升级前那份,别把 KEEP 调到 0。
 - **基镜像**:`Dockerfile.gateway` 按 digest 固定 alpine 且靠本地缓存/`docker save`,变更基镜像需在
   构建机 `docker pull` 后重取 digest 再改 Dockerfile。

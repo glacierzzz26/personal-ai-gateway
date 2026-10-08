@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -49,7 +48,7 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// 配置文件缺失时用默认(空 config)→ listen :8787 / gateway-v2.db
+	// 配置文件缺失时用默认(空 config)→ listen :8787 / 本机 PG / 密钥目录 /data
 	cfg := config.Config{}
 	if _, err := os.Stat(*cfgPath); err == nil {
 		cfg, err = config.Load(*cfgPath)
@@ -59,20 +58,25 @@ func main() {
 		}
 	} else {
 		cfg.Listen = ":8787"
-		cfg.DBPath = "gateway-v2.db"
-		logger.Info("no config file, using defaults", "listen", cfg.Listen, "db", cfg.DBPath)
+		cfg.DBDSN = "postgres://gw:gw@127.0.0.1:5432/gateway?sslmode=disable"
+		cfg.KeyDir = "/data"
+		logger.Info("no config file, using defaults", "listen", cfg.Listen, "dsn", cfg.DBDSN)
 	}
 	cfg.Version = resolveVersion()
+	if cfg.DBPath != "" {
+		logger.Warn("config db_path ignored (storage is PostgreSQL; use db_dsn)", "db_path", cfg.DBPath)
+	}
 
-	st, err := store.Open(cfg.DBPath)
+	st, err := store.Open(cfg.DBDSN)
 	if err != nil {
 		logger.Error("store", "err", err)
 		os.Exit(1)
 	}
 	defer st.Close()
 
-	// 主密钥引导(渠道 api_key 加密用):GW_MASTER_KEY 优先,否则 DB 同目录自动生成。
-	if _, err := secret.BootstrapKey(filepath.Dir(abs(cfg.DBPath))); err != nil {
+	// 主密钥引导(渠道 api_key 加密用):GW_MASTER_KEY 优先,否则 KeyDir 下自动生成。
+	// 与库位置解耦 —— PG 无「库同目录」概念。
+	if _, err := secret.BootstrapKey(cfg.KeyDir); err != nil {
 		logger.Error("secret", "err", err)
 		os.Exit(1)
 	}
@@ -101,7 +105,7 @@ func main() {
 		)
 	}
 
-	logger.Info("gateway starting", "version", cfg.Version, "listen", cfg.Listen, "db", cfg.DBPath)
+	logger.Info("gateway starting", "version", cfg.Version, "listen", cfg.Listen)
 	for _, in := range insts[1:] {
 		logger.Info("tls listening", "addr", in.srv.Addr)
 	}
@@ -137,12 +141,4 @@ func main() {
 			os.Exit(1)
 		}
 	}
-}
-
-func abs(p string) string {
-	a, err := filepath.Abs(p)
-	if err != nil {
-		return p
-	}
-	return a
 }

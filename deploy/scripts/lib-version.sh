@@ -13,7 +13,7 @@
 # 提供:
 #   gw_version   [repo]  版本串(如上)
 #   gw_git_short [repo]  7 位短 hash
-#   gw_schema_head [repo] 迁移条数(schema.go 的 migrations 长度;升级脚本据此判降级)
+#   gw_schema_head [repo] schema 版本号(schema.go 的 schemaVersion 常量;升级脚本据此判降级)
 #
 # 直接运行(非 source)时打印三者,便于人工核对:
 #   bash deploy/scripts/lib-version.sh
@@ -44,10 +44,12 @@ gw_version() {
   printf '%s\n' "$ver"
 }
 
-# gw_schema_head <repo> — 迁移条数。数 schema.go 里 migrations 数组的 m00NN 条目。
+# gw_schema_head <repo> — schema 版本号。读 schema.go 的 schemaVersion 常量(PG 基线 = 14)。
+# 升级脚本据此判「降级是否会越过 DB 迁移」:迁移单向,旧二进制读不了新库。
 gw_schema_head() {
   local repo="${1:-.}" n
-  n="$(grep -cE '^[[:space:]]*m[0-9]{4}[A-Za-z]' "$repo/internal/store/schema.go" 2>/dev/null)" || true
+  n="$(grep -oE 'schemaVersion[[:space:]]*=[[:space:]]*[0-9]+' "$repo/internal/store/schema.go" 2>/dev/null \
+       | grep -oE '[0-9]+' | head -1)" || true
   printf '%s\n' "${n:-0}"
 }
 

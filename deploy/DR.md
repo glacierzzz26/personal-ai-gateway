@@ -7,7 +7,7 @@
 
 | 项 | 实测 |
 |---|---|
-| 家主机 `lab` = `192.168.0.202` | 2C / 5.4G(空闲 ~4.5G)/ 48G 盘(剩 32G);跑 ai-gateway + piks + `frpc-gateway`;**无 `sqlite3`、无 `age`**,有 `openssl` |
+| 家主机 `lab` = `192.168.0.202` | 2C / 5.4G(空闲 ~4.5G)/ 48G 盘(剩 32G);跑 ai-gateway + piks + `frpc-gateway`;**无 `age`**,有 `openssl` |
 | 云主机 `aliyun` = `47.116.65.140` | 2C / 1.6G(可用 ~1.2G)/ 40G 盘(剩 32G);跑 `frps` + `litesentry`;无 Docker Hub(走 daocloud 镜像源) |
 | frps | `bindPort=17000`,`allowPorts 17001–17100`。**17080/17090 是 frps 动态占用的中继口** —— home 的 frpc 一断,frps 自动释放 |
 | 客户端入口 | **只有两个域名(均 443)**:`https://gateway.5home.online`(管理台)/ `https://gatewayapi.5home.online`(数据面)—— 公信证书,无需导 CA。旧「裸 IP + 非标端口」入口(`47.116.65.140:17080` / `:17090`)已随域名稳定**下线**,公网不可达(见 §1.1) |
@@ -21,7 +21,7 @@
   公网入口现由宿主机 Nginx 终结公信证书;**这改变了本 DR 的「切到云」前提**:云冷备接管时需同时接管
   Nginx 层与其证书,而非只起 gateway 容器。
 - **frps 的 remotePort 独占**,端口本身就是「谁在服务」的仲裁者 —— 自动接管靠它天然防脑裂(见 §3)。
-- 家主机没 `sqlite3`,现有 `deploy/scripts/backup.sh` 只能「停容器几秒再拷」。要做**在线零停机**快照,需一个静态 Go 小命令(见 §4)。
+- **存储迁往 PostgreSQL**（PG 版代码已实现、待切换；切换后 SQLite 退役,见 `HA.md` D1）——切换后快照不再是「拷单个 `.db` 文件」,而是 logical dump。`deploy/scripts/backup.sh` 已改为**在线**快照(在 `db` 容器内跑 `pg_dump -Fc`,不停容器);DR 里的加密/异地投递只需对这份 dump 做(见 §4)。
 
 ### 1.1 域名上线(2026-09-21,已实施)—— 对 DR 前提的影响
 
@@ -50,7 +50,7 @@ home 每 15min: 加密快照 push ─┴→ 云 ~/ai-gateway-standby/
 
 - **RTO**:手动 `failover.sh` < 2min;自动接管(§3)为「心跳超时阈值 + 1min cron」。
 - **RPO** = 最近一次快照年龄,配置为 **15min**。
-- 云上所需的全部:同 `GW_MASTER_KEY` 的 `.env`、`docker-compose.yml`、`certs/{admin,api}/{fullchain,key}.pem` + `ca.crt`、最新加密快照、`ai-gateway:<tag>` 镜像。镜像 45MB、DB 2.7MB,云盘 32G 富余。
+- 云上所需的全部:同 `GW_MASTER_KEY` + `GW_PG_PASSWORD` 的 `.env`、`docker-compose.yml`(含 `db` 服务,PG 用 `db_dsn` 连)、`certs/{admin,api}/{fullchain,key}.pem` + `ca.crt`、最新加密快照(`pg_dump -Fc` 出的 `.dump`)、`ai-gateway:<tag>` 镜像。镜像 ~46MB、PG 库 ~17MB,云盘 32G 富余。
 - ⚠️ **云上只放叶子证书 + `ca.crt`,绝不放 `ca.key`**(CA 私钥只留本地/离线)。加密快照的口令 `GW_BACKUP_KEY` 与 `GW_MASTER_KEY` 一样进密码管理器;云上 `.env` 是唯一另一处持有主密钥的地方 —— 这正是「异地能救回来」的前提。
 
 ## 3. 自动接管(不脑裂)
@@ -69,14 +69,14 @@ home 每 15min: 加密快照 push ─┴→ 云 ~/ai-gateway-standby/
 
 home 侧再加**看门狗**:容器不健康即 `compose restart`(治理「主机活着但网关进程坏了」,在源头自愈)。
 
-**切回的数据分叉(以云为准)**:云接管期会写入新数据(令牌/日志)。home 恢复时,云容器**停之前**先 `gwsnap` 出 `handback.db` + 写标记 → 让位;home 巡检发现标记 → 把 `handback.db` 拉回替换本地库 → 重启。代价:home 断电前最后 ≤15min 的写入丢弃(落在 RPO 内),换云上故障期数据不丢。
+**切回的数据分叉(以云为准)**:云接管期会写入新数据(令牌/日志)。home 恢复时,云容器**停之前**先在 `db` 容器内 `pg_dump -Fc` 出一份 `handback.dump` + 写标记 → 让位;home 巡检发现标记 → 把 `handback.dump` 拉回、`pg_restore --clean --if-exists` 覆盖本地库 → 重启。代价:home 断电前最后 ≤15min 的写入丢弃(落在 RPO 内),换云上故障期数据不丢。
 
 ## 4. 要新增的文件
 
 | 文件 | 位置 | 作用 |
 |---|---|---|
-| `cmd/gwsnap` | 仓库(Go 静态命令) | 用 `modernc.org/sqlite` 跑 `VACUUM INTO`,**在线一致快照、零停机**;复用 `cmd/gwbackfill` 的「交叉编译 → scp 过去 → 现成镜像里跑」套路 |
-| `deploy/scripts/backup-push.sh` | home cron | 快照 → `openssl enc -aes-256-cbc -pbkdf2` 加密 → 推云 + 写心跳 |
+| 快照来源 | (无需新命令) | 存储 = PostgreSQL,**无需**独立静态命令:`deploy/scripts/backup.sh` 已在 `db` 容器内跑 `pg_dump -Fc`,即**在线一致快照、零停机**。原设想的 `cmd/gwsnap`(`modernc.org/sqlite` + `VACUUM INTO`)随 SQLite 退役而作废;原 `cmd/gwbackfill` 也已被 `cmd/gwmigrate`(一次性整库搬运)取代 |
+| `deploy/scripts/backup-push.sh` | home cron | 取 `backup.sh` 的 `pg_dump -Fc` dump → `openssl enc -aes-256-cbc -pbkdf2` 加密 → 推云 + 写心跳 |
 | `deploy/scripts/controller.sh` | 云 cron(1min) | 按心跳鲜度控制云容器启停(自动接管 / 让位) |
 | `deploy/scripts/failover.sh` | 本地/云 | 手动一键切(首次预置、手动兜底、演练) |
 | `deploy/failover.env` | **不入库**(`.gitignore`) | 唯一配置点:`HOME_HOST / CLOUD_A / CLOUD_B(可选) / PUBLIC_DOMAIN(可选) / 端口 / 快照目标 / KEEP / 心跳阈值` |
@@ -101,9 +101,9 @@ home 侧再加**看门狗**:容器不健康即 `compose restart`(治理「主机
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **P0** | ① `GW_MASTER_KEY` 抄进密码管理器(离线);② home 接上本地快照 cron(先落 `~/gw-backups/`) | 密钥能取回;本机列出近 N 份快照 |
-| **P1** | `cmd/gwsnap` + 加密 + 建 home→云投递通道 + 云上快照轮转 | 云上见近 3 天加密快照,能解密打开 |
+| **P1** | `backup.sh`(pg_dump -Fc)快照 + 加密 + 建 home→云投递通道 + 云上快照轮转 | 云上见近 3 天加密快照,能解密打开 |
 | **P2** | 云上备机目录预置(`.env`/compose/certs/镜像)+ `failover.sh`,手动演练一次 | 云上起服务 `/healthz` 通、能登录、数据完整 |
-| **P3** | 心跳 + `controller.sh` 自动接管/让位 + 切回对账(`handback.db`) | 拔家主机网/电 → 自动切;恢复 → 自动回 |
+| **P3** | 心跳 + `controller.sh` 自动接管/让位 + 切回对账(`handback.dump`) | 拔家主机网/电 → 自动切;恢复 → 自动回 |
 | **P4** | 真断一次演练 | 客户端全程零改动,RTO 记录 ≤2min |
 
 ### 指标定义

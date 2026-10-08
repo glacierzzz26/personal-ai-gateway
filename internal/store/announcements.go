@@ -53,15 +53,15 @@ func (s *Store) GetAnnouncement(id int64) (domain.AnnouncementRead, error) {
 func (s *Store) CreateAnnouncement(in domain.AnnouncementInput) (domain.AnnouncementRead, error) {
 	in.Defaults()
 	now := formatRFC3339(s.nowUTC())
-	res, err := s.db.Exec(`INSERT INTO announcements (
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO announcements (
 		title, body, level, enabled, publish_at, expires_at, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?)`,
+	) VALUES (?,?,?,?,?,?,?,?) RETURNING id`,
 		in.Title, in.Body, in.Level, b2i(*in.Enabled),
-		nullStrPtr(in.PublishAt), nullStrPtr(in.ExpiresAt), now, now)
+		nullStrPtr(in.PublishAt), nullStrPtr(in.ExpiresAt), now, now).Scan(&id)
 	if err != nil {
 		return domain.AnnouncementRead{}, fmt.Errorf("insert announcement: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	return s.GetAnnouncement(id)
 }
 
@@ -144,8 +144,9 @@ func (s *Store) DismissAnnouncement(adminID, announcementID int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT OR IGNORE INTO announcement_dismissals
-		(announcement_id, admin_id, dismissed_at) VALUES (?,?,?)`,
+	_, err = s.db.Exec(`INSERT INTO announcement_dismissals
+		(announcement_id, admin_id, dismissed_at) VALUES (?,?,?)
+		ON CONFLICT (announcement_id, admin_id) DO NOTHING`,
 		announcementID, adminID, formatRFC3339(s.nowUTC()))
 	return err
 }

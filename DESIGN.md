@@ -3,7 +3,7 @@
 一个 Go 写的**个人** AI 网关:多厂商模型(官方 API、OpenAI 兼容中转、聚合订阅)收敛到一个出口。
 一个「模型」可挂多家「渠道」供给源;请求按模型目录 + 报价 + 路由规则 + 渠道健康**真实选路转发**;
 统一记账、故障自动降级、令牌(额度/RPM/有效期/允许模型)管控;带账号登录的 Web 管理台(React 18 + antd v5)
-对网关做全 CRUD。数据全在 SQLite(`gateway-v2.db`)。
+对网关做全 CRUD。数据全在 PostgreSQL。
 
 > 定位:个人 / 少量渠道。设计追求简单、可观测、可演进,不追求企业级。
 
@@ -44,11 +44,12 @@
 
 ```
 cmd/gateway     组装 config → 主密钥(secret)→ store(迁移)→ server
-internal/config listen/db_path/web_dir/tls;业务数据不进配置
+internal/config listen/db_dsn/key_dir/web_dir/tls;业务数据不进配置
 internal/domain v2 实体 DTO(JSON tag,兼 API body 与展示字段)
-internal/secret AES-GCM(渠道 api_key);主密钥 GW_MASTER_KEY 或 gateway.master.key(0600)
-internal/store  schema 版本化;channels/models/model_offers/official_prices/channel_vendor_costs/
-                rules/tokens/admins/users/request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
+internal/secret AES-GCM(渠道 api_key);主密钥 GW_MASTER_KEY 或 key_dir 下 gateway.master.key(0600)
+internal/store  PostgreSQL(单基线 DDL,schemaVersion=14;源码 SQL 写 `?`,驱动边界重绑为 `$n`);
+                channels/models/model_offers/official_prices/channel_vendor_costs/rules/tokens/admins/users/
+                request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
 internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
 internal/engine 把目录+offers+规则+渠道健康编译为一次转发决策(候选/策略/重试/兜底)
 internal/pricing 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 §5.6)+ 厂商登记表 + 手工录入 + 分时选价
@@ -57,7 +58,7 @@ internal/server 管理面 CRUD handler(会话)+ 模型面(令牌)+ 静态托管 
 web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist 产物 gitignore
 ```
 
-## 3. 数据模型(新库 `gateway-v2.db`,schema_migrations 版本化)
+## 3. 数据模型(PostgreSQL;单基线 DDL + schema_migrations 版本化)
 
 - `admins(id, username UNIQUE, password_bcrypt, role TEXT DEFAULT 'admin', created_at)` — config 不再承载账号;
   role 分 `admin`(全权)/`user`(仅能管理自己的令牌)。
@@ -267,8 +268,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 管理端 PATCH 是**全量替换**(Update* 仓库方法会清零未传字段)。前端启停类操作用「先取全量快照再整包提交」
   (services/api.ts 的 toggle*/offerDraft 帮助器),勿发部分 body。
 - 成功率口径:后端 successRate 用 0..100 百分数;前端统一除 100 还原 0..1 再 `×100` 展示(api.ts `frac`)。
-- modernc.org/sqlite:`strftime` 返回 TEXT,与整型参数比较 `<=` 恒假 —— 一律 `CAST(... AS INTEGER)` 再比;
-  聚合列包 `COALESCE(...,0)`(空窗口 SUM=NULL 会 Scan 报错)。
+- 时间/数值口径(方言无关的坑):时间分桶经 `to_char(...)` 回 TEXT,与整型参数比较须先 `CAST(... AS INTEGER)` 再比;
+  聚合列包 `COALESCE(...,0)`(空窗口 `SUM`=NULL 会 Scan 报错)。
 - 客户端断连必须取消上游请求(`ctx` / `resp.Body.Close()`),否则额度白烧;并归因成 499 而非渠道失败(§5.1)。
 - 流式看门狗**不得在每次 Read 时重置首字节定时器**:那样「首字节窗口」会退化成「任意两次数据间隔」窗口,
   把上游的正常停顿全记成 502(生产实测 18 条误报)。首字节只盯一次,中途停顿时长另用宽松的 idle 窗口。
@@ -277,7 +278,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   及时 504 并 failover,得调 settings 的 `request_timeout_ms`;别在两处各填一个值然后奇怪哪个生效。
 - a2o 回填的 `reasoning_content` **只在缓存命中时注入**(§5.2)。改动谓词时务必保留这个前提,
   否则会把该字段塞给不认识它的上游(OpenAI 官方/Azure)而新增 400。
-- SQLite WAL,个人读多写少足够;管理端写操作集中在事务内(额度扣减等)。
+- 存储 = PostgreSQL(pgx 的 `database/sql` 驱动),个人读多写少足够;管理端写操作集中在事务内(额度扣减等);
+  连接池上限与 PG `max_connections` 协调(多实例时 N×池 ≤ 该值)。
 
 ### 5.4 熔断状态机与健康度口径(issue #17)
 
@@ -396,7 +398,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 
 **存量数据不回溯。** 存量 `official_prices`/`model_offers` 的缓存写价为 0(同回落规则);
 存量 `request_logs.cache_write_tokens` 一律 0 —— 旧行里 `prompt_tokens` 那部分是 `cache_creation` 还是
-真输入已无从区分,**不臆造**(要重算旧账跑 `cmd/gwbackfill`,其四价公式与运行期 `costUsd` 逐位一致)。
+真输入已无从区分,**不臆造**(一次性回填工具 `cmd/gwbackfill`/`cmd/gwbackfill-official` 已随本次改造删除;
+如需重算旧账需另写,口径须与运行期 `costUsd` 逐位一致)。
 
 **改写口径的两处配套**(易漏,列此对照):
 - `o2a`(anthropic 上游 → openai 客户端)方向:`cache_creation` 拆进 `Usage.CacheWrite`,而 openai 的
@@ -557,20 +560,30 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 
 ## 9. 迁移与留档
 
-- v1 老库 `gateway.db`(upstreams/api_keys/request_log 等 v1 表)**整文件原样留档、不做迁移**;v2 用默认新库
-  `gateway-v2.db`。二者混用同一文件会产生语义错乱的旧表残留,务必分开。
-- v1 概念(统一 key 兼管、`upstreams`/`keys`/`pricing`/`quota`、旧 `/api/v1/upstreams` 面、旧 `web/` 前端)已在演进中退役删除。
-- m0011 把渠道的「厂商 / 渠道类型 / 出站协议」拆成三列并回填老行:`provider` 收窄为真厂商
-  (`Azure`→`OpenAI` + `egress_proto='azure'`,`聚合中转`→`''`);`channel_type` 按 base_url/provider 推断
-  (`commandcode.ai`→`commandcode`、`opencode.ai`→`opencode`、`provider='DeepSeek'`→`deepseek`,其余 `thirdparty`)。
-  迁移是追加式的,老库直接起新版本即可,无需手工干预。
-- m0013 补「缓存写」四项:`official_prices.cache_write_price` / `model_offers.cache_write_price_usd` /
-  `request_logs.cache_write_tokens`(均为 `NOT NULL DEFAULT 0`)。存量行为 0 = 无依据 → 按 input 价回落;
-  存量日志的 `cache_write_tokens` 一律 0,旧行不回溯拆分(见 §5.7)。同样追加式,老库起新版即自动加列。
-- m0014 给 `official_prices` 加「来源」维度:`source TEXT NOT NULL DEFAULT 'commandcode'`,
-  唯一键 `(provider, model_name)` → `(provider, model_name, source)`(见 §5.6 双来源)。
-  SQLite 不能就地改表级 UNIQUE → **表重建**(建 `_new` → 显式列全量 `INSERT ... SELECT`,**含 m0013 的
-  `cache_write_price`**,`source` 填常量 `'commandcode'`,id 原样保留 → DROP 旧表 → RENAME → 重建
-  `idx_official_prices_provider` + 新增 `idx_official_prices_source`)。存量行 `source` 回填 `commandcode`
-  (等价「迁移前唯一来源」),**行为逐位不变**;无表以 FK 引用 `official_prices`,DROP/RENAME 无牵连。
+- **存储 = PostgreSQL(单一真源,无双驱动)**。SQLite 整体退役;表结构由一份**单基线 DDL**
+  (`internal/store/schema.go` 的 `baselinePG`)一次建出,`schemaVersion = 14`:首启建 `schema_migrations`
+  并播入版本 14,SQLite 时期的 14 步历史迁移(m0001..m0014)**不重放**。
+- 为什么是单基线而非把 14 步逐条 port 到 PG:生产/测试库都走**整库搬运**(见下),PG 侧没有历史要重放;
+  忠实重建 m0011 的 LIKE 回填、m0014 的表重建只是无谓 churn。故 `baselinePG` 直接建出「m0014 终态」的表。
+- **版本号语义不变**:`SchemaVersion()`(`/healthz` 的 `schema` 字段)与 `upgrade.sh` 的降级护栏照旧用它;
+  后续 PG 迁移**从 15 起**追加(仍是追加式版本化,只是起点是 14)。
+- **类型映射(刻意最小改动)**:时间戳/`ts` 仍 `text`(UTC RFC3339Nano,**不转 `timestamptz`**);
+  布尔仍 `bigint` 0/1(**不转 `boolean`**);JSON 仍 `text`(**不转 `jsonb`**);金额 `REAL` → `double precision`
+  (**不用 `numeric`** —— numeric 扫不进 `*float64`);所有整数列 `bigint`;自增主键 →
+  `bigint GENERATED BY DEFAULT AS IDENTITY`(BY DEFAULT 以便导入显式 id,导入后须 `setval` 推进序列)。
+- **方言重写**:`LastInsertId()`(7 处)→ `RETURNING id`;唯一冲突判定改按 PG SQLSTATE `23505`;
+  时间分桶 `substr(datetime(ts, ?), 1, ?)` → `to_char((ts::timestamptz + ?::interval) AT TIME ZONE 'UTC', ?)`;
+  `INSERT OR IGNORE` → `ON CONFLICT ... DO NOTHING`;`AVG(int)` → `AVG(...)::double precision`。
+  部分唯一索引 `ON models (display_name) WHERE display_name <> ''` 在 PG 原样可用。
+- **占位符**:源码 SQL 沿用 SQLite 风格的 `?`,在 `store.go` 的 `pdb`/`ptx` 入口按第 k 个 `?` 统一重绑为 `$k`
+  —— 多处 SQL 运行时拼装(占位符数量不定),静态编号不可行;集中一层重绑既让调用点零改动,也杜绝漏改。
+- **一次性数据搬运:`cmd/gwmigrate`**(取代已删除的 `cmd/gwbackfill`/`cmd/gwbackfill-official`)。
+  `--from <sqlite> --to <pg-dsn>` 逐表逐列**原样拷贝**(不做值变换),搬完 `setval` 推进各表 identity 序列,
+  再逐表核对 `COUNT(*)`;目标非空则拒绝(除非 `--force`)。
+- **v1 老库与旧概念**:v1 `gateway.db`(upstreams/api_keys/request_log 等 v1 表)整文件留档;
+  v1 概念(统一 key 兼管、`upstreams`/`keys`/`pricing`/`quota`、旧 `/api/v1/upstreams` 面、旧 `web/` 前端)已在演进中退役删除。
+- **SQLite 时期的迁移史(仅存档,新 PG 库不重放)**:m0011 把渠道「厂商/渠道类型/出站协议」拆三列并回填;
+  m0013 补「缓存写」四列(`cache_write_price`/`cache_write_price_usd`/`cache_write_tokens`,均 `NOT NULL DEFAULT 0`,
+  见 §5.7);m0014 给 `official_prices` 加 `source` 维度并把唯一键改为 `(provider, model_name, source)`
+  (SQLite 不能就地改表级 UNIQUE → 表重建,见 §5.6)。
 - 渠道 api_key 密文依赖主密钥;换主密钥会解不开旧密文 → 保留原密钥即可回放。
