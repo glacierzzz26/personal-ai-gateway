@@ -2,13 +2,13 @@
 
 > 定位：本文是 `deploy/DR.md` 的**上位方案** —— 含灾备，并扩展到**零停机发布、灰度、自动切换、回滚**。
 > 关系：`DR.md` 是被本文取代的旧灾备设计（其 home/frp 端口切换拓扑已废弃，见 `DR.md` 顶部提示）；本文吸收其结论、修正其过时前提，并补齐"发布"这一层。
-> 状态：**方案定稿**。**存储迁移（D1 / P2）已上线**（2026-10-08 绿地切换到 `tencent`，生产已跑 PostgreSQL 16；`aliyun` 留作即时回滚）；**P3 已起步**——`aliyun` 作为 `tencent` 的**流复制热备**（standby，只读）已落地并校验（见 [`pg-replica/README.md`](pg-replica/README.md)）；自动 failover、发布、可观测仍按 §8 推进。
+> 状态：**方案定稿**。**存储迁移（D1 / P2）已上线**（2026-10-08 绿地切换到 `tencent`，生产已跑 PostgreSQL 16；`aliyun` 留作即时回滚）；**P3 进行中**——`aliyun` 作为 `tencent` 的**流复制热备**（standby，只读）已落地并校验，**自动 failover（自写 controller + 自动切 DNS + 飞书告警）已实现**（见 [`pg-replica/README.md`](pg-replica/README.md)）；发布、可观测仍按 §8 推进。
 
 ---
 
 ## 1. 背景与目标
 
-**现状（2026-10-08 起）**：生产 = **`tencent`**（124.223.188.186，`/opt/ai-gateway-v2`），**存储 = PostgreSQL 16**，网关镜像 `ai-gateway:v0.0.0-21115d0`（`schema=14`）。**绿地切换已执行**：`tencent` 起 PG 版全栈 → `cmd/gwmigrate` 搬运生产快照并逐表校验 → **切 DNS**（`gateway`/`gatewayapi` → `tencent`）。**`aliyun` 亦已切 PG**，作为 `tencent` 的**流复制热备**（standby，只读，网关停用），经 SSH 隧道回连主库；`aliyun` 上的 SQLite 库（`data/gateway-v2.db`）保留作即时回滚物证。家主机 `lab` 仍不纳入。**自动 failover 未做（提升仍手动）；发布层（P4）、可观测（P5）未做。**
+**现状（2026-10-08 起）**：生产 = **`tencent`**（124.223.188.186，`/opt/ai-gateway-v2`），**存储 = PostgreSQL 16**，网关镜像 `ai-gateway:v0.0.0-21115d0`（`schema=14`）。**绿地切换已执行**：`tencent` 起 PG 版全栈 → `cmd/gwmigrate` 搬运生产快照并逐表校验 → **切 DNS**（`gateway`/`gatewayapi` → `tencent`）。**`aliyun` 亦已切 PG**，作为 `tencent` 的**流复制热备**（standby，只读，网关停用），经 SSH 隧道回连主库；`aliyun` 上的 SQLite 库（`data/gateway-v2.db`）保留作即时回滚物证。家主机 `lab` 仍不纳入。**自动 failover 已实现（代码 + 主机就绪；生产受控演练待做）；发布层（P4）、完整可观测（P5）未做。**
 
 **目标**：
 
@@ -141,10 +141,12 @@
 ## 5. 机制设计
 
 ### 5.1 主备与自动切换（R1 / R10）
-- **判活信号走独立通道**（不经网关）：主节点定时 push 心跳到备机/对象存储；备侧 controller 判失联即提升。
-- **提升动作**：`pg_promote()`（PG 从 → 主）→ 切 DNS/边缘权重。**当前为手动提升**（`deploy/scripts/pg-replication.sh promote`，带防脑裂守卫，见 [`pg-replica/README.md`](pg-replica/README.md) §6）；自动化可用 **Patroni** 等成熟编排（未做）。
-- **防脑裂**：① 入口独占（谁是 active 由 DNS+边缘权重唯一决定）；② PG 层可用 quorum/见证（Patroni + etcd/consul，或简化为手动提升）。
-- **用户已确认 DNS 可设短 TTL + 健康检查** → **入口级自动摘除**是最低成本、最可靠的一层。
+- **判活信号走独立通道**（不经网关）：从库侧 `ha-controller.sh` 用**两条独立信号**判活 —— ① 本机 `pg_stat_wal_receiver.status` 是否 `streaming`；② `ssh` 主库主机是否可达。两条同时失效并**连续 ≥3 轮**（timer 60s）才动手，以区分「主库真死」与「网络抖」。
+- **提升动作**：`pg_promote()`（PG 从 → 主）→ 切 DNS/边缘权重。**已实现自动提升**（`deploy/scripts/ha-controller.sh`，systemd timer 每 60s；提升复用 [`pg-replication.sh`](scripts/pg-replication.sh) 的 `promote`，带防脑裂守卫；详见 [`pg-replica/README.md`](pg-replica/README.md) §6）。旧主恢复**不自动回切**（人工重建）。
+- **自动切 DNS**：提升后用 TC3 API（`deploy/scripts/dnspod.sh`）把 `gateway`/`gatewayapi` 的 A 记录切到备用机，并**自锁**防重复触发；飞书告警（`deploy/scripts/notify.sh`）。
+- **防脑裂**：① 入口独占（谁是 active 由 DNS+边缘权重唯一决定）；② PG 层**无 fencing/quorum**（2 节点），分区场景存在残余脑裂窗口 —— 靠多重判活 + 连续阈值 + 自锁 + best-effort fence 缓解，**不追求理论根治**。
+- **RTO 瓶颈在 DNS**：DNSPod 免费版 TTL 下限 600s → 最坏 ~10min 客户端才全量切走（DB/网关秒级就绪）
+  → **入口级自动摘除**仍是最低成本的一层；更快需云 LB 健康检查 / 第三节点 / 付费短 TTL（未做）。
 
 ### 5.2 数据复制（D2）
 - **PG 流复制**：主 → 从，异步（默认）→ RPO 秒级；如需更强可 `synchronous_commit`（代价：写延迟）。
@@ -182,6 +184,7 @@
 ### 5.8 可观测与告警（R7 / D4）
 - 采集：`/healthz`（含 `version`/`schema`）、容器状态、PG 主从延迟、切换事件、备份成败。
 - 告警：**飞书自定义机器人 webhook**（POST JSON）—— 节点不可达、健康校验失败、备份失败、发生切换、复制延迟超阈。
+- **已实现**：`deploy/scripts/notify.sh`（飞书 webhook，告警失败不阻断主流程）由 HA controller 在切换路径调用；`ha-controller.sh status/日志`可查判据。**完整的指标采集与告警面板（P5）未做。**
 - **前提**：现网 `/healthz` **尚不回 `schema`**（旧格式二进制）→ 升级到新格式后才有此字段。
 
 ### 5.9 密钥管理（R8）
@@ -236,11 +239,11 @@
 | **P0** | `RECOVERY.md` 手册（生产 PG 的：升级前快照 / 回退两步 / 切机 / AI 应急切换）+ Claude 应急切换脚本 + 飞书告警脚本雏形 | R9 | **0** | — |
 | **P1** | `aliyun` 装 `upgrade.sh`/`backup.sh` + **首份快照** + **副本影子演练**（演练 `pg_dump`/`pg_restore` 回滚） | R4, R6 | 低 | P0 |
 | **P2** | **PostgreSQL 迁移**（**✅ 已上线，2026-10-08 绿地切换**）：`internal/store` 重写为 PG、单基线 DDL、`cmd/gwmigrate` 整库搬运、compose `db` 服务（两机共通） | D1/R2/R3 前提 | 大（**已完成**） | P1 |
-| **P3** | **PG HA**（**部分完成**）：流复制从库 ✅（`aliyun` standby + SSH 隧道 + 手动提升脚本 [`pg-replication.sh`](scripts/pg-replication.sh)）；**自动 failover / DNS 健康检查 未做** | R1, R10 | 中高 | P2 |
+| **P3** | **PG HA**（**进行中**）：流复制从库 ✅（`aliyun` standby + SSH 隧道）；**自动 failover ✅**（[`ha-controller.sh`](scripts/ha-controller.sh) + timer + TC3 切 DNS + 飞书告警，见 `pg-replica/README.md` §6）；**DNS 健康检查（R10，入口级自动摘除）未做** | R1, R10 | 中高 | P2 |
 | **P4** | **真·进程级零停机滚动发布** + **权重灰度** + 迁移纪律落地 | R2, R3, R5 | 中 | P3 |
 | **P5** | 完整**可观测 + 飞书告警**（延迟/切换/备份/健康） | R7 | 低 | P3 |
 
-> 顺序原则：**P0/P1 已做**；**P2（PG 迁移）✅ 已上线（2026-10-08 绿地切换）**；**P3 已起步（流复制从库 ✅，自动 failover 待做）**；下一步重点 = **P3 自动 failover + P4（发布纪律/灰度）+ P5（可观测）**。
+> 顺序原则：**P0/P1 已做**；**P2（PG 迁移）✅ 已上线（2026-10-08 绿地切换）**；**P3 进行中（流复制 ✅ + 自动 failover ✅；DNS 健康检查待做）**；下一步重点 = **P3 收尾（DNS 健康检查）+ P4（发布纪律/灰度）+ P5（可观测）**。
 
 ---
 
@@ -251,6 +254,8 @@
 - **数据搬运**：SQLite → PG 整库搬运（`cmd/gwmigrate`）已于 **2026-10-08 随绿地切换执行**（tencent 起 PG 版 → `gwmigrate` → 逐表校验 → 切 DNS），期间有短暂停写窗口（低峰）。`aliyun` 的 SQLite 库保留作即时回滚物证。
 - **提升从库须防脑裂**：promote 前必须确认旧主不可达（脚本带守卫）；旧主恢复后**不可直接重启**，须 `pg_rewind` 或重做 `pg_basebackup` 降级为新从库，否则脑裂。
 - **从库长期失联**：主库已设 `max_slot_wal_keep_size=512MB`（超阈即作废复制槽，需重建从库）；**尚无自动告警**（P5）。
+- **自动 failover 的残余脑裂**：2 节点无 fencing/quorum，分区场景下 controller 无法证明主库真死，可能「误提升 + 切 DNS」而旧主仍在写 → 数据分叉。缓解＝双信号 + 连续阈值 + 自锁 + best-effort fence + 告警；**残余风险已接受**（见 §5.1）。
+- **failover 的客户端 RTO ≈ DNS TTL（≤10min）**：DNSPod 免费版 TTL 下限 600s 是硬约束；DB/网关本身秒级就绪。
 - **首次升级无 `schema` 字段**：旧格式二进制不回 `schema` → `upgrade.sh` 降级护栏首次会拒（需 `--force`）；已切换的 `tencent` 二进制现回 `schema=14`。
 - **PG 单机内存**：2C/1.6~1.9G 跑 PG 需调优，否则易 OOM。
 - **密钥同值风险**：两机同 `GW_MASTER_KEY` → 任一机泄露即全泄露。
@@ -259,7 +264,7 @@
 
 **开放问题**：
 1. 后续 PG 迁移（from 15）的**排期**与验收标准（迁移前后数据一致性如何核对？）。
-2. PG 自动故障转移用 **Patroni**（重）还是**手动提升**（轻）起步？
+2. ~~PG 自动故障转移用 **Patroni**（重）还是**手动提升**（轻）起步？~~ → **已决**：自写轻量 **controller**（`ha-controller.sh` + systemd timer）起步，不入 Patroni/etcd（规模不匹配）；见 §5.1。
 3. ~~是否保留 SQLite 双进程方案作为回退预案~~ → **已不适用**（PG 代码已实现）；现成兜底是 `upgrade.sh --rollback`（换镜像 + 还原升级前 PG 快照）。
 
 ---

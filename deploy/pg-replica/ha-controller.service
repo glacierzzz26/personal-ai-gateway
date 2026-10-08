@@ -1,0 +1,18 @@
+# 从库(aliyun)侧:HA 自动 failover 判定的单轮执行单元。
+#
+# 安装:cp 到 /etc/systemd/system/ha-controller.service && systemctl daemon-reload
+#       (由 ha-controller.timer 每 60s 触发;勿手动 enable 本 unit,enable timer 即可)
+# 依赖:docker compose 栈(/opt/ai-gateway-v2,db 容器在跑)、ssh 到主库(tencent)、
+#       /opt/ai-gateway-v2/ha.env(配置)、同目录的 pg-replication.sh / dnspod.sh / notify.sh。
+# 见 deploy/pg-replica/README.md「自动 failover」与 deploy/ha.env.example。
+[Unit]
+Description=AI 网关 HA:自动 failover 判定(单轮)
+Wants=network-online.target
+After=network-online.target docker.service
+After=gw-pg-tunnel.service
+
+[Service]
+Type=oneshot
+# ha.env 由脚本自身 source;这里再兜一层,便于 systemd 环境也可覆盖。
+EnvironmentFile=-/opt/ai-gateway-v2/ha.env
+ExecStart=/opt/ai-gateway-v2/ha-controller.sh once
