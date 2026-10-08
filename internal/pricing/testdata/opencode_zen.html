@@ -1,0 +1,1560 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-dkfaaqg7"> <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Zen | OpenCode</title><link rel="canonical" href="https://opencode.ai/docs/zen/"/><link rel="alternate" hreflang="en" href="https://opencode.ai/docs/zen/"/><link rel="alternate" hreflang="ar" href="https://opencode.ai/docs/ar/zen/"/><link rel="alternate" hreflang="bs-BA" href="https://opencode.ai/docs/bs/zen/"/><link rel="alternate" hreflang="da-DK" href="https://opencode.ai/docs/da/zen/"/><link rel="alternate" hreflang="de-DE" href="https://opencode.ai/docs/de/zen/"/><link rel="alternate" hreflang="es-ES" href="https://opencode.ai/docs/es/zen/"/><link rel="alternate" hreflang="fr-FR" href="https://opencode.ai/docs/fr/zen/"/><link rel="alternate" hreflang="it-IT" href="https://opencode.ai/docs/it/zen/"/><link rel="alternate" hreflang="ja-JP" href="https://opencode.ai/docs/ja/zen/"/><link rel="alternate" hreflang="ko-KR" href="https://opencode.ai/docs/ko/zen/"/><link rel="alternate" hreflang="nb-NO" href="https://opencode.ai/docs/nb/zen/"/><link rel="alternate" hreflang="pl-PL" href="https://opencode.ai/docs/pl/zen/"/><link rel="alternate" hreflang="pt-BR" href="https://opencode.ai/docs/pt-br/zen/"/><link rel="alternate" hreflang="ru-RU" href="https://opencode.ai/docs/ru/zen/"/><link rel="alternate" hreflang="th-TH" href="https://opencode.ai/docs/th/zen/"/><link rel="alternate" hreflang="tr-TR" href="https://opencode.ai/docs/tr/zen/"/><link rel="alternate" hreflang="zh-CN" href="https://opencode.ai/docs/zh-cn/zen/"/><link rel="alternate" hreflang="zh-TW" href="https://opencode.ai/docs/zh-tw/zen/"/><link rel="sitemap" href="/docs/sitemap-index.xml"/><link rel="icon" href="/favicon-v3.ico" sizes="32x32"/><link rel="icon" type="image/png" href="/favicon-96x96-v3.png" sizes="96x96"/><link rel="apple-touch-icon" href="/apple-touch-icon-v3.png" sizes="180x180"/><link rel="shortcut icon" href="/docs/favicon-v3.svg" type="image/svg+xml"/><meta name="generator" content="Astro v5.7.13"/><meta name="generator" content="Starlight v0.34.3"/><meta property="og:title" content="Zen"/><meta property="og:type" content="article"/><meta property="og:url" content="https://opencode.ai/docs/zen/"/><meta property="og:locale" content="en"/><meta property="og:description" content="Curated list of models provided by OpenCode."/><meta property="og:site_name" content="OpenCode"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="Curated list of models provided by OpenCode."/><meta property="og:image" content="https://social-cards.sst.dev/opencode-docs/WmVu.png?desc=Curated%20list%20of%20models%20provided%20by%20OpenCode.">
+  <meta property="twitter:image" content="https://social-cards.sst.dev/opencode-docs/WmVu.png?desc=Curated%20list%20of%20models%20provided%20by%20OpenCode."><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/docs/_astro/print.DNXP8c50.css" media="print"><link rel="stylesheet" href="/docs/_astro/_id_.Din10-6g.css">
+<style>@layer starlight.components{:root{--sl-badge-default-border: var(--sl-color-accent);--sl-badge-default-bg: var(--sl-color-accent-low);--sl-badge-default-text: #fff;--sl-badge-note-border: var(--sl-color-blue);--sl-badge-note-bg: var(--sl-color-blue-low);--sl-badge-note-text: #fff;--sl-badge-danger-border: var(--sl-color-red);--sl-badge-danger-bg: var(--sl-color-red-low);--sl-badge-danger-text: #fff;--sl-badge-success-border: var(--sl-color-green);--sl-badge-success-bg: var(--sl-color-green-low);--sl-badge-success-text: #fff;--sl-badge-caution-border: var(--sl-color-orange);--sl-badge-caution-bg: var(--sl-color-orange-low);--sl-badge-caution-text: #fff;--sl-badge-tip-border: var(--sl-color-purple);--sl-badge-tip-bg: var(--sl-color-purple-low);--sl-badge-tip-text: #fff}[data-theme=light]:root{--sl-badge-default-bg: var(--sl-color-accent-high);--sl-badge-note-bg: var(--sl-color-blue-high);--sl-badge-danger-bg: var(--sl-color-red-high);--sl-badge-success-bg: var(--sl-color-green-high);--sl-badge-caution-bg: var(--sl-color-orange-high);--sl-badge-tip-bg: var(--sl-color-purple-high)}.sl-badge:where(.astro-3ss7tewb){display:inline-block;border:1px solid var(--sl-color-border-badge);border-radius:.25rem;font-family:var(--sl-font-system-mono);line-height:normal;color:var(--sl-color-text-badge);background-color:var(--sl-color-bg-badge);overflow-wrap:anywhere}.sidebar-content .sl-badge:where(.astro-3ss7tewb){line-height:1;font-size:var(--sl-text-xs);padding:.125rem .375rem}.sidebar-content a[aria-current=page]>.sl-badge:where(.astro-3ss7tewb){--sl-color-bg-badge: transparent;--sl-color-border-badge: currentColor;color:inherit}.default:where(.astro-3ss7tewb){--sl-color-bg-badge: var(--sl-badge-default-bg);--sl-color-border-badge: var(--sl-badge-default-border);--sl-color-text-badge: var(--sl-badge-default-text)}.note:where(.astro-3ss7tewb){--sl-color-bg-badge: var(--sl-badge-note-bg);--sl-color-border-badge: var(--sl-badge-note-border);--sl-color-text-badge: var(--sl-badge-note-text)}.danger:where(.astro-3ss7tewb){--sl-color-bg-badge: var(--sl-badge-danger-bg);--sl-color-border-badge: var(--sl-badge-danger-border);--sl-color-text-badge: var(--sl-badge-danger-text)}.success:where(.astro-3ss7tewb){--sl-color-bg-badge: var(--sl-badge-success-bg);--sl-color-border-badge: var(--sl-badge-success-border);--sl-color-text-badge: var(--sl-badge-success-text)}.tip:where(.astro-3ss7tewb){--sl-color-bg-badge: var(--sl-badge-tip-bg);--sl-color-border-badge: var(--sl-badge-tip-border);--sl-color-text-badge: var(--sl-badge-tip-text)}.caution:where(.astro-3ss7tewb){--sl-color-bg-badge: var(--sl-badge-caution-bg);--sl-color-border-badge: var(--sl-badge-caution-border);--sl-color-text-badge: var(--sl-badge-caution-text)}.small:where(.astro-3ss7tewb){font-size:var(--sl-text-xs);padding:.125rem .25rem}.medium:where(.astro-3ss7tewb){font-size:var(--sl-text-sm);padding:.175rem .35rem}.large:where(.astro-3ss7tewb){font-size:var(--sl-text-base);padding:.225rem .45rem}.sl-markdown-content :is(h1,h2,h3,h4,h5,h6) .sl-badge:where(.astro-3ss7tewb){vertical-align:middle}}
+@layer starlight.components{svg:where(.astro-i4fljdxy){color:var(--sl-icon-color);font-size:var(--sl-icon-size, 1em);width:1em;height:1em}}
+@layer starlight.components{starlight-tabs:where(.astro-g2b3hell){display:block}.tablist-wrapper:where(.astro-g2b3hell){overflow-x:auto}:where(.astro-g2b3hell)[role=tablist]{display:flex;list-style:none;border-bottom:2px solid var(--sl-color-gray-5);padding:0}.tab:where(.astro-g2b3hell){margin-bottom:-2px}.tab:where(.astro-g2b3hell)>:where(.astro-g2b3hell)[role=tab]{display:flex;align-items:center;gap:.5rem;padding:0 1.25rem;text-decoration:none;border-bottom:2px solid var(--sl-color-gray-5);color:var(--sl-color-gray-3);outline-offset:var(--sl-outline-offset-inside);overflow-wrap:initial}.tab:where(.astro-g2b3hell) :where(.astro-g2b3hell)[role=tab][aria-selected=true]{color:var(--sl-color-white);border-color:var(--sl-color-text-accent);font-weight:600}.tablist-wrapper:where(.astro-g2b3hell)~[role=tabpanel]{margin-top:1rem}}
+@layer starlight.components{.sl-steps{--bullet-size: calc(var(--sl-line-height) * 1rem);--bullet-margin: .375rem;list-style:none;counter-reset:steps-counter var(--sl-steps-start, 0);padding-inline-start:0}.sl-steps>li{counter-increment:steps-counter;position:relative;padding-inline-start:calc(var(--bullet-size) + 1rem);padding-bottom:1px;min-height:calc(var(--bullet-size) + var(--bullet-margin))}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);position:absolute;top:0;inset-inline-start:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);font-weight:600;text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);border-radius:99rem;box-shadow:inset 0 0 0 1px var(--sl-color-gray-5)}.sl-steps>li:after{--guide-width: 1px;content:"";position:absolute;top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2);width:var(--guide-width);background-color:var(--sl-color-hairline-light)}}@layer starlight.content{.sl-steps>li>:first-child{--lh: calc(1em * var(--sl-line-height));--shift-y: calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh: calc(1em * var(--sl-line-height-headings))}@supports (--prop: 1lh){.sl-steps>li>:first-child{--lh: 1lh}}}
+@layer starlight.components{.sl-link-button:where(.astro-ycv3ezta){align-items:center;border:1px solid transparent;border-radius:999rem;display:inline-flex;font-size:var(--sl-text-sm);gap:.5em;line-height:1.1875;outline-offset:.25rem;padding:.4375rem 1.125rem;text-decoration:none}.sl-link-button:where(.astro-ycv3ezta).primary{background:var(--sl-color-text-accent);border-color:var(--sl-color-text-accent);color:var(--sl-color-black)}.sl-link-button:where(.astro-ycv3ezta).primary:hover{color:var(--sl-color-black)}.sl-link-button:where(.astro-ycv3ezta).secondary{border-color:inherit;color:var(--sl-color-white)}.sl-link-button:where(.astro-ycv3ezta).minimal{color:var(--sl-color-white);padding-inline:0}.sl-link-button:where(.astro-ycv3ezta) svg{flex-shrink:0}@media(min-width:50rem){.sl-link-button:where(.astro-ycv3ezta){font-size:var(--sl-text-base);padding:.9375rem 1.25rem}}.sl-markdown-content .sl-link-button:where(.astro-ycv3ezta){margin-inline-end:1rem}.sl-markdown-content .sl-link-button:where(.astro-ycv3ezta):not(:where(p *)){margin-block:1rem}}
+</style><script type="module" src="/docs/_astro/page.7qqag-5g.js"></script></head> <body class="astro-dkfaaqg7"> <a href="#_top" class="astro-t3ul7kg4">Skip to content</a>  <div class="page sl-flex astro-4toy2ex6"> <header class="header astro-4toy2ex6"><div class="header sl-flex astro-ksdetrbk"> <div class="title-wrapper sl-flex astro-ksdetrbk"> <a href="/docs/" class="site-title sl-flex astro-idrpryed">  <img class="light:sl-hidden print:hidden astro-idrpryed" alt src="/docs/_astro/logo-dark.DOStV66V.svg" width="234" height="42"> <img class="dark:sl-hidden print:block astro-idrpryed" alt src="/docs/_astro/logo-light.B0yzR0O5.svg" width="234" height="42"> <span class="sr-only astro-idrpryed" translate="no"> OpenCode </span> </a>  </div> <div class="middle-group sl-flex astro-ksdetrbk"> <a class="links astro-yqh5vbmc" href="/">app.header.home</a><a class="links astro-yqh5vbmc" href="/v2/docs">app.header.docs</a> </div> <div class="sl-hidden md:sl-flex right-group astro-ksdetrbk"> <div class="sl-flex social-icons astro-ksdetrbk"> <a href="https://github.com/anomalyco/opencode" rel="me" target="_blank" class="astro-ksdetrbk"> <svg aria-hidden="true" class="astro-ksdetrbk astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg> </a><a href="https://opencode.ai/discord" rel="me" target="_blank" class="astro-ksdetrbk"> <svg aria-hidden="true" class="astro-ksdetrbk astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.93-1.51 13.78 13.78 0 0 0-.64 1.28 18.27 18.27 0 0 0-5.5 0 12.64 12.64 0 0 0-.64-1.28h-.05A19.74 19.74 0 0 0 3.64 4.4 20.26 20.26 0 0 0 .11 18.09l.02.02a19.9 19.9 0 0 0 6.04 3.03l.04-.02a14.24 14.24 0 0 0 1.23-2.03.08.08 0 0 0-.05-.07 13.1 13.1 0 0 1-1.9-.92.08.08 0 0 1 .02-.1 10.2 10.2 0 0 0 .41-.31h.04a14.2 14.2 0 0 0 12.1 0l.04.01a9.63 9.63 0 0 0 .4.32.08.08 0 0 1-.03.1 12.29 12.29 0 0 1-1.9.91.08.08 0 0 0-.02.1 15.97 15.97 0 0 0 1.27 2.01h.04a19.84 19.84 0 0 0 6.03-3.05v-.03a20.12 20.12 0 0 0-3.57-13.69ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.15-1.08-2.15-2.42 0-1.33.95-2.42 2.15-2.42 1.22 0 2.18 1.1 2.16 2.42 0 1.34-.94 2.42-2.16 2.42Z"/></svg> </a> </div> <site-search class="astro-ksdetrbk astro-ohibvgtm" data-translations="{&#34;placeholder&#34;:&#34;Search&#34;}"> <button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-ohibvgtm"> <svg aria-hidden="true" class="astro-ohibvgtm astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg> <span class="sl-hidden md:sl-block astro-ohibvgtm" aria-hidden="true">Search</span> <kbd class="sl-hidden md:sl-flex astro-ohibvgtm" style="display: none;"> <kbd class="astro-ohibvgtm">Ctrl</kbd><kbd class="astro-ohibvgtm">K</kbd> </kbd> </button> <dialog style="padding:0" aria-label="Search" class="astro-ohibvgtm"> <div class="dialog-frame sl-flex astro-ohibvgtm">  <button data-close-modal class="sl-flex md:sl-hidden astro-ohibvgtm"> Cancel </button> <div class="search-container astro-ohibvgtm"> <div id="starlight__search" class="astro-ohibvgtm"></div> </div> </div> </dialog> </site-search>  <script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script> <script type="module" src="/docs/_astro/Search.astro_astro_type_script_index_0_lang.ol3yM__Y.js"></script>   </div> </div> </header> <a class="v2-banner astro-kajil2ev" href="https://opencode.ai/v2"> <span class="badge astro-kajil2ev">New</span> <span class="text astro-kajil2ev">OpenCode v2 is now available</span> <span class="arrow astro-kajil2ev" aria-hidden="true">&rarr;</span> </a>  <nav class="sidebar print:hidden astro-4toy2ex6" aria-label="Main"> <starlight-menu-button class="print:hidden astro-bwoow52m"> <button aria-expanded="false" aria-label="Menu" aria-controls="starlight__sidebar" class="sl-flex md:sl-hidden astro-bwoow52m"> <svg aria-hidden="true" class="open-menu astro-bwoow52m astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg> <svg aria-hidden="true" class="close-menu astro-bwoow52m astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg> </button> </starlight-menu-button> <script type="module">class s extends HTMLElement{constructor(){super(),this.btn=this.querySelector("button"),this.btn.addEventListener("click",()=>this.toggleExpanded());const t=this.closest("nav");t&&t.addEventListener("keyup",e=>this.closeOnEscape(e))}setExpanded(t){this.setAttribute("aria-expanded",String(t)),document.body.toggleAttribute("data-mobile-menu-expanded",t)}toggleExpanded(){this.setExpanded(this.getAttribute("aria-expanded")!=="true")}closeOnEscape(t){t.code==="Escape"&&(this.setExpanded(!1),this.btn.focus())}}customElements.define("starlight-menu-button",s);</script>   <div id="starlight__sidebar" class="sidebar-pane astro-4toy2ex6"> <div class="sidebar-content sl-flex astro-4toy2ex6"> <sl-sidebar-state-persist data-hash="003f4hv" class="astro-krthq4s6"> <script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script>  <ul class="top-level astro-gh5rgl3q"> <li class="astro-gh5rgl3q"> <a href="/docs/" aria-current="false" class="large astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Intro</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/config/" aria-current="false" class="large astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Config</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/providers/" aria-current="false" class="large astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Providers</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/network/" aria-current="false" class="large astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Network</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/enterprise/" aria-current="false" class="large astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Enterprise</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/troubleshooting/" aria-current="false" class="large astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Troubleshooting</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/windows-wsl" aria-current="false" class="large astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Windows</span>  </a> </li><li class="astro-gh5rgl3q"> <details open class="astro-gh5rgl3q"> <sl-sidebar-restore data-index="0"></sl-sidebar-restore> <summary class="astro-gh5rgl3q"> <div class="group-label astro-gh5rgl3q"> <span class="large astro-gh5rgl3q">Usage</span>  </div> <svg aria-hidden="true" class="caret astro-gh5rgl3q astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <ul class="astro-gh5rgl3q"> <li class="astro-gh5rgl3q"> <a href="/docs/go/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Go</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/tui/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">TUI</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/cli/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">CLI</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/web/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Web</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/ide/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">IDE</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/zen/" aria-current="page" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Zen</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/share/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Share</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/github/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">GitHub</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/gitlab/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">GitLab</span>  </a> </li> </ul>  </details> </li><li class="astro-gh5rgl3q"> <details open class="astro-gh5rgl3q"> <sl-sidebar-restore data-index="1"></sl-sidebar-restore> <summary class="astro-gh5rgl3q"> <div class="group-label astro-gh5rgl3q"> <span class="large astro-gh5rgl3q">Configure</span>  </div> <svg aria-hidden="true" class="caret astro-gh5rgl3q astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <ul class="astro-gh5rgl3q"> <li class="astro-gh5rgl3q"> <a href="/docs/tools/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Tools</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/rules/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Rules</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/agents/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Agents</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/models/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Models</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/themes/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Themes</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/keybinds/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Keybinds</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/commands/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Commands</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/formatters/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Formatters</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/permissions/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Permissions</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/policies/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Policies</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/lsp/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">LSP Servers</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/mcp-servers/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">MCP servers</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/acp/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">ACP Support</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/skills/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Agent Skills</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/references/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">References</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/custom-tools/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Custom Tools</span>  </a> </li> </ul>  </details> </li><li class="astro-gh5rgl3q"> <details open class="astro-gh5rgl3q"> <sl-sidebar-restore data-index="2"></sl-sidebar-restore> <summary class="astro-gh5rgl3q"> <div class="group-label astro-gh5rgl3q"> <span class="large astro-gh5rgl3q">Develop</span>  </div> <svg aria-hidden="true" class="caret astro-gh5rgl3q astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <ul class="astro-gh5rgl3q"> <li class="astro-gh5rgl3q"> <a href="/docs/sdk/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">SDK</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/server/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Server</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/plugins/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Plugins</span>  </a> </li><li class="astro-gh5rgl3q"> <a href="/docs/ecosystem/" aria-current="false" class="astro-gh5rgl3q"> <span class="astro-gh5rgl3q">Ecosystem</span>  </a> </li> </ul>  </details> </li> </ul>   <script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script> </sl-sidebar-state-persist>  <div class="md:sl-hidden"> <div class="mobile-preferences sl-flex astro-ljy57syt"> <div class="social-icons astro-ljy57syt"> <a href="https://github.com/anomalyco/opencode" rel="me" class="sl-flex astro-74ifintm"><span class="sr-only astro-74ifintm">GitHub</span><svg aria-hidden="true" class="astro-74ifintm astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a><a href="https://opencode.ai/discord" rel="me" class="sl-flex astro-74ifintm"><span class="sr-only astro-74ifintm">Discord</span><svg aria-hidden="true" class="astro-74ifintm astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.93-1.51 13.78 13.78 0 0 0-.64 1.28 18.27 18.27 0 0 0-5.5 0 12.64 12.64 0 0 0-.64-1.28h-.05A19.74 19.74 0 0 0 3.64 4.4 20.26 20.26 0 0 0 .11 18.09l.02.02a19.9 19.9 0 0 0 6.04 3.03l.04-.02a14.24 14.24 0 0 0 1.23-2.03.08.08 0 0 0-.05-.07 13.1 13.1 0 0 1-1.9-.92.08.08 0 0 1 .02-.1 10.2 10.2 0 0 0 .41-.31h.04a14.2 14.2 0 0 0 12.1 0l.04.01a9.63 9.63 0 0 0 .4.32.08.08 0 0 1-.03.1 12.29 12.29 0 0 1-1.9.91.08.08 0 0 0-.02.1 15.97 15.97 0 0 0 1.27 2.01h.04a19.84 19.84 0 0 0 6.03-3.05v-.03a20.12 20.12 0 0 0-3.57-13.69ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.15-1.08-2.15-2.42 0-1.33.95-2.42 2.15-2.42 1.22 0 2.18 1.1 2.16 2.42 0 1.34-.94 2.42-2.16 2.42Z"/></svg></a> </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-5phnz5xc"> <span class="sr-only astro-5phnz5xc">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-5phnz5xc astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select value="auto" autocomplete="off" class="astro-5phnz5xc"> <option value="dark" class="astro-5phnz5xc">Dark</option><option value="light" class="astro-5phnz5xc">Light</option><option value="auto" selected class="astro-5phnz5xc">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-5phnz5xc astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
+	StarlightThemeProvider.updatePickers();
+</script> <script type="module">const r="starlight-theme",o=e=>e==="auto"||e==="dark"||e==="light"?e:"auto",c=()=>o(typeof localStorage<"u"&&localStorage.getItem(r));function n(e){typeof localStorage<"u"&&localStorage.setItem(r,e==="light"||e==="dark"?e:"")}const l=()=>matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";function t(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e==="auto"?l():e,n(e)}matchMedia("(prefers-color-scheme: light)").addEventListener("change",()=>{c()==="auto"&&t("auto")});class s extends HTMLElement{constructor(){super(),t(c()),this.querySelector("select")?.addEventListener("change",a=>{a.currentTarget instanceof HTMLSelectElement&&t(o(a.currentTarget.value))})}}customElements.define("starlight-theme-select",s);</script> <opencode-language-select data-locales="[&#34;root&#34;,&#34;ar&#34;,&#34;bs&#34;,&#34;da&#34;,&#34;de&#34;,&#34;es&#34;,&#34;fr&#34;,&#34;it&#34;,&#34;ja&#34;,&#34;ko&#34;,&#34;nb&#34;,&#34;pl&#34;,&#34;pt-br&#34;,&#34;ru&#34;,&#34;th&#34;,&#34;tr&#34;,&#34;zh-cn&#34;,&#34;zh-tw&#34;]" class="astro-ztav45zs"> <starlight-lang-select><label style="--sl-select-width: 7em" class="astro-5phnz5xc"> <span class="sr-only astro-5phnz5xc">Select language</span> <svg aria-hidden="true" class="icon label-icon astro-5phnz5xc astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path fill-rule="evenodd" d="M8.516 3a.94.94 0 0 0-.941.94v1.15H2.94a.94.94 0 1 0 0 1.882h7.362a7.422 7.422 0 0 1-1.787 3.958 7.42 7.42 0 0 1-1.422-2.425.94.94 0 1 0-1.774.627 9.303 9.303 0 0 0 1.785 3.043 7.422 7.422 0 0 1-4.164 1.278.94.94 0 1 0 0 1.881 9.303 9.303 0 0 0 5.575-1.855 9.303 9.303 0 0 0 4.11 1.74l-.763 1.525a.968.968 0 0 0-.016.034l-1.385 2.77a.94.94 0 1 0 1.683.841l1.133-2.267h5.806l1.134 2.267a.94.94 0 0 0 1.683-.841l-1.385-2.769a.95.95 0 0 0-.018-.036l-3.476-6.951a.94.94 0 0 0-1.682 0l-1.82 3.639a7.423 7.423 0 0 1-3.593-1.256 9.303 9.303 0 0 0 2.27-5.203h1.894a.94.94 0 0 0 0-1.881H9.456V3.94A.94.94 0 0 0 8.516 3Zm6.426 11.794a1.068 1.068 0 0 1-.02.039l-.703 1.407h3.924l-1.962-3.924-1.24 2.478Z" clip-rule="evenodd"/></svg> <select value="/docs/zen/" autocomplete="off" class="astro-5phnz5xc"> <option value="/docs/zen/" class="astro-5phnz5xc">English</option><option value="/docs/ar/zen/" class="astro-5phnz5xc">العربية</option><option value="/docs/bs/zen/" class="astro-5phnz5xc">Bosanski</option><option value="/docs/da/zen/" class="astro-5phnz5xc">Dansk</option><option value="/docs/de/zen/" class="astro-5phnz5xc">Deutsch</option><option value="/docs/es/zen/" class="astro-5phnz5xc">Español</option><option value="/docs/fr/zen/" class="astro-5phnz5xc">Français</option><option value="/docs/it/zen/" class="astro-5phnz5xc">Italiano</option><option value="/docs/ja/zen/" class="astro-5phnz5xc">日本語</option><option value="/docs/ko/zen/" class="astro-5phnz5xc">한국어</option><option value="/docs/nb/zen/" class="astro-5phnz5xc">Norsk Bokmål</option><option value="/docs/pl/zen/" class="astro-5phnz5xc">Polski</option><option value="/docs/pt-br/zen/" class="astro-5phnz5xc">Português (Brasil)</option><option value="/docs/ru/zen/" class="astro-5phnz5xc">Русский</option><option value="/docs/th/zen/" class="astro-5phnz5xc">ไทย</option><option value="/docs/tr/zen/" class="astro-5phnz5xc">Türkçe</option><option value="/docs/zh-cn/zen/" class="astro-5phnz5xc">简体中文</option><option value="/docs/zh-tw/zen/" class="astro-5phnz5xc">繁體中文</option> </select> <svg aria-hidden="true" class="icon caret astro-5phnz5xc astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label> </starlight-lang-select> </opencode-language-select>   </div>  </div> </div> </div> </nav> <div class="main-frame astro-4toy2ex6">  <script type="module">const a=document.getElementById("starlight__sidebar"),n=a?.querySelector("sl-sidebar-state-persist"),o="sl-sidebar-state",i=()=>{let t=[];const e=n?.dataset.hash||"";try{const s=sessionStorage.getItem(o),r=JSON.parse(s||"{}");Array.isArray(r.open)&&r.hash===e&&(t=r.open)}catch{}return{hash:e,open:t,scroll:a?.scrollTop||0}},c=t=>{try{sessionStorage.setItem(o,JSON.stringify(t))}catch{}},d=()=>c(i()),l=(t,e)=>{const s=i();s.open[e]=t,c(s)};n?.addEventListener("click",t=>{if(!(t.target instanceof Element))return;const e=t.target.closest("summary")?.closest("details");if(!e)return;const s=e.querySelector("sl-sidebar-restore"),r=parseInt(s?.dataset.index||"");isNaN(r)||l(!e.open,r)});addEventListener("visibilitychange",()=>{document.visibilityState==="hidden"&&d()});addEventListener("pageHide",d);</script> <div class="lg:sl-flex astro-gcncgebb"> <aside class="right-sidebar-container print:hidden astro-gcncgebb"> <div class="right-sidebar astro-gcncgebb"> <div class="lg:sl-hidden astro-ymmhl6eg"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-va4i2ltn"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-va4i2ltn"><details id="starlight__mobile-toc" class="astro-va4i2ltn"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-va4i2ltn"><div class="toggle sl-flex astro-va4i2ltn">On this page<svg aria-hidden="true" class="caret astro-va4i2ltn astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></div><span class="display-current astro-va4i2ltn"></span></summary><div class="dropdown astro-va4i2ltn"><ul class="isMobile astro-gjtedqk2" style="--depth: 0;"> <li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#_top" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#background" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Background</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#how-it-works" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">How it works</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#endpoints" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Endpoints</span> </a> <ul class="isMobile astro-gjtedqk2" style="--depth: 1;"> <li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#models" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Models</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#jev" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Jev</span> </a>  </li> </ul>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#pricing" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Pricing</span> </a> <ul class="isMobile astro-gjtedqk2" style="--depth: 1;"> <li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#auto-reload" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Auto-reload</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#monthly-limits" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Monthly limits</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#deprecated-models" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Deprecated models</span> </a>  </li> </ul>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#privacy" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Privacy</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#for-teams" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">For Teams</span> </a> <ul class="isMobile astro-gjtedqk2" style="--depth: 1;"> <li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#roles" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Roles</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#model-access" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Model access</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#bring-your-own-key" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Bring your own key</span> </a>  </li> </ul>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#goals" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Goals</span> </a>  </li> </ul> </div></details></nav></mobile-starlight-toc><script type="module" src="/docs/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-ymmhl6eg"><div class="sl-container astro-ymmhl6eg"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-gjtedqk2" style="--depth: 0;"> <li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#_top" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#background" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Background</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#how-it-works" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">How it works</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#endpoints" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Endpoints</span> </a> <ul class="astro-gjtedqk2" style="--depth: 1;"> <li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#models" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Models</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#jev" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Jev</span> </a>  </li> </ul>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#pricing" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Pricing</span> </a> <ul class="astro-gjtedqk2" style="--depth: 1;"> <li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#auto-reload" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Auto-reload</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#monthly-limits" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Monthly limits</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#deprecated-models" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Deprecated models</span> </a>  </li> </ul>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#privacy" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Privacy</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#for-teams" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">For Teams</span> </a> <ul class="astro-gjtedqk2" style="--depth: 1;"> <li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#roles" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Roles</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#model-access" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Model access</span> </a>  </li><li class="astro-gjtedqk2" style="--depth: 1;"> <a href="#bring-your-own-key" class="astro-gjtedqk2" style="--depth: 1;"> <span class="astro-gjtedqk2" style="--depth: 1;">Bring your own key</span> </a>  </li> </ul>  </li><li class="astro-gjtedqk2" style="--depth: 0;"> <a href="#goals" class="astro-gjtedqk2" style="--depth: 0;"> <span class="astro-gjtedqk2" style="--depth: 0;">Goals</span> </a>  </li> </ul> </nav></starlight-toc><script type="module" src="/docs/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js"></script></div></div> </div> </aside> <div class="main-pane astro-gcncgebb">  <main data-pagefind-body class="astro-dkfaaqg7" lang="en" dir="ltr">    <div class="content-panel astro-cajdqzhi"> <div class="sl-container astro-cajdqzhi"> <h1 id="_top" class="astro-qxojtenq">Zen</h1><p class="page-description astro-qxojtenq">Curated list of models provided by OpenCode.</p> </div> </div>  <div class="content-panel astro-cajdqzhi"> <div class="sl-container astro-cajdqzhi"> <div class="sl-markdown-content"> <p>OpenCode Zen is a list of tested and verified models provided by the OpenCode team.</p>
+<p>Zen works like any other provider in OpenCode. You login to OpenCode Zen and get
+your API key. It’s <strong>completely optional</strong> and you don’t need to use it to use
+OpenCode.</p>
+<hr>
+<h2 id="background"><a href="#background">Background</a></h2>
+<p>There are a large number of models out there but only a few of
+these models work well as coding agents. Additionally, most providers are
+configured very differently; so you get very different performance and quality.</p>
+<aside aria-label="Tip" class="starlight-aside starlight-aside--tip"><p class="starlight-aside__title" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="starlight-aside__icon"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.43909 8.85483L1.44039 8.85354L4.96668 5.33815C5.30653 4.99386 5.7685 4.79662 6.2524 4.78972L6.26553 4.78963L12.9014 4.78962L13.8479 3.84308C16.9187 0.772319 20.0546 0.770617 21.4678 0.975145C21.8617 1.02914 22.2271 1.21053 22.5083 1.4917C22.7894 1.77284 22.9708 2.13821 23.0248 2.53199C23.2294 3.94517 23.2278 7.08119 20.1569 10.1521L19.2107 11.0983V17.7338L19.2106 17.7469C19.2037 18.2308 19.0067 18.6933 18.6624 19.0331L15.1456 22.5608C14.9095 22.7966 14.6137 22.964 14.29 23.0449C13.9663 23.1259 13.6267 23.1174 13.3074 23.0204C12.9881 22.9235 12.7011 22.7417 12.4771 22.4944C12.2533 22.2473 12.1006 21.9441 12.0355 21.6171L11.1783 17.3417L6.65869 12.822L4.34847 12.3589L2.38351 11.965C2.05664 11.8998 1.75272 11.747 1.50564 11.5232C1.25835 11.2992 1.07653 11.0122 0.979561 10.6929C0.882595 10.3736 0.874125 10.034 0.955057 9.7103C1.03599 9.38659 1.20328 9.09092 1.43909 8.85483ZM6.8186 10.8724L2.94619 10.096L6.32006 6.73268H10.9583L6.8186 10.8724ZM15.2219 5.21703C17.681 2.75787 20.0783 2.75376 21.1124 2.8876C21.2462 3.92172 21.2421 6.31895 18.783 8.77812L12.0728 15.4883L8.51172 11.9272L15.2219 5.21703ZM13.9042 21.0538L13.1279 17.1811L17.2676 13.0414V17.68L13.9042 21.0538Z"></path><path d="M9.31827 18.3446C9.45046 17.8529 9.17864 17.3369 8.68945 17.1724C8.56178 17.1294 8.43145 17.1145 8.30512 17.1243C8.10513 17.1398 7.91519 17.2172 7.76181 17.3434C7.62613 17.455 7.51905 17.6048 7.45893 17.7835C6.97634 19.2186 5.77062 19.9878 4.52406 20.4029C4.08525 20.549 3.6605 20.644 3.29471 20.7053C3.35607 20.3395 3.45098 19.9148 3.59711 19.476C4.01221 18.2294 4.78141 17.0237 6.21648 16.5411C6.39528 16.481 6.54504 16.3739 6.65665 16.2382C6.85126 16.0016 6.92988 15.678 6.84417 15.3647C6.83922 15.3466 6.83373 15.3286 6.82767 15.3106C6.74106 15.053 6.55701 14.8557 6.33037 14.7459C6.10949 14.6389 5.84816 14.615 5.59715 14.6994C5.47743 14.7397 5.36103 14.7831 5.24786 14.8294C3.22626 15.6569 2.2347 17.4173 1.75357 18.8621C1.49662 19.6337 1.36993 20.3554 1.30679 20.8818C1.27505 21.1464 1.25893 21.3654 1.25072 21.5213C1.24662 21.5993 1.24448 21.6618 1.24337 21.7066L1.243 21.7226L1.24235 21.7605L1.2422 21.7771L1.24217 21.7827L1.24217 21.7856C1.24217 22.3221 1.67703 22.7579 2.2137 22.7579L2.2155 22.7579L2.22337 22.7578L2.23956 22.7577C2.25293 22.7575 2.27096 22.7572 2.29338 22.7567C2.33821 22.7555 2.40073 22.7534 2.47876 22.7493C2.63466 22.7411 2.85361 22.725 3.11822 22.6932C3.64462 22.6301 4.36636 22.5034 5.13797 22.2464C6.58274 21.7653 8.3431 20.7738 9.17063 18.7522C9.21696 18.639 9.26037 18.5226 9.30064 18.4029C9.30716 18.3835 9.31304 18.364 9.31827 18.3446Z"></path></svg>Tip</p><div class="starlight-aside__content"><p>We tested a select group of models and providers that work well with OpenCode.</p></div></aside>
+<p>So if you are using a model through something like OpenRouter, you can never be
+sure if you are getting the best version of the model you want.</p>
+<p>To fix this, we did a couple of things:</p>
+<ol>
+<li>We tested a select group of models and talked to their teams about how to
+best run them.</li>
+<li>We then worked with a few providers to make sure these were being served
+correctly.</li>
+<li>Finally, we benchmarked the combination of the model/provider and came up
+with a list that we feel good recommending.</li>
+</ol>
+<p>OpenCode Zen is an AI gateway that gives you access to these models.</p>
+<hr>
+<h2 id="how-it-works"><a href="#how-it-works">How it works</a></h2>
+<p>OpenCode Zen works like any other provider in OpenCode.</p>
+<ol>
+<li>You sign in to <strong><a href="https://opencode.ai/auth">OpenCode Zen</a></strong>, add your billing
+details, and copy your API key.</li>
+<li>You run the <code dir="auto">/connect</code> command in the TUI, select OpenCode Zen, and paste your API key.</li>
+<li>Run <code dir="auto">/models</code> in the TUI to see the list of models we recommend.</li>
+</ol>
+<p>You are charged per request and you can add credits to your account.</p>
+<hr>
+<h2 id="endpoints"><a href="#endpoints">Endpoints</a></h2>
+<p>You can also access our models through the following API endpoints.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Model</th><th>Model ID</th><th>Endpoint</th><th>AI SDK Package</th></tr></thead><tbody><tr><td>GPT 6 Astra</td><td>gpt-6-astra</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 6 Sol</td><td>gpt-6-sol</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 6.1 Sol</td><td>gpt-6.1-sol</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 6 Luna</td><td>gpt-6-luna</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.6 Sol</td><td>gpt-5.6-sol</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.6 Terra</td><td>gpt-5.6-terra</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.6 Luna</td><td>gpt-5.6-luna</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.5</td><td>gpt-5.5</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.5 Pro</td><td>gpt-5.5-pro</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.4</td><td>gpt-5.4</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.4 Pro</td><td>gpt-5.4-pro</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.4 Mini</td><td>gpt-5.4-mini</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.4 Nano</td><td>gpt-5.4-nano</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.3 Codex</td><td>gpt-5.3-codex</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.3 Codex Spark</td><td>gpt-5.3-codex-spark</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.2</td><td>gpt-5.2</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.2 Codex</td><td>gpt-5.2-codex</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.1</td><td>gpt-5.1</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.1 Codex</td><td>gpt-5.1-codex</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.1 Codex Max</td><td>gpt-5.1-codex-max</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5.1 Codex Mini</td><td>gpt-5.1-codex-mini</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5</td><td>gpt-5</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5 Codex</td><td>gpt-5-codex</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>GPT 5 Nano</td><td>gpt-5-nano</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>Claude Fable 5.1</td><td>claude-fable-5-1</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Fable 5</td><td>claude-fable-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Opus 5.5</td><td>claude-opus-5-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Opus 5</td><td>claude-opus-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Opus 4.8</td><td>claude-opus-4-8</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Opus 4.7</td><td>claude-opus-4-7</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Opus 4.6</td><td>claude-opus-4-6</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Opus 4.5</td><td>claude-opus-4-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Sonnet 5</td><td>claude-sonnet-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Sonnet 4.6</td><td>claude-sonnet-4-6</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Sonnet 4.5</td><td>claude-sonnet-4-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Haiku 5.5</td><td>claude-haiku-5-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Claude Haiku 4.5</td><td>claude-haiku-4-5</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Gemini 3.8 Flash</td><td>gemini-3.8-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/models/gemini-3.8-flash</code></td><td><code dir="auto">@ai-sdk/google</code></td></tr><tr><td>Gemini 3.7 Flash</td><td>gemini-3.7-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/models/gemini-3.7-flash</code></td><td><code dir="auto">@ai-sdk/google</code></td></tr><tr><td>Gemini 3.6 Flash</td><td>gemini-3.6-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/models/gemini-3.6-flash</code></td><td><code dir="auto">@ai-sdk/google</code></td></tr><tr><td>Gemini 3.5 Flash</td><td>gemini-3.5-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/models/gemini-3.5-flash</code></td><td><code dir="auto">@ai-sdk/google</code></td></tr><tr><td>Gemini 3.5 Flash Lite</td><td>gemini-3.5-flash-lite</td><td><code dir="auto">https://opencode.ai/zen/v1/models/gemini-3.5-flash-lite</code></td><td><code dir="auto">@ai-sdk/google</code></td></tr><tr><td>Gemini 3.1 Pro</td><td>gemini-3.1-pro</td><td><code dir="auto">https://opencode.ai/zen/v1/models/gemini-3.1-pro</code></td><td><code dir="auto">@ai-sdk/google</code></td></tr><tr><td>Gemini 3 Flash</td><td>gemini-3-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/models/gemini-3-flash</code></td><td><code dir="auto">@ai-sdk/google</code></td></tr><tr><td>Grok 4.7</td><td>grok-4.7</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>Grok 4.6</td><td>grok-4.6</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>Grok 4.5</td><td>grok-4.5</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>Grok Build 0.1</td><td>grok-build-0.1</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>Muse Spark 1.3</td><td>muse-spark-1.3</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>Muse Spark 1.2</td><td>muse-spark-1.2</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr><tr><td>Qwen3.8 Max</td><td>qwen3.8-max</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Qwen3.8 Flash</td><td>qwen3.8-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Qwen3.7 Max</td><td>qwen3.7-max</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Qwen3.7 Plus</td><td>qwen3.7-plus</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Qwen3.6 Plus</td><td>qwen3.6-plus</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>Qwen3.5 Plus</td><td>qwen3.5-plus</td><td><code dir="auto">https://opencode.ai/zen/v1/messages</code></td><td><code dir="auto">@ai-sdk/anthropic</code></td></tr><tr><td>DeepSeek V4.1 Flash</td><td>deepseek-v4.1-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>DeepSeek V4 Pro</td><td>deepseek-v4-pro</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>DeepSeek V4 Flash</td><td>deepseek-v4-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>DeepSeek V4 Flash Vision Exp</td><td>deepseek-v4-flash-vision-exp</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>MiniMax M3</td><td>minimax-m3</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>MiniMax M2.7</td><td>minimax-m2.7</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>MiniMax M2.5</td><td>minimax-m2.5</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>GLM 5.3 Flash</td><td>glm-5.3-flash</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>GLM 5.3</td><td>glm-5.3</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>GLM 5.2</td><td>glm-5.2</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>GLM 5.1</td><td>glm-5.1</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>GLM 5</td><td>glm-5</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Kimi K2.5</td><td>kimi-k2.5</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Kimi K2.6</td><td>kimi-k2.6</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Kimi K2.7 Code</td><td>kimi-k2.7-code</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Kimi K3</td><td>kimi-k3</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Mistral Large 4</td><td>mistral-large-4</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Jev 1.13</td><td>jev-1.13</td><td><code dir="auto">https://opencode.ai/zen/v1/systemone</code></td><td>-</td></tr><tr><td>Jev 1.13 Free</td><td>jev-1.13-free</td><td><code dir="auto">https://opencode.ai/zen/v1/systemone</code></td><td>-</td></tr><tr><td>Big Pickle</td><td>big-pickle</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Space Bunny Free</td><td>space-bunny-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>LongCat 2.5 Preview Free</td><td>longcat-2.5-preview-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Exo Free</td><td>exo-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Fledge Alpha Free</td><td>fledge-alpha-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>MiMo-V2.6-Flash Free</td><td>mimo-v2.6-flash-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>MiMo-V2.5 Free</td><td>mimo-v2.5-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Ling 3.1 Flash Free</td><td>ling-3.1-flash-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Ling 3.0 Flash Fin Free</td><td>ling-3.0-flash-fin-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Nemotron 3 Ultra Free</td><td>nemotron-3-ultra-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Nemotron 3.5 Lightning Free</td><td>nemotron-3.5-lightning-free</td><td><code dir="auto">https://opencode.ai/zen/v1/chat/completions</code></td><td><code dir="auto">@ai-sdk/openai-compatible</code></td></tr><tr><td>Muse Spark 1.3 Contributor Free</td><td>muse-spark-1.3-contributor-free</td><td><code dir="auto">https://opencode.ai/zen/v1/responses</code></td><td><code dir="auto">@ai-sdk/openai</code></td></tr></tbody></table>
+<p>The <a href="/docs/config/#models">model id</a> in your OpenCode config
+uses the format <code dir="auto">opencode/&#x3C;model-id></code>. For example, for GPT 5.5, you would
+use <code dir="auto">opencode/gpt-5.5</code> in your config.</p>
+<hr>
+<h3 id="models"><a href="#models">Models</a></h3>
+<p>You can fetch the full list of available models and their metadata from:</p>
+<div class="expressive-code"><link rel="stylesheet" href="/docs/_astro/ec.4c0k7.css"><script type="module" src="/docs/_astro/ec.0vx5m.js"></script><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="plaintext"><code><div class="ec-line"><div class="code"><span style="--0:#24292e;--1:#e1e4e8">https://opencode.ai/zen/v1/models</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="https://opencode.ai/zen/v1/models"><div></div></button></div></figure></div>
+<hr>
+<h3 id="jev"><a href="#jev">Jev</a></h3>
+<p>Jev is a System One model from TypeSafe AI for fast, structured decisions. Instead of generating text, it evaluates a <code dir="auto">state</code> against typed questions and returns values and probabilities that your code can use directly. It supports yes/no (<code dir="auto">noul</code>), multiple-choice (<code dir="auto">choice</code>), and rubric-based (<code dir="auto">score</code>) questions.</p>
+<p>Use your OpenCode Zen API key with the <code dir="auto">https://opencode.ai/zen/v1/systemone</code> endpoint. This example checks whether a support request is urgent:</p>
+<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">curl</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">https://opencode.ai/zen/v1/systemone</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">\</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">-H</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">"Authorization: Bearer </span><span style="--0:#24292E;--1:#E1E4E8">$OPENCODE_API_KEY</span><span style="--0:#032F62;--1:#9ECBFF">"</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">\</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">-H</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">"Content-Type: application/json"</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">\</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">-d</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">'{</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">"model": "jev-1.13",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">"state": "My payments have failed for three days and I am losing sales. Please help now.",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">"questions": {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">      </span></span><span style="--0:#032F62;--1:#9ECBFF">"is_urgent": {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"type": "noul",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"instructions": "Does this request require urgent attention?"</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">      </span></span><span style="--0:#032F62;--1:#9ECBFF">}</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">}</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">  </span></span><span style="--0:#032F62;--1:#9ECBFF">}'</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="curl https://opencode.ai/zen/v1/systemone \  -H &#x22;Authorization: Bearer $OPENCODE_API_KEY&#x22; \  -H &#x22;Content-Type: application/json&#x22; \  -d &#x27;{    &#x22;model&#x22;: &#x22;jev-1.13&#x22;,    &#x22;state&#x22;: &#x22;My payments have failed for three days and I am losing sales. Please help now.&#x22;,    &#x22;questions&#x22;: {      &#x22;is_urgent&#x22;: {        &#x22;type&#x22;: &#x22;noul&#x22;,        &#x22;instructions&#x22;: &#x22;Does this request require urgent attention?&#x22;      }    }  }&#x27;"><div></div></button></div></figure></div>
+<p>You can ask multiple questions in one request. Jev evaluates them in parallel and returns each answer under the matching question ID:</p>
+<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">curl</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">https://opencode.ai/zen/v1/systemone</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">\</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">-H</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">"Authorization: Bearer </span><span style="--0:#24292E;--1:#E1E4E8">$OPENCODE_API_KEY</span><span style="--0:#032F62;--1:#9ECBFF">"</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">\</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">-H</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">"Content-Type: application/json"</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">\</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">-d</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">'{</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">"model": "jev-1.13",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">"state": "My order arrived late and the item is damaged. I want a refund.",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">"questions": {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">      </span></span><span style="--0:#032F62;--1:#9ECBFF">"department": {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"type": "choice",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"instructions": "Which team should handle this request?",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"criteria": {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">          </span></span><span style="--0:#032F62;--1:#9ECBFF">"returns": "Refunds, exchanges, or damaged items",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">          </span></span><span style="--0:#032F62;--1:#9ECBFF">"shipping": "Delivery delays or lost packages",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">          </span></span><span style="--0:#032F62;--1:#9ECBFF">"billing": "Charges, invoices, or payment problems"</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">}</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">      </span></span><span style="--0:#032F62;--1:#9ECBFF">},</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">      </span></span><span style="--0:#032F62;--1:#9ECBFF">"frustration": {</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"type": "score",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"instructions": "How frustrated is the customer?",</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">        </span></span><span style="--0:#032F62;--1:#9ECBFF">"criteria": ["Calm", "Frustrated", "Very angry"]</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">      </span></span><span style="--0:#032F62;--1:#9ECBFF">}</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">    </span></span><span style="--0:#032F62;--1:#9ECBFF">}</span></div></div><div class="ec-line"><div class="code"><span class="indent"><span style="--0:#032F62;--1:#9ECBFF">  </span></span><span style="--0:#032F62;--1:#9ECBFF">}'</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="curl https://opencode.ai/zen/v1/systemone \  -H &#x22;Authorization: Bearer $OPENCODE_API_KEY&#x22; \  -H &#x22;Content-Type: application/json&#x22; \  -d &#x27;{    &#x22;model&#x22;: &#x22;jev-1.13&#x22;,    &#x22;state&#x22;: &#x22;My order arrived late and the item is damaged. I want a refund.&#x22;,    &#x22;questions&#x22;: {      &#x22;department&#x22;: {        &#x22;type&#x22;: &#x22;choice&#x22;,        &#x22;instructions&#x22;: &#x22;Which team should handle this request?&#x22;,        &#x22;criteria&#x22;: {          &#x22;returns&#x22;: &#x22;Refunds, exchanges, or damaged items&#x22;,          &#x22;shipping&#x22;: &#x22;Delivery delays or lost packages&#x22;,          &#x22;billing&#x22;: &#x22;Charges, invoices, or payment problems&#x22;        }      },      &#x22;frustration&#x22;: {        &#x22;type&#x22;: &#x22;score&#x22;,        &#x22;instructions&#x22;: &#x22;How frustrated is the customer?&#x22;,        &#x22;criteria&#x22;: [&#x22;Calm&#x22;, &#x22;Frustrated&#x22;, &#x22;Very angry&#x22;]      }    }  }&#x27;"><div></div></button></div></figure></div>
+<p>Use <code dir="auto">jev-1.13-free</code> instead of <code dir="auto">jev-1.13</code> to use the limited-time free model. See the <a href="https://docs.typesafe.ai/">TypeSafe AI documentation</a> for details about question types and response fields.</p>
+<hr>
+<h2 id="pricing"><a href="#pricing">Pricing</a></h2>
+<p>We support a pay-as-you-go model. Below are the prices <strong>per 1M tokens</strong>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached Read</th><th>Cached Write</th></tr></thead><tbody><tr><td>Big Pickle</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Space Bunny Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>LongCat 2.5 Preview Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Exo Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Fledge Alpha Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>MiMo-V2.6-Flash Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>MiMo-V2.5 Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Ling 3.1 Flash Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Ling 3.0 Flash Fin Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Nemotron 3 Ultra Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Nemotron 3.5 Lightning Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Muse Spark 1.3 Contributor Free</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr><tr><td>Jev 1.13 Free</td><td>Free</td><td>Free</td><td>-</td><td>-</td></tr><tr><td>Jev 1.13</td><td>$0.042</td><td>Free</td><td>-</td><td>-</td></tr><tr><td>MiniMax M3</td><td>$0.30</td><td>$1.20</td><td>$0.06</td><td>-</td></tr><tr><td>MiniMax M2.7</td><td>$0.30</td><td>$1.20</td><td>$0.06</td><td>-</td></tr><tr><td>MiniMax M2.5</td><td>$0.30</td><td>$1.20</td><td>$0.06</td><td>-</td></tr><tr><td>GLM 5.3 Flash</td><td>$0.15</td><td>$0.50</td><td>$0.03</td><td>-</td></tr><tr><td>GLM 5.3</td><td>$1.40</td><td>$4.40</td><td>$0.26</td><td>-</td></tr><tr><td>GLM 5.2</td><td>$1.40</td><td>$4.40</td><td>$0.26</td><td>-</td></tr><tr><td>GLM 5.1</td><td>$1.40</td><td>$4.40</td><td>$0.26</td><td>-</td></tr><tr><td>GLM 5</td><td>$1.00</td><td>$3.20</td><td>$0.20</td><td>-</td></tr><tr><td>Kimi K2.7 Code</td><td>$0.95</td><td>$4.00</td><td>$0.19</td><td>-</td></tr><tr><td>Kimi K3</td><td>$3.00</td><td>$15.00</td><td>$0.30</td><td>-</td></tr><tr><td>Kimi K2.6</td><td>$0.95</td><td>$4.00</td><td>$0.16</td><td>-</td></tr><tr><td>Kimi K2.5</td><td>$0.60</td><td>$3.00</td><td>$0.10</td><td>-</td></tr><tr><td>Mistral Large 4 (50% off)</td><td><del>$1.36</del> $0.68</td><td><del>$4.18</del> $2.09</td><td><del>$0.14</del> $0.07</td><td>-</td></tr><tr><td>Qwen3.8 Max</td><td>$2.00</td><td>$6.00</td><td>$0.25</td><td>$2.50</td></tr><tr><td>Qwen3.8 Flash</td><td>$0.15</td><td>$0.47</td><td>$0.016</td><td>$0.20</td></tr><tr><td>Qwen3.7 Max</td><td>$2.50</td><td>$7.50</td><td>$0.50</td><td>$3.125</td></tr><tr><td>Qwen3.7 Plus</td><td>$0.40</td><td>$1.60</td><td>$0.04</td><td>$0.50</td></tr><tr><td>Qwen3.6 Plus</td><td>$0.50</td><td>$3.00</td><td>$0.05</td><td>$0.625</td></tr><tr><td>Qwen3.5 Plus</td><td>$0.20</td><td>$1.20</td><td>$0.02</td><td>$0.25</td></tr><tr><td>DeepSeek V4.1 Flash</td><td>$0.30</td><td>$1.20</td><td>$0.006</td><td>-</td></tr><tr><td>DeepSeek V4 Pro</td><td>$1.74</td><td>$3.48</td><td>$0.145</td><td>-</td></tr><tr><td>DeepSeek V4 Flash</td><td>$0.14</td><td>$0.28</td><td>$0.028</td><td>-</td></tr><tr><td>DeepSeek V4 Flash Vision Exp</td><td>$0.14</td><td>$0.28</td><td>$0.028</td><td>-</td></tr><tr><td>Claude Fable 5.1</td><td>$10.00</td><td>$50.00</td><td>$0.25</td><td>$12.50</td></tr><tr><td>Claude Fable 5</td><td>$10.00</td><td>$50.00</td><td>$1.00</td><td>$12.50</td></tr><tr><td>Claude Opus 5.5</td><td>$4.00</td><td>$20.00</td><td>$0.20</td><td>$5.00</td></tr><tr><td>Claude Opus 5</td><td>$5.00</td><td>$25.00</td><td>$0.50</td><td>$6.25</td></tr><tr><td>Claude Opus 4.8</td><td>$5.00</td><td>$25.00</td><td>$0.50</td><td>$6.25</td></tr><tr><td>Claude Opus 4.7</td><td>$5.00</td><td>$25.00</td><td>$0.50</td><td>$6.25</td></tr><tr><td>Claude Opus 4.6</td><td>$5.00</td><td>$25.00</td><td>$0.50</td><td>$6.25</td></tr><tr><td>Claude Opus 4.5</td><td>$5.00</td><td>$25.00</td><td>$0.50</td><td>$6.25</td></tr><tr><td>Claude Sonnet 5</td><td>$2.00</td><td>$10.00</td><td>$0.20</td><td>$2.50</td></tr><tr><td>Claude Sonnet 4.6</td><td>$3.00</td><td>$15.00</td><td>$0.30</td><td>$3.75</td></tr><tr><td>Claude Sonnet 4.5 (≤ 200K tokens)</td><td>$3.00</td><td>$15.00</td><td>$0.30</td><td>$3.75</td></tr><tr><td>Claude Sonnet 4.5 (> 200K tokens)</td><td>$6.00</td><td>$22.50</td><td>$0.60</td><td>$7.50</td></tr><tr><td>Claude Haiku 5.5 (≤ 100K tokens)</td><td>$0.10</td><td>$0.50</td><td>$0.01</td><td>$0.125</td></tr><tr><td>Claude Haiku 5.5 (> 100K tokens)</td><td>$0.50</td><td>$2.50</td><td>$0.05</td><td>$0.625</td></tr><tr><td>Claude Haiku 4.5</td><td>$1.00</td><td>$5.00</td><td>$0.10</td><td>$1.25</td></tr><tr><td>Gemini 3.8 Flash</td><td>$1.50</td><td>$7.50</td><td>$0.15</td><td>-</td></tr><tr><td>Gemini 3.7 Flash</td><td>$1.50</td><td>$7.50</td><td>$0.15</td><td>-</td></tr><tr><td>Gemini 3.6 Flash</td><td>$1.50</td><td>$7.50</td><td>$0.15</td><td>-</td></tr><tr><td>Gemini 3.5 Flash</td><td>$1.50</td><td>$9.00</td><td>$0.15</td><td>-</td></tr><tr><td>Gemini 3.5 Flash Lite</td><td>$0.30</td><td>$2.50</td><td>$0.03</td><td>-</td></tr><tr><td>Gemini 3.1 Pro (≤ 200K tokens)</td><td>$2.00</td><td>$12.00</td><td>$0.20</td><td>-</td></tr><tr><td>Gemini 3.1 Pro (> 200K tokens)</td><td>$4.00</td><td>$18.00</td><td>$0.40</td><td>-</td></tr><tr><td>Gemini 3 Flash</td><td>$0.50</td><td>$3.00</td><td>$0.05</td><td>-</td></tr><tr><td>Grok 4.7 (≤ 200K tokens)</td><td>$2.00</td><td>$6.00</td><td>$0.50</td><td>-</td></tr><tr><td>Grok 4.7 (> 200K tokens)</td><td>$4.00</td><td>$12.00</td><td>$1.00</td><td>-</td></tr><tr><td>Grok 4.6 (≤ 200K tokens)</td><td>$2.00</td><td>$6.00</td><td>$0.50</td><td>-</td></tr><tr><td>Grok 4.6 (> 200K tokens)</td><td>$4.00</td><td>$12.00</td><td>$1.00</td><td>-</td></tr><tr><td>Grok 4.5 (≤ 200K tokens)</td><td>$2.00</td><td>$6.00</td><td>$0.30</td><td>-</td></tr><tr><td>Grok 4.5 (> 200K tokens)</td><td>$4.00</td><td>$12.00</td><td>$0.60</td><td>-</td></tr><tr><td>Grok Build 0.1</td><td>$1.00</td><td>$2.00</td><td>$0.20</td><td>-</td></tr><tr><td>Muse Spark 1.3</td><td>$1.25</td><td>$4.25</td><td>$0.15</td><td>-</td></tr><tr><td>Muse Spark 1.2</td><td>$1.25</td><td>$4.25</td><td>$0.15</td><td>-</td></tr><tr><td>GPT 6 Astra (≤ 272K tokens)</td><td>$10.00</td><td>$50.00</td><td>$1.00</td><td>$12.50</td></tr><tr><td>GPT 6 Astra (> 272K tokens)</td><td>$20.00</td><td>$75.00</td><td>$2.00</td><td>$25.00</td></tr><tr><td>GPT 6 Sol (≤ 272K tokens)</td><td>$2.00</td><td>$10.00</td><td>$0.20</td><td>$2.50</td></tr><tr><td>GPT 6 Sol (> 272K tokens)</td><td>$4.00</td><td>$15.00</td><td>$0.40</td><td>$5.00</td></tr><tr><td>GPT 6.1 Sol (≤ 272K tokens)</td><td>$2.00</td><td>$10.00</td><td>$0.10</td><td>$2.50</td></tr><tr><td>GPT 6.1 Sol (> 272K tokens)</td><td>$4.00</td><td>$15.00</td><td>$0.20</td><td>$5.00</td></tr><tr><td>GPT 6 Luna (≤ 272K tokens)</td><td>$0.10</td><td>$0.50</td><td>$0.01</td><td>$0.125</td></tr><tr><td>GPT 6 Luna (> 272K tokens)</td><td>$0.20</td><td>$0.75</td><td>$0.02</td><td>$0.25</td></tr><tr><td>GPT 5.6 Sol (≤ 272K tokens)</td><td>$4.00</td><td>$20.00</td><td>$0.40</td><td>$5.00</td></tr><tr><td>GPT 5.6 Sol (> 272K tokens)</td><td>$8.00</td><td>$30.00</td><td>$0.80</td><td>$10.00</td></tr><tr><td>GPT 5.6 Terra (≤ 272K tokens)</td><td>$2.00</td><td>$12.00</td><td>$0.20</td><td>$2.50</td></tr><tr><td>GPT 5.6 Terra (> 272K tokens)</td><td>$4.00</td><td>$18.00</td><td>$0.40</td><td>$5.00</td></tr><tr><td>GPT 5.6 Luna (≤ 272K tokens)</td><td>$0.20</td><td>$1.20</td><td>$0.02</td><td>$0.25</td></tr><tr><td>GPT 5.6 Luna (> 272K tokens)</td><td>$0.40</td><td>$1.80</td><td>$0.04</td><td>$0.50</td></tr><tr><td>GPT 5.5 (≤ 272K tokens)</td><td>$5.00</td><td>$30.00</td><td>$0.50</td><td>-</td></tr><tr><td>GPT 5.5 (> 272K tokens)</td><td>$10.00</td><td>$45.00</td><td>$1.00</td><td>-</td></tr><tr><td>GPT 5.5 Pro</td><td>$30.00</td><td>$180.00</td><td>$30.00</td><td>-</td></tr><tr><td>GPT 5.4 (≤ 272K tokens)</td><td>$2.50</td><td>$15.00</td><td>$0.25</td><td>-</td></tr><tr><td>GPT 5.4 (> 272K tokens)</td><td>$5.00</td><td>$22.50</td><td>$0.50</td><td>-</td></tr><tr><td>GPT 5.4 Pro</td><td>$30.00</td><td>$180.00</td><td>$30.00</td><td>-</td></tr><tr><td>GPT 5.4 Mini</td><td>$0.75</td><td>$4.50</td><td>$0.075</td><td>-</td></tr><tr><td>GPT 5.4 Nano</td><td>$0.20</td><td>$1.25</td><td>$0.02</td><td>-</td></tr><tr><td>GPT 5.3 Codex Spark</td><td>$1.75</td><td>$14.00</td><td>$0.175</td><td>-</td></tr><tr><td>GPT 5.3 Codex</td><td>$1.75</td><td>$14.00</td><td>$0.175</td><td>-</td></tr><tr><td>GPT 5.2</td><td>$1.75</td><td>$14.00</td><td>$0.175</td><td>-</td></tr><tr><td>GPT 5.2 Codex</td><td>$1.75</td><td>$14.00</td><td>$0.175</td><td>-</td></tr><tr><td>GPT 5.1</td><td>$1.07</td><td>$8.50</td><td>$0.107</td><td>-</td></tr><tr><td>GPT 5.1 Codex</td><td>$1.07</td><td>$8.50</td><td>$0.107</td><td>-</td></tr><tr><td>GPT 5.1 Codex Max</td><td>$1.25</td><td>$10.00</td><td>$0.125</td><td>-</td></tr><tr><td>GPT 5.1 Codex Mini</td><td>$0.25</td><td>$2.00</td><td>$0.025</td><td>-</td></tr><tr><td>GPT 5</td><td>$1.07</td><td>$8.50</td><td>$0.107</td><td>-</td></tr><tr><td>GPT 5 Codex</td><td>$1.07</td><td>$8.50</td><td>$0.107</td><td>-</td></tr><tr><td>GPT 5 Nano</td><td>$0.05</td><td>$0.40</td><td>$0.005</td><td>-</td></tr></tbody></table>
+<p><strong>DeepSeek V4 Flash Vision Exp:</strong> Images are converted into tokens based on their dimensions and billed as input tokens alongside text tokens. <a href="https://api-docs.deepseek.com/quick_start/pricing/">Learn more</a>.</p>
+<p>You may notice <a href="/docs/config/#models">low-cost models</a>, such as Haiku, Nano, or Flash, in your usage history. OpenCode uses these models to generate session titles.</p>
+<aside aria-label="Note" class="starlight-aside starlight-aside--note"><p class="starlight-aside__title" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="starlight-aside__icon"><path d="M12 11C11.7348 11 11.4804 11.1054 11.2929 11.2929C11.1054 11.4804 11 11.7348 11 12V16C11 16.2652 11.1054 16.5196 11.2929 16.7071C11.4804 16.8946 11.7348 17 12 17C12.2652 17 12.5196 16.8946 12.7071 16.7071C12.8946 16.5196 13 16.2652 13 16V12C13 11.7348 12.8946 11.4804 12.7071 11.2929C12.5196 11.1054 12.2652 11 12 11ZM12.38 7.08C12.1365 6.97998 11.8635 6.97998 11.62 7.08C11.4973 7.12759 11.3851 7.19896 11.29 7.29C11.2017 7.3872 11.1306 7.49882 11.08 7.62C11.024 7.73868 10.9966 7.86882 11 8C10.9992 8.13161 11.0245 8.26207 11.0742 8.38391C11.124 8.50574 11.1973 8.61656 11.29 8.71C11.3872 8.79833 11.4988 8.86936 11.62 8.92C11.7715 8.98224 11.936 9.00632 12.099 8.99011C12.2619 8.97391 12.4184 8.91792 12.5547 8.82707C12.691 8.73622 12.8029 8.61328 12.8805 8.46907C12.9582 8.32486 12.9992 8.16378 13 8C12.9963 7.73523 12.8927 7.48163 12.71 7.29C12.6149 7.19896 12.5028 7.12759 12.38 7.08ZM12 2C10.0222 2 8.08879 2.58649 6.4443 3.6853C4.79981 4.78412 3.51809 6.3459 2.76121 8.17317C2.00433 10.0004 1.8063 12.0111 2.19215 13.9509C2.578 15.8907 3.53041 17.6725 4.92894 19.0711C6.32746 20.4696 8.10929 21.422 10.0491 21.8079C11.9889 22.1937 13.9996 21.9957 15.8268 21.2388C17.6541 20.4819 19.2159 19.2002 20.3147 17.5557C21.4135 15.9112 22 13.9778 22 12C22 10.6868 21.7413 9.38642 21.2388 8.17317C20.7363 6.95991 19.9997 5.85752 19.0711 4.92893C18.1425 4.00035 17.0401 3.26375 15.8268 2.7612C14.6136 2.25866 13.3132 2 12 2ZM12 20C10.4178 20 8.87104 19.5308 7.55544 18.6518C6.23985 17.7727 5.21447 16.5233 4.60897 15.0615C4.00347 13.5997 3.84504 11.9911 4.15372 10.4393C4.4624 8.88743 5.22433 7.46197 6.34315 6.34315C7.46197 5.22433 8.88743 4.4624 10.4393 4.15372C11.9911 3.84504 13.5997 4.00346 15.0615 4.60896C16.5233 5.21447 17.7727 6.23984 18.6518 7.55544C19.5308 8.87103 20 10.4177 20 12C20 14.1217 19.1572 16.1566 17.6569 17.6569C16.1566 19.1571 14.1217 20 12 20Z"></path></svg>Note</p><div class="starlight-aside__content"><p>Credit card fees are passed along at cost (4.4% + $0.30 per transaction); we don’t charge anything beyond that.</p></div></aside>
+<p>The free models:</p>
+<ul>
+<li>Exo Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Fledge Alpha Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>MiMo-V2.6-Flash Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>MiMo-V2.5 Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Ling 3.1 Flash Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Ling 3.0 Flash Fin Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Nemotron 3 Ultra Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Nemotron 3.5 Lightning Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Big Pickle is a stealth model that’s free on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Space Bunny Free is a stealth model that’s free on OpenCode for a limited time. Its provider follows a zero-retention policy and does not use your data for model training.</li>
+<li>LongCat 2.5 Preview Free is free on OpenCode for a limited time. Its provider follows a zero-retention policy and does not use your data for model training.</li>
+<li>Muse Spark 1.3 Contributor Free is available on OpenCode for a limited time. The team is using this time to collect feedback and improve the model.</li>
+<li>Jev 1.13 Free is available on OpenCode for a limited time.</li>
+</ul>
+<p><a href="mailto:help@anoma.ly">Contact us</a> if you have any questions.</p>
+<hr>
+<h3 id="auto-reload"><a href="#auto-reload">Auto-reload</a></h3>
+<p>If your balance goes below $5, Zen will automatically reload $20.</p>
+<p>You can change the auto-reload amount. You can also disable auto-reload entirely.</p>
+<hr>
+<h3 id="monthly-limits"><a href="#monthly-limits">Monthly limits</a></h3>
+<p>You can also set a monthly usage limit for the entire workspace and for each
+member of your team.</p>
+<p>For example, let’s say you set a monthly usage limit to $20, Zen will not use
+more than $20 in a month. But if you have auto-reload enabled, Zen might end up
+charging you more than $20 if your balance goes below $5.</p>
+<hr>
+<h3 id="deprecated-models"><a href="#deprecated-models">Deprecated models</a></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Model</th><th>Deprecation date</th></tr></thead><tbody><tr><td>GPT 5.2 Codex</td><td>July 23, 2026</td></tr><tr><td>GPT 5.1 Codex</td><td>July 23, 2026</td></tr><tr><td>GPT 5.1 Codex Max</td><td>July 23, 2026</td></tr><tr><td>GPT 5.1 Codex Mini</td><td>July 23, 2026</td></tr><tr><td>GPT 5 Codex</td><td>July 23, 2026</td></tr><tr><td>Claude Opus 4.1</td><td>August 5, 2026</td></tr><tr><td>Claude Sonnet 4</td><td>June 15, 2026</td></tr><tr><td>Claude Haiku 3.5</td><td>February 16, 2026</td></tr><tr><td>Gemini 3 Pro</td><td>March 9, 2026</td></tr><tr><td>MiniMax M2.5</td><td>August 5, 2026</td></tr><tr><td>MiniMax M2.1</td><td>March 15, 2026</td></tr><tr><td>GLM 5</td><td>May 14, 2026</td></tr><tr><td>GLM 4.7</td><td>March 15, 2026</td></tr><tr><td>GLM 4.6</td><td>March 15, 2026</td></tr><tr><td>Kimi K2.5</td><td>August 5, 2026</td></tr><tr><td>Kimi K2 Thinking</td><td>March 6, 2026</td></tr><tr><td>Kimi K2</td><td>March 6, 2026</td></tr><tr><td>Qwen3 Coder 480B</td><td>February 6, 2026</td></tr></tbody></table>
+<hr>
+<h2 id="privacy"><a href="#privacy">Privacy</a></h2>
+<p>All our models are hosted in the US and EU. Our providers follow a zero-retention policy and do not use your data for model training, with the following exceptions:</p>
+<ul>
+<li>Big Pickle: During its free period, collected data may be used to improve the model.</li>
+<li>Exo Free: During its free period, collected data may be used to improve the model.</li>
+<li>Fledge Alpha Free: During its free period, collected data may be used to improve the model.</li>
+<li>MiMo-V2.6-Flash Free: During its free period, collected data may be used to improve the model.</li>
+<li>MiMo-V2.5 Free: During its free period, collected data may be used to improve the model.</li>
+<li>Ling 3.1 Flash Free: During its free period, collected data may be used to improve the model.</li>
+<li>Ling 3.0 Flash Fin Free: During its free period, collected data may be used to improve the model.</li>
+<li>Nemotron 3 Ultra Free (NVIDIA free endpoints): Trial use only — do not submit personal or confidential data. Your use is logged for security purposes and to improve NVIDIA products and services. The logged session data for improvement purposes is not linked to your identity or any persistent identifier. For more information about our data processing practices, see our <a href="https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf">Privacy Policy</a>. By interacting with this endpoint, you consent to our collection, recording, and use of such information and the <a href="https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf">NVIDIA API Trial Terms of Service</a>.</li>
+<li>Nemotron 3.5 Lightning Free (NVIDIA free endpoints): Trial use only — do not submit personal or confidential data. Your use is logged for security purposes and to improve NVIDIA products and services. The logged session data for improvement purposes is not linked to your identity or any persistent identifier. For more information about our data processing practices, see our <a href="https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf">Privacy Policy</a>. By interacting with this endpoint, you consent to our collection, recording, and use of such information and the <a href="https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf">NVIDIA API Trial Terms of Service</a>.</li>
+<li>OpenAI APIs: Requests are retained for 30 days in accordance with <a href="https://platform.openai.com/docs/guides/your-data">OpenAI’s Data Policies</a>.</li>
+<li>Anthropic APIs: Requests are retained for 30 days in accordance with <a href="https://docs.anthropic.com/en/docs/claude-code/data-usage">Anthropic’s Data Policies</a>.</li>
+<li>Mistral APIs: Prompts and other inputs are not used for training. Data is retained in accordance with <a href="https://docs.mistral.ai/admin/monitor-comply/zero-data-retention">Mistral’s Data Retention Policy</a>.</li>
+<li>Jev APIs: Prompts and other inputs are not used for training. Data is retained in accordance with <a href="https://typesafe.ai/legal/privacy-policy">TypeSafe AI’s Privacy Policy</a>.</li>
+<li>Muse Spark 1.3 Contributor Free: Heavily discounted token pricing in exchange for permission to use your prompts and completions to train future Meta models. <a href="https://dev.meta.ai/docs/pricing-rate-limits#contributor-tier">Learn more</a>.</li>
+</ul>
+<hr>
+<h2 id="for-teams"><a href="#for-teams">For Teams</a></h2>
+<p>Zen also works great for teams. You can invite teammates, assign roles, curate
+the models your team uses, and more.</p>
+<aside aria-label="Note" class="starlight-aside starlight-aside--note"><p class="starlight-aside__title" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="starlight-aside__icon"><path d="M12 11C11.7348 11 11.4804 11.1054 11.2929 11.2929C11.1054 11.4804 11 11.7348 11 12V16C11 16.2652 11.1054 16.5196 11.2929 16.7071C11.4804 16.8946 11.7348 17 12 17C12.2652 17 12.5196 16.8946 12.7071 16.7071C12.8946 16.5196 13 16.2652 13 16V12C13 11.7348 12.8946 11.4804 12.7071 11.2929C12.5196 11.1054 12.2652 11 12 11ZM12.38 7.08C12.1365 6.97998 11.8635 6.97998 11.62 7.08C11.4973 7.12759 11.3851 7.19896 11.29 7.29C11.2017 7.3872 11.1306 7.49882 11.08 7.62C11.024 7.73868 10.9966 7.86882 11 8C10.9992 8.13161 11.0245 8.26207 11.0742 8.38391C11.124 8.50574 11.1973 8.61656 11.29 8.71C11.3872 8.79833 11.4988 8.86936 11.62 8.92C11.7715 8.98224 11.936 9.00632 12.099 8.99011C12.2619 8.97391 12.4184 8.91792 12.5547 8.82707C12.691 8.73622 12.8029 8.61328 12.8805 8.46907C12.9582 8.32486 12.9992 8.16378 13 8C12.9963 7.73523 12.8927 7.48163 12.71 7.29C12.6149 7.19896 12.5028 7.12759 12.38 7.08ZM12 2C10.0222 2 8.08879 2.58649 6.4443 3.6853C4.79981 4.78412 3.51809 6.3459 2.76121 8.17317C2.00433 10.0004 1.8063 12.0111 2.19215 13.9509C2.578 15.8907 3.53041 17.6725 4.92894 19.0711C6.32746 20.4696 8.10929 21.422 10.0491 21.8079C11.9889 22.1937 13.9996 21.9957 15.8268 21.2388C17.6541 20.4819 19.2159 19.2002 20.3147 17.5557C21.4135 15.9112 22 13.9778 22 12C22 10.6868 21.7413 9.38642 21.2388 8.17317C20.7363 6.95991 19.9997 5.85752 19.0711 4.92893C18.1425 4.00035 17.0401 3.26375 15.8268 2.7612C14.6136 2.25866 13.3132 2 12 2ZM12 20C10.4178 20 8.87104 19.5308 7.55544 18.6518C6.23985 17.7727 5.21447 16.5233 4.60897 15.0615C4.00347 13.5997 3.84504 11.9911 4.15372 10.4393C4.4624 8.88743 5.22433 7.46197 6.34315 6.34315C7.46197 5.22433 8.88743 4.4624 10.4393 4.15372C11.9911 3.84504 13.5997 4.00346 15.0615 4.60896C16.5233 5.21447 17.7727 6.23984 18.6518 7.55544C19.5308 8.87103 20 10.4177 20 12C20 14.1217 19.1572 16.1566 17.6569 17.6569C16.1566 19.1571 14.1217 20 12 20Z"></path></svg>Note</p><div class="starlight-aside__content"><p>Workspaces are currently free for teams as a part of the beta.</p></div></aside>
+<p>Managing your workspace is currently free for teams as a part of the beta. We’ll be
+sharing more details on the pricing soon.</p>
+<hr>
+<h3 id="roles"><a href="#roles">Roles</a></h3>
+<p>You can invite teammates to your workspace and assign roles:</p>
+<ul>
+<li><strong>Admin</strong>: Manage models, members, API keys, and billing</li>
+<li><strong>Member</strong>: Manage only their own API keys</li>
+</ul>
+<p>Admins can also set monthly spending limits for each member to keep costs under control.</p>
+<hr>
+<h3 id="model-access"><a href="#model-access">Model access</a></h3>
+<p>Admins can enable or disable specific models for the workspace. Requests made to a disabled model will return an error.</p>
+<p>This is useful for cases where you want to disable the use of a model that
+collects data.</p>
+<hr>
+<h3 id="bring-your-own-key"><a href="#bring-your-own-key">Bring your own key</a></h3>
+<p>You can use your own OpenAI or Anthropic API keys while still accessing other models in Zen.</p>
+<p>When you use your own keys, tokens are billed directly by the provider, not by Zen.</p>
+<p>For example, your organization might already have a key for OpenAI or Anthropic
+and you want to use that instead of the one that Zen provides.</p>
+<hr>
+<h2 id="goals"><a href="#goals">Goals</a></h2>
+<p>We created OpenCode Zen to:</p>
+<ol>
+<li><strong>Benchmark</strong> the best models/providers for coding agents.</li>
+<li>Have access to the <strong>highest quality</strong> options and not downgrade performance or route to cheaper providers.</li>
+<li>Pass along any <strong>price drops</strong> by selling at cost; so the only markup is to cover our processing fees.</li>
+<li>Have <strong>no lock-in</strong> by allowing you to use it with any other coding agent. And always let you use any other provider with OpenCode as well.</li>
+</ol> </div> <footer class="doc astro-sz7xmlte"><div class="meta sl-flex astro-sz7xmlte"><div class="astro-sz7xmlte"><a href="https://github.com/anomalyco/opencode/edit/dev/packages/web/src/content/docs/zen.mdx" target="_blank" rel="noopener noreferrer" class="sl-flex astro-sz7xmlte"><svg aria-hidden="true" class="astro-sz7xmlte astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M22 7.24a1 1 0 0 0-.29-.71l-4.24-4.24a1 1 0 0 0-1.1-.22 1 1 0 0 0-.32.22l-2.83 2.83L2.29 16.05a1 1 0 0 0-.29.71V21a1 1 0 0 0 1 1h4.24a1 1 0 0 0 .76-.29l10.87-10.93L21.71 8c.1-.1.17-.2.22-.33a1 1 0 0 0 0-.24v-.14l.07-.05ZM6.83 20H4v-2.83l9.93-9.93 2.83 2.83L6.83 20ZM18.17 8.66l-2.83-2.83 1.42-1.41 2.82 2.82-1.41 1.42Z"/></svg>Edit page</a><a href="https://github.com/anomalyco/opencode/issues/new" target="_blank" rel="noopener noreferrer" class="sl-flex astro-sz7xmlte"><svg aria-hidden="true" class="astro-sz7xmlte astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg>Found a bug? Open an issue</a><a href="https://opencode.ai/discord" target="_blank" rel="noopener noreferrer" class="sl-flex astro-sz7xmlte"><svg aria-hidden="true" class="astro-sz7xmlte astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M20.32 4.37a19.8 19.8 0 0 0-4.93-1.51 13.78 13.78 0 0 0-.64 1.28 18.27 18.27 0 0 0-5.5 0 12.64 12.64 0 0 0-.64-1.28h-.05A19.74 19.74 0 0 0 3.64 4.4 20.26 20.26 0 0 0 .11 18.09l.02.02a19.9 19.9 0 0 0 6.04 3.03l.04-.02a14.24 14.24 0 0 0 1.23-2.03.08.08 0 0 0-.05-.07 13.1 13.1 0 0 1-1.9-.92.08.08 0 0 1 .02-.1 10.2 10.2 0 0 0 .41-.31h.04a14.2 14.2 0 0 0 12.1 0l.04.01a9.63 9.63 0 0 0 .4.32.08.08 0 0 1-.03.1 12.29 12.29 0 0 1-1.9.91.08.08 0 0 0-.02.1 15.97 15.97 0 0 0 1.27 2.01h.04a19.84 19.84 0 0 0 6.03-3.05v-.03a20.12 20.12 0 0 0-3.57-13.69ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.15-1.08-2.15-2.42 0-1.33.95-2.42 2.15-2.42 1.22 0 2.18 1.1 2.16 2.42 0 1.34-.94 2.42-2.16 2.42Z"/></svg>Join our Discord community</a><opencode-language-select data-locales="[&#34;root&#34;,&#34;ar&#34;,&#34;bs&#34;,&#34;da&#34;,&#34;de&#34;,&#34;es&#34;,&#34;fr&#34;,&#34;it&#34;,&#34;ja&#34;,&#34;ko&#34;,&#34;nb&#34;,&#34;pl&#34;,&#34;pt-br&#34;,&#34;ru&#34;,&#34;th&#34;,&#34;tr&#34;,&#34;zh-cn&#34;,&#34;zh-tw&#34;]" class="astro-ztav45zs"> <starlight-lang-select><label style="--sl-select-width: 7em" class="astro-5phnz5xc"> <span class="sr-only astro-5phnz5xc">Select language</span> <svg aria-hidden="true" class="icon label-icon astro-5phnz5xc astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path fill-rule="evenodd" d="M8.516 3a.94.94 0 0 0-.941.94v1.15H2.94a.94.94 0 1 0 0 1.882h7.362a7.422 7.422 0 0 1-1.787 3.958 7.42 7.42 0 0 1-1.422-2.425.94.94 0 1 0-1.774.627 9.303 9.303 0 0 0 1.785 3.043 7.422 7.422 0 0 1-4.164 1.278.94.94 0 1 0 0 1.881 9.303 9.303 0 0 0 5.575-1.855 9.303 9.303 0 0 0 4.11 1.74l-.763 1.525a.968.968 0 0 0-.016.034l-1.385 2.77a.94.94 0 1 0 1.683.841l1.133-2.267h5.806l1.134 2.267a.94.94 0 0 0 1.683-.841l-1.385-2.769a.95.95 0 0 0-.018-.036l-3.476-6.951a.94.94 0 0 0-1.682 0l-1.82 3.639a7.423 7.423 0 0 1-3.593-1.256 9.303 9.303 0 0 0 2.27-5.203h1.894a.94.94 0 0 0 0-1.881H9.456V3.94A.94.94 0 0 0 8.516 3Zm6.426 11.794a1.068 1.068 0 0 1-.02.039l-.703 1.407h3.924l-1.962-3.924-1.24 2.478Z" clip-rule="evenodd"/></svg> <select value="/docs/zen/" autocomplete="off" class="astro-5phnz5xc"> <option value="/docs/zen/" class="astro-5phnz5xc">English</option><option value="/docs/ar/zen/" class="astro-5phnz5xc">العربية</option><option value="/docs/bs/zen/" class="astro-5phnz5xc">Bosanski</option><option value="/docs/da/zen/" class="astro-5phnz5xc">Dansk</option><option value="/docs/de/zen/" class="astro-5phnz5xc">Deutsch</option><option value="/docs/es/zen/" class="astro-5phnz5xc">Español</option><option value="/docs/fr/zen/" class="astro-5phnz5xc">Français</option><option value="/docs/it/zen/" class="astro-5phnz5xc">Italiano</option><option value="/docs/ja/zen/" class="astro-5phnz5xc">日本語</option><option value="/docs/ko/zen/" class="astro-5phnz5xc">한국어</option><option value="/docs/nb/zen/" class="astro-5phnz5xc">Norsk Bokmål</option><option value="/docs/pl/zen/" class="astro-5phnz5xc">Polski</option><option value="/docs/pt-br/zen/" class="astro-5phnz5xc">Português (Brasil)</option><option value="/docs/ru/zen/" class="astro-5phnz5xc">Русский</option><option value="/docs/th/zen/" class="astro-5phnz5xc">ไทย</option><option value="/docs/tr/zen/" class="astro-5phnz5xc">Türkçe</option><option value="/docs/zh-cn/zen/" class="astro-5phnz5xc">简体中文</option><option value="/docs/zh-tw/zen/" class="astro-5phnz5xc">繁體中文</option> </select> <svg aria-hidden="true" class="icon caret astro-5phnz5xc astro-i4fljdxy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label> </starlight-lang-select><script type="module">class s extends HTMLElement{constructor(){super();const e=this.querySelector("select");e&&(e.addEventListener("change",t=>{t.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=t.currentTarget.value)}),window.addEventListener("pageshow",t=>{if(!t.persisted)return;const n=e.querySelector("option[selected]")?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}}customElements.define("starlight-lang-select",s);</script> </opencode-language-select> <script type="module">document.addEventListener("change",e=>{if(!(e.target instanceof HTMLSelectElement))return;const o=e.target.closest("opencode-language-select");if(!(o instanceof HTMLElement))return;const t=JSON.parse(o.dataset.locales??"[]")[e.target.selectedIndex];t&&(document.cookie=`oc_locale=${encodeURIComponent(t==="root"?"en":t)}; Path=/; Max-Age=31536000; SameSite=Lax`)});</script> </div><div class="astro-sz7xmlte"><p class="astro-sz7xmlte">&copy; <a target="_blank" rel="noopener noreferrer" href="https://anoma.ly" class="astro-sz7xmlte">Anomaly</a></p><p title="Last updated:" class="astro-sz7xmlte">Last updated: <time datetime="2026-10-07T19:17:03.000Z" class="astro-sz7xmlte">Oct 7, 2026</time></p></div></div></footer> </div> </div>   </main> </div> </div>  </div> </div>  </body></html>

@@ -71,7 +71,10 @@ func (g *Gateway) resolveBilling(in *inboundReq, plan *engine.Plan, offer domain
 	at time.Time, settings domain.Settings, tok translate.Usage) billing {
 	b := billing{At: at, Wallet: in.token.OwnerRole == domain.RoleUser}
 
-	q, hasOfficial := g.officialFor(plan)
+	// 官方价来源按**该供给源所属渠道的类型**解析(同 (厂商,模型) 在 CC/opencode 各有价时选对)。
+	// src 永不为空;失败路径 offer 为零值时回落 commandcode,与加来源维度前一致。
+	src := domain.PriceSourceForChannelType(offer.ChannelType)
+	q, hasOfficial := g.officialFor(plan, src)
 
 	// —— 成本:官方价 × 渠道系数,取不到则回落手填兜底价 ——
 	if hasOfficial {
@@ -161,7 +164,9 @@ func joinWarn(a, b string) string {
 func (g *Gateway) CostQuote(m domain.ModelRow, offer domain.OfferRead, settings domain.Settings, at time.Time) domain.CostQuote {
 	var q *domain.OfficialPriceRow
 	if m.OfficialVendor != "" && m.OfficialModelName != "" {
-		if row, err := g.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
+		// 来源按该 offer 所属渠道类型解析(与计费热路径同源,避免展示与账面分叉)。
+		src := domain.PriceSourceForChannelType(offer.ChannelType)
+		if row, err := g.st.FindOfficialPrice(m.OfficialVendor, m.OfficialModelName, src); err == nil {
 			q = &row
 		}
 	}

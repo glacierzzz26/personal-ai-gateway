@@ -103,19 +103,21 @@ func (s *Server) handleModelsUpdate(w http.ResponseWriter, r *http.Request) {
 			writeStoreErr(w, err)
 			return
 		}
-		var q *domain.OfficialPriceRow
-		if cur.OfficialVendor != "" && cur.OfficialModelName != "" {
-			if row, err := s.st.GetOfficialPriceByName(cur.OfficialVendor, cur.OfficialModelName); err == nil {
-				q = &row
-			}
-		}
 		now := time.Now().UTC()
 		for _, of := range offers {
+			// 逐 offer 按渠道类型取对应来源的官方价(同 (厂商,模型) 双来源时勿错源),再判零价。
+			var q *domain.OfficialPriceRow
+			if cur.OfficialVendor != "" && cur.OfficialModelName != "" {
+				src := domain.PriceSourceForChannelType(of.ChannelType)
+				if row, e := s.st.FindOfficialPrice(cur.OfficialVendor, cur.OfficialModelName, src); e == nil {
+					q = &row
+				}
+			}
 			if zero, _ := pricing.ZeroPriced(q, of, settings, now); zero {
 				skipped = append(skipped, of)
 				continue
 			}
-			if err := s.st.SetOfferEnabled(of.ID, true); err != nil {
+			if err = s.st.SetOfferEnabled(of.ID, true); err != nil {
 				writeStoreErr(w, err)
 				return
 			}
@@ -315,7 +317,8 @@ func (s *Server) zeroPriceReason(modelID int64, in domain.OfferInput) (bool, str
 	}
 	var q *domain.OfficialPriceRow
 	if m.OfficialVendor != "" && m.OfficialModelName != "" {
-		if row, err := s.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
+		// 模型级校验(无渠道上下文)用 commandcode 规范锚点消歧(见 store.FindOfficialPrice)。
+		if row, err := s.st.FindOfficialPrice(m.OfficialVendor, m.OfficialModelName, domain.PriceSourceCommandCode); err == nil {
 			q = &row
 		}
 	}

@@ -471,7 +471,122 @@ func TestFetchCommandCodeEndToEnd(t *testing.T) {
 	}
 }
 
-// TestOfficialVendorsEndpoint 厂商清单:CC 覆盖的全部厂商(issue #27 后 20 家),
+// TestFetchOpenCodeEndToEnd opencode 单页锚点抓取的端到端(第二来源):
+// 假 opencode 页 + 出站改写 → 多厂商落库(source=opencode)、免费行/分档/折扣上报、
+// 幂等重抓、且**不触碰** CC 来源的行(对账按 source_url 作用域)。
+func TestFetchOpenCodeEndToEnd(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "pricing", "testdata", "opencode_zen.html"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(fixture)
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv, c, st, s := newTestServerS(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+	s.pricingBaseForURL = func(_ string, _ domain.Settings) *http.Client {
+		return &http.Client{Transport: &redirectRT{target: upstream.URL}}
+	}
+
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch-opencode", nil)
+	mustStatus(t, code, http.StatusOK, "opencode fetch")
+	res := decode[domain.OpenCodeFetchResult](t, body)
+	if res.TotalRows != 102 {
+		t.Errorf("totalRows = %d, want 102", res.TotalRows)
+	}
+	if res.Upserted != 74 {
+		t.Errorf("upserted = %d, want 74(102 − 13 免费 − 15 分档合并)", res.Upserted)
+	}
+	if len(res.FreeSkipped) != 13 {
+		t.Errorf("freeSkipped = %d 条, want 13", len(res.FreeSkipped))
+	}
+	if len(res.TieredSlugs) != 15 {
+		t.Errorf("tieredSlugs = %d 个, want 15", len(res.TieredSlugs))
+	}
+	if len(res.DiscountSlugs) != 1 {
+		t.Errorf("discountSlugs = %v, want 1(mistral-large-4)", res.DiscountSlugs)
+	}
+	if res.ContentSHA == "" {
+		t.Error("content sha256 must be recorded")
+	}
+	if !strings.Contains(res.SourceURL, "opencode.ai") {
+		t.Errorf("source url should be opencode: %q", res.SourceURL)
+	}
+	// 多厂商:CC 没有的 Mistral 必须落库并入清单。
+	got := map[domain.Provider]int{}
+	for _, pc := range res.PerVendor {
+		got[pc.Provider] = pc.Count
+	}
+	if got[domain.ProviderMistral] != 1 {
+		t.Errorf("perVendor[Mistral] = %d, want 1(opencode 引入的新厂商)", got[domain.ProviderMistral])
+	}
+	if got[domain.ProviderAnthropic] != 13 {
+		t.Errorf("perVendor[Anthropic] = %d, want 13(分档合并后)", got[domain.ProviderAnthropic])
+	}
+
+	// 落库:来源为 opencode;Claude 行来源即 OC;Mistral Large 4 折扣取现价。
+	rows, err := st.ListOfficialPrices(domain.ProviderAnthropic)
+	mustNoErrT(t, err, "list anthropic official prices")
+	var sonnet5 *domain.OfficialPriceRow
+	for i := range rows {
+		if rows[i].ModelName == "claude-sonnet-5" {
+			sonnet5 = &rows[i]
+		}
+	}
+	if sonnet5 == nil {
+		t.Fatalf("claude-sonnet-5 未落库: %+v", rows)
+	}
+	if sonnet5.Source != domain.PriceSourceOpenCode {
+		t.Errorf("source = %q, want opencode", sonnet5.Source)
+	}
+	if !strings.Contains(sonnet5.SourceURL, "opencode.ai") {
+		t.Errorf("source url = %q", sonnet5.SourceURL)
+	}
+	ms, err := st.ListOfficialPrices(domain.ProviderMistral)
+	mustNoErrT(t, err, "list mistral official prices")
+	if len(ms) != 1 || ms[0].ModelName != "mistral-large-4" || ms[0].BillingShape != domain.ShapeDiscount {
+		t.Fatalf("mistral-large-4 未按折扣落库: %+v", ms)
+	}
+	if ms[0].InputPrice != 0.68 || ms[0].OutputPrice != 2.09 {
+		t.Errorf("mistral-large-4 应取现价 0.68/2.09, got %v/%v", ms[0].InputPrice, ms[0].OutputPrice)
+	}
+
+	// 幂等:再抓一次,不重复落库、无删除。
+	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch-opencode", nil)
+	mustStatus(t, code, http.StatusOK, "opencode fetch 2nd")
+	res2 := decode[domain.OpenCodeFetchResult](t, body)
+	if res2.Upserted != 74 || res2.Removed != 0 {
+		t.Errorf("2nd upserted/removed = %d/%d, want 74/0", res2.Upserted, res2.Removed)
+	}
+
+	// 来源隔离:CC 来源的行不得被 opencode 对账删掉(回归红线)。
+	if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+		Source: domain.PriceSourceCommandCode, SourceURL: "https://commandcode.ai/models",
+		FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
+		BillingShape: domain.ShapeFlat, InputPrice: 2, OutputPrice: 10,
+	}); err != nil {
+		t.Fatalf("seed CC row: %v", err)
+	}
+	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch-opencode", nil)
+	mustStatus(t, code, http.StatusOK, "opencode fetch 3rd")
+	res3 := decode[domain.OpenCodeFetchResult](t, body)
+	if res3.Removed != 0 {
+		t.Errorf("removed = %d, want 0(CC 来源的行不得被 opencode 抓取删)", res3.Removed)
+	}
+	cc, err := st.GetOfficialPriceBySource(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceCommandCode)
+	mustNoErrT(t, err, "CC row must survive")
+	if cc.InputPrice != 2 {
+		t.Errorf("CC 行被改动: %+v", cc)
+	}
+}
+
+// TestOfficialVendorsEndpoint 厂商清单:CC 覆盖的全部厂商(issue #27 后 20 家,
+// opencode 来源再加 Mistral 共 21 家;断言用 len(domain.Providers) 自动对齐),
 // 来源 URL 非空;逐厂商抓取已停用,故全部 manualOnly。
 func TestOfficialVendorsEndpoint(t *testing.T) {
 	srv, c, _ := newTestServer(t)

@@ -60,6 +60,20 @@ func (e *e2eEnv) addChannel(name string, provider domain.Provider, base, key str
 	return ch.ID
 }
 
+// addChannelType 建渠道并指定 channel_type(官方价来源按它解析),返回 id。
+func (e *e2eEnv) addChannelType(name string, provider domain.Provider, base, key string, ct domain.ChannelType) int64 {
+	e.t.Helper()
+	en := true
+	ch, err := e.st.CreateChannel(domain.ChannelInput{
+		Name: name, Provider: provider, BaseURL: base, APIKey: key,
+		ChannelType: ct, Priority: 1, Enabled: &en, TimeoutMs: 30000, MaxFailures: 2, CooldownSec: 10,
+	})
+	if err != nil {
+		e.t.Fatalf("create channel: %v", err)
+	}
+	return ch.ID
+}
+
 // addModelOffer 建模型 + 供给源并返回 model id;模型已存在则复用(多渠道同模型)。
 func (e *e2eEnv) addModelOffer(model string, channelID int64, prio int) int64 {
 	e.t.Helper()
@@ -1050,5 +1064,76 @@ func TestE2EChannelRatioDefaultsToOne(t *testing.T) {
 	// 关键:成本不是 0 —— 0 会让毛利永远是假的 100%。
 	if logs[0].CostUsd <= 0 {
 		t.Errorf("成本 = %v,必须为正(0 会伪装成 100%% 毛利)", logs[0].CostUsd)
+	}
+}
+
+// TestE2EOfficialPriceSourceByChannelType 官方价来源按**渠道类型**解析:
+// 同一 (厂商, 模型) 的 CC 与 opencode 两行并存时,opencode 渠道取 OC 行,其余(commandcode/thirdparty)
+// 取 CC 行 —— 这是「双来源并存」计费侧的核心验收,也是「非 opencode 路径逐位不变」的红线。
+func TestE2EOfficialPriceSourceByChannelType(t *testing.T) {
+	e := newE2E(t)
+	up := openaiUpstream(t, "pong", http.StatusOK)
+	ccCh := e.addChannelType("cc", domain.ProviderOpenAI, up.URL, "sk-cc", domain.ChannelTypeCommandCode)
+	ocCh := e.addChannelType("oc", domain.ProviderOpenAI, up.URL, "sk-oc", domain.ChannelTypeOpenCode)
+	tpCh := e.addChannelType("tp", domain.ProviderOpenAI, up.URL, "sk-tp", domain.ChannelTypeThirdParty)
+
+	const mCC, mOC, mTP = "m-src-cc", "m-src-oc", "m-src-tp"
+	e.addModelOffer(mCC, ccCh, 1)
+	e.addModelOffer(mOC, ocCh, 1)
+	e.addModelOffer(mTP, tpCh, 1)
+
+	// 双来源并存:同一 (Anthropic, claude-sonnet-5) 各存一行,单价刻意不同以便区分来源。
+	ccRow := domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 3, OutputPrice: 15, Source: domain.PriceSourceCommandCode,
+	}
+	ocRow := domain.OfficialPriceRow{
+		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
+		InputPrice: 5, OutputPrice: 20, Source: domain.PriceSourceOpenCode,
+	}
+	for _, m := range []string{mCC, mOC, mTP} {
+		e.bindOfficial(m, domain.ProviderAnthropic, "claude-sonnet-5", ccRow)
+		e.bindOfficial(m, domain.ProviderAnthropic, "claude-sonnet-5", ocRow)
+	}
+
+	settings, _ := e.st.GetSettings()
+	settings.DisplayCurrency = domain.CurrencyUSD // 与官方同币种,免汇率干扰
+	settings.PriceMultiplier = 1.0
+	if err := e.st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	key := e.addToken("cli", []string{"*"}, 100)
+	for _, m := range []string{mCC, mOC, mTP} {
+		code, body := e.post("/v1/chat/completions", key, false, fmt.Sprintf(chatBody, m))
+		if code != http.StatusOK {
+			t.Fatalf("model %s: status %d body %s", m, code, body)
+		}
+	}
+	byModel := map[string]domain.LogItem{}
+	for _, l := range e.logsFor() {
+		byModel[l.Model] = l
+	}
+	// 无系数行 → ratio 1.0;假上游固定 usage 12/8。成本 = 官方价原值。
+	cases := []struct {
+		model string
+		want  float64
+		why   string
+	}{
+		{mCC, 0.000156, "commandcode 渠道取 CC 行 (12×3+8×15)/1e6"},
+		{mOC, 0.00022, "opencode 渠道取 OC 行 (12×5+8×20)/1e6"},
+		{mTP, 0.000156, "thirdparty 渠道回落 CC 行"},
+	}
+	for _, c := range cases {
+		l, ok := byModel[c.model]
+		if !ok {
+			t.Fatalf("no log for %s: %+v", c.model, byModel)
+		}
+		if l.CostSource != string(CostFromOfficial) {
+			t.Errorf("%s costSource = %q, want official", c.model, l.CostSource)
+		}
+		if d := l.CostUsd - c.want; d > 1e-9 || d < -1e-9 {
+			t.Errorf("%s cost = %v, want %v(%s)", c.model, l.CostUsd, c.want, c.why)
+		}
 	}
 }

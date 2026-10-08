@@ -11,6 +11,7 @@ import type {
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   AnnouncementDraft, AnnouncementItem,
   ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
+  OpenCodeFetchResult,
   OverviewData, CustomerFocusData, Provider, RefreshPricingResp, RequestLogItem, RouteRule, RuleDraft, Settings,
   StatRangeQuery, SyncResult,
   TokenCreateResult,
@@ -292,6 +293,15 @@ export const api = {
   refreshOfficialPrices(providers?: Provider[]): Promise<RefreshPricingResp> {
     return http.post<RefreshPricingResp>('/official-prices/refresh', { providers: providers ?? [] },
       { timeoutMs: REFRESH_TIMEOUT_MS });
+  },
+  /**
+   * 只抓 opencode zen 定价页锚点(与 CC 并存,各存一行)。常规路径走 refreshOfficialPrices
+   * (它一次抓 CC + opencode);本方法给「只重抓 opencode」留一个独立入口(运维 / 排障)。
+   *
+   * ⚠️ 同样有破坏性:会清掉 opencode 来源下页面上不再列出的行;不触碰 CC / 手工等其他来源。
+   */
+  fetchOpenCode(): Promise<OpenCodeFetchResult> {
+    return http.post<OpenCodeFetchResult>('/official-prices/fetch-opencode');
   },
 
   /* —— 令牌 —— */

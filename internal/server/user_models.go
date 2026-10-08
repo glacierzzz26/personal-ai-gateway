@@ -77,7 +77,10 @@ func (s *Server) userModelsList(allowed []string) ([]UserModelView, error) {
 		v := UserModelView{
 			Name: name, ContextWindow: m.ContextWindow, Capabilities: m.Capabilities,
 		}
-		if q, err := s.st.GetOfficialPriceByName(m.OfficialVendor, m.OfficialModelName); err == nil {
+		// 官方价来源:模型级展示用 **commandcode 规范锚点**(同 (厂商,模型) 在 CC/opencode
+		// 各有价时,客户面「官方价/本站价」按站点规范锚展示,不随渠道漂移;只有 opencode
+		// 一条时回落之,见 store.FindOfficialPrice)。
+		if q, err := s.st.FindOfficialPrice(m.OfficialVendor, m.OfficialModelName, domain.PriceSourceCommandCode); err == nil {
 			cur := string(settings.DisplayCurrency)
 			// 分时模型:定价按档位算出「谷价 / 峰价」两行**并列**展示,不让客户只看到谷价
 			// (报价是「多少钱」,计费按请求时刻选档;只给单值会出现「看到谷价、恰在峰时段

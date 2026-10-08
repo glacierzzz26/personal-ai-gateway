@@ -76,6 +76,7 @@ var ccVendorPrefixes = []struct {
 	{"Grok", domain.ProviderXAI, "xAI"},
 	{"MiMo", domain.ProviderXiaomi, "Xiaomi"},
 	{"MiniMax", domain.ProviderMiniMax, "MiniMax"},
+	{"Mistral", domain.ProviderMistral, "Mistral AI"},
 	{"Muse Spark", domain.ProviderMeta, "Meta"},
 	{"Nemotron", domain.ProviderNVIDIA, "NVIDIA"},
 	{"Step", domain.ProviderStepFun, "StepFun"},
@@ -611,6 +612,12 @@ func ccMoneyText(v float64) string { return "$" + strconv.FormatFloat(v, 'f', -1
 // 以免 CC 日后在表格前后插别的表时错抓。
 // 注意:CC 表头首格是英文 "Model"(不是「模型」),故不能复用 findByHeaderCell。
 func ccFindTable(doc *html.Node) (*html.Node, []string, error) {
+	return ccFindTableHaving(doc, "Model", "Input", "Output")
+}
+
+// ccFindTableHaving 找到表头同时含全部 need 列的那张 <table>(按表头特征定位,不按位置)。
+// 供 CC 与 opencode(同页多张表,须按列名区分)复用。找不到返回错误。
+func ccFindTableHaving(doc *html.Node, need ...string) (*html.Node, []string, error) {
 	var (
 		found  *html.Node
 		labels []string
@@ -622,7 +629,14 @@ func ccFindTable(doc *html.Node) (*html.Node, []string, error) {
 		}
 		if n.Type == html.ElementNode && n.Data == "table" {
 			l := ccHeaderLabels(n)
-			if ccIndex(l, "Model") >= 0 && ccIndex(l, "Input") >= 0 && ccIndex(l, "Output") >= 0 {
+			ok := true
+			for _, name := range need {
+				if ccIndex(l, name) < 0 {
+					ok = false
+					break
+				}
+			}
+			if ok {
 				found, labels = n, l
 				return
 			}
@@ -633,7 +647,7 @@ func ccFindTable(doc *html.Node) (*html.Node, []string, error) {
 	}
 	walk(doc)
 	if found == nil {
-		return nil, nil, fmt.Errorf("未找到含 Model/Input/Output 表头的模型表(页面结构可能已变更)")
+		return nil, nil, fmt.Errorf("未找到含 %s 表头的模型表(页面结构可能已变更)", strings.Join(need, "/"))
 	}
 	return found, labels, nil
 }

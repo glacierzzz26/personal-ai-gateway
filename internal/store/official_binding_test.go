@@ -2,6 +2,7 @@ package store
 
 import (
 	"testing"
+	"time"
 
 	"personal-ai-gateway/internal/domain"
 )
@@ -91,5 +92,35 @@ func TestModelUpdateKeepsBindingAndFields(t *testing.T) {
 	}
 	if updated.Enabled {
 		t.Fatalf("enabled should be false: %+v", updated)
+	}
+}
+
+// TestBackfillDualSourceSameSlugNotAmbiguous 双来源同厂商同 slug(如 CC 与 opencode 的 Claude 系)
+// **不**构成回填歧义 —— 歧义判据是**厂商**,两行同 provider 只算一个键,故仍能唯一回填。
+func TestBackfillDualSourceSameSlugNotAmbiguous(t *testing.T) {
+	st := newTestStore(t)
+	for _, s := range []domain.PriceSource{domain.PriceSourceCommandCode, domain.PriceSourceOpenCode} {
+		if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+			Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
+			Source: s, SourceURL: string(s), FetchedAt: time.Now().UTC(),
+			Currency: domain.CurrencyUSD, InputPrice: 1, OutputPrice: 2,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", s, err)
+		}
+	}
+	m, err := st.CreateModel(domain.ModelInput{Name: "anthropic/claude-sonnet-5"})
+	mustNoErr(t, err, "create model")
+
+	fills, err := st.BackfillOfficialBindings(false)
+	mustNoErr(t, err, "backfill")
+	if len(fills) != 1 || fills[0].Vendor != domain.ProviderAnthropic {
+		t.Fatalf("双来源同 slug 应唯一回填, got %+v", fills)
+	}
+	if fills[0].OfficialName != "claude-sonnet-5" {
+		t.Errorf("official name = %q, want claude-sonnet-5", fills[0].OfficialName)
+	}
+	got, _ := st.GetModel(m.ID)
+	if got.OfficialVendor != domain.ProviderAnthropic || got.OfficialModelName != "claude-sonnet-5" {
+		t.Errorf("binding not written: %+v", got)
 	}
 }

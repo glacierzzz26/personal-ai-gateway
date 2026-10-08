@@ -69,7 +69,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 
 - 后端直接静态托管 `web_dir`(默认 `web-v2`)下的 `dist/`,SPA 路由回退到 `index.html`;`/` 打开即管理台。
 - 开发期可 `cd web-v2 && npm run dev`(Vite :5178,`/api`、`/v1` 已代理到 :8787),改前端热更。
-- 页面覆盖:运行总览(默认**近 1 天**,以「经营」为中心 —— 营收/成本/毛利 + 客户余额风险 + 渠道健康 + 明细;预设可切 7/30 天或自定义区间)/ 渠道管理(CRUD + 连通测试 + 同步模型)/ 模型广场(供给源管理、定价、拖拽排序、设为首选、用量)/ 官方定价(官方参考价锚点 —— 从 commandcode 单页抓取全厂商价 + 手工录入 + 反查引用模型) / 路由规则 / 访问令牌(归属与筛选、生成 Claude 配置)/ 请求日志(服务端分页/筛选/详情)/ 用户管理(建号/角色/充值/余额)/ 系统设置(超时、重试、自动降级、代理、TLS、日志保留/采样、时区、对外基址、清空日志)。侧栏底部显示**发布版本**(取自 `/healthz` 的 `version`,形如 `v0.0.0-4de1cde`),据此一眼确认生产跑的是哪一版。
+- 页面覆盖:运行总览(默认**近 1 天**,以「经营」为中心 —— 营收/成本/毛利 + 客户余额风险 + 渠道健康 + 明细;预设可切 7/30 天或自定义区间)/ 渠道管理(CRUD + 连通测试 + 同步模型)/ 模型广场(供给源管理、定价、拖拽排序、设为首选、用量)/ 官方定价(官方参考价锚点 —— 从 command code 单页 + opencode zen 定价页两来源抓取 + 手工录入 + 反查引用模型) / 路由规则 / 访问令牌(归属与筛选、生成 Claude 配置)/ 请求日志(服务端分页/筛选/详情)/ 用户管理(建号/角色/充值/余额)/ 系统设置(超时、重试、自动降级、代理、TLS、日志保留/采样、时区、对外基址、清空日志)。侧栏底部显示**发布版本**(取自 `/healthz` 的 `version`,形如 `v0.0.0-4de1cde`),据此一眼确认生产跑的是哪一版。
 - 角色:普通用户登录后仅见「访问令牌」页,只能管理自己的 Key;其余页面与接口对其实admin-only(前端隐藏 + 服务端 403 双重约束)。
 
 > 页面读到的数值口径:成功率等一律 0..100 百分数经服务层换算成 0..1 小数;日志/曲线时间戳按设置里的
@@ -83,7 +83,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 - `internal/store` SQLite(schema 版本化 + channels/models/offers/official_prices/channel_vendor_costs/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合)
 - `internal/secret` AES-GCM 渠道密钥(主密钥 `GW_MASTER_KEY` 或 DB 同目录 `gateway.master.key` 0600)
 - `internal/engine` 选路决策:候选(启用供给源 ∩ 未熔断渠道 ∩ 命中规则)→ 策略排序 → 重试/兜底
-- `internal/pricing` 官方价来源:commandcode 单页锚点抓取(唯一可抓来源,见 DESIGN §5.6)+ 厂商登记表 + 手工录入 + 分时选价
+- `internal/pricing` 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 DESIGN §5.6)+ 厂商登记表 + 手工录入 + 分时选价
 - `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
 - `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管

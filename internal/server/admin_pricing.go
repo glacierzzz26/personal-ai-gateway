@@ -136,6 +136,75 @@ func providerCounts(m map[domain.Provider]int) []domain.ProviderCount {
 	return out
 }
 
+// fetchOpenCode 抓取 opencode zen 定价页锚点价并落库 + 对账(source=opencode,与 CC 并存)。
+// 返回 (结果, httpStatus, errType, err)。与 fetchCommandCode 同形,差异只在来源与抓取器。
+func (s *Server) fetchOpenCode(ctx context.Context) (domain.OpenCodeFetchResult, int, string, error) {
+	var resp domain.OpenCodeFetchResult
+	settings, err := s.st.GetSettings()
+	if err != nil {
+		return resp, 0, "", err
+	}
+	base := s.rl.Client(settings, 0)
+	if s.pricingBaseForURL != nil {
+		base = s.pricingBaseForURL(pricing.OpenCodeURL(), settings)
+	} else if s.pricingBase != nil {
+		base = s.pricingBase(domain.ProviderNone, settings)
+	}
+	client := pricing.AllowlistClient(*base, pricing.OpenCodeHosts())
+
+	// 行数护栏的基准 = 上次落库的 opencode 来源行数(首次为 0 → 跳过比例检查)。
+	prev, err := s.st.CountOfficialPricesBySource(pricing.OpenCodeURL())
+	if err != nil {
+		return resp, 0, "", err
+	}
+	rows, rep, err := pricing.FetchOpenCode(ctx, client, prev)
+	if err != nil {
+		return resp, http.StatusBadGateway, "fetch_failed", err
+	}
+
+	resp = domain.OpenCodeFetchResult{
+		SourceURL:     rep.SourceURL,
+		ContentSHA:    rep.ContentSHA,
+		TotalRows:     rep.TotalRows,
+		FreeSkipped:   rep.FreeSkipped,
+		TieredSlugs:   rep.TieredSlugs,
+		DiscountSlugs: rep.DiscountSlugs,
+	}
+	keep := make([]store.OfficialPriceRef, 0, len(rows))
+	for _, row := range rows {
+		if _, err := s.st.UpsertOfficialPrice(row); err != nil {
+			return resp, 0, "", err
+		}
+		keep = append(keep, store.OfficialPriceRef{Provider: row.Provider, ModelName: row.ModelName})
+		resp.Upserted++
+	}
+	// 对账:来源为 opencode 但不在本次结果里的行一律清掉。按 source_url 作用域,不碰 CC 行。
+	removed, rerr := s.st.ReconcileOfficialPricesFromSource(pricing.OpenCodeURL(), keep)
+	if rerr != nil {
+		return resp, 0, "", rerr
+	}
+	resp.Removed = removed
+	resp.PerVendor = providerCounts(rep.PerVendor)
+	return resp, http.StatusOK, "", nil
+}
+
+// handleOfficialPricesFetchOpenCode POST /official-prices/fetch-opencode
+// 抓 opencode zen 定价页锚点价 → upsert official_prices(source=opencode,与 CC 并存)。
+func (s *Server) handleOfficialPricesFetchOpenCode(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	resp, status, typ, err := s.fetchOpenCode(ctx)
+	if err != nil {
+		if status == 0 {
+			writeStoreErr(w, err)
+			return
+		}
+		apiErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // handleOfficialPricesFetchCommandCode POST /official-prices/fetch-commandcode
 // 抓 commandcode 单页锚点价 → upsert official_prices(issue #27)。
 func (s *Server) handleOfficialPricesFetchCommandCode(w http.ResponseWriter, r *http.Request) {

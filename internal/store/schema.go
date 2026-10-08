@@ -34,7 +34,64 @@ var migrations = []string{
 	m0012ChannelVendorCost,
 	// v13:缓存写价(官方价/兜底价各一列 + 日志的缓存写 token)—— 补上被折进输入价的 cache_creation
 	m0013CacheWritePrice,
+	// v14:官方价来源维度(commandcode 与 opencode 双来源并存,各存一行;唯一键加 source)
+	m0014OfficialPriceSource,
 }
+
+// m0014OfficialPriceSource 给 official_prices 加「来源」维度,使 CC 与 opencode 两个官方价锚点
+// **并存**(同一 (provider, model_name) 各存一行,仅 source 不同)。
+//
+// 为什么必须加:opencode zen 与 commandcode 的 Claude 系 slug 完全相同(两边都 claude-sonnet-5),
+// 而两者采购单价不同。旧唯一键 (provider, model_name) 会让后抓的覆盖先抓的,成本随之错源。
+//
+// SQLite 不能就地改表级 UNIQUE 约束 → **整表重建**(官方价行数有限,重建代价可接受):
+//   ① 建 official_prices_new(全列 + source,UNIQUE(provider, model_name, source));
+//   ② INSERT ... SELECT 显式列出全部列(务必含 m0013 的 cache_write_price),id 原样保留,
+//      source 一律回填 'commandcode'(存量行全部来自 CC 锚点);
+//   ③ DROP 旧表 → RENAME 新表 → 重建 provider 索引 + 新增 source 索引。
+//
+// 幂等:schema_migrations 版本守卫 + 单事务。开头 DROP IF EXISTS 兜底半途失败。
+// 无表以 FK 引用 official_prices,故 DROP/RENAME 无牵连。重建后列序与 officialPriceSelect 对齐。
+const m0014OfficialPriceSource = `
+DROP TABLE IF EXISTS official_prices_new;
+CREATE TABLE official_prices_new (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider          TEXT    NOT NULL,
+  model_name        TEXT    NOT NULL,
+  source            TEXT    NOT NULL DEFAULT 'commandcode',
+  source_url        TEXT    NOT NULL,
+  fetched_at        TEXT    NOT NULL,
+  currency          TEXT    NOT NULL,
+  billing_shape     TEXT    NOT NULL DEFAULT 'flat',
+  in_price          REAL    NOT NULL,
+  out_price         REAL    NOT NULL,
+  cache_read_price  REAL    NOT NULL DEFAULT 0,
+  cache_write_price REAL    NOT NULL DEFAULT 0,
+  cache_derived     INTEGER NOT NULL DEFAULT 0,
+  native_text       TEXT    NOT NULL DEFAULT '',
+  detail_json       TEXT    NOT NULL DEFAULT '{}',
+  content_sha256    TEXT    NOT NULL DEFAULT '',
+  created_at        TEXT    NOT NULL,
+  updated_at        TEXT    NOT NULL,
+  UNIQUE (provider, model_name, source)
+);
+
+INSERT INTO official_prices_new (
+  id, provider, model_name, source, source_url, fetched_at, currency, billing_shape,
+  in_price, out_price, cache_read_price, cache_write_price, cache_derived, native_text,
+  detail_json, content_sha256, created_at, updated_at
+)
+SELECT
+  id, provider, model_name, 'commandcode', source_url, fetched_at, currency, billing_shape,
+  in_price, out_price, cache_read_price, cache_write_price, cache_derived, native_text,
+  detail_json, content_sha256, created_at, updated_at
+FROM official_prices;
+
+DROP TABLE official_prices;
+ALTER TABLE official_prices_new RENAME TO official_prices;
+CREATE INDEX IF NOT EXISTS idx_official_prices_provider ON official_prices (provider);
+CREATE INDEX IF NOT EXISTS idx_official_prices_source   ON official_prices (source);
+`
 
 // m0013CacheWritePrice 给计费链补上「缓存写」(Anthropic cache_creation)这一项。
 //
