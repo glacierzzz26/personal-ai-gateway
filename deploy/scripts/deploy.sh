@@ -5,7 +5,8 @@
 #   - 目标主机只需 docker + docker compose v2,不需要 Go/Node/Docker Hub;
 #     镜像在本地构建好,`docker save | ssh docker load` 过去。
 #   - 证书首次用 gen-certs.sh 生成后稳定复用(CA 不变则客户端信任不失效);
-#   - 远端 .env(GW_MASTER_KEY / GW_IMAGE_TAG)与 data/(DB)只在缺失时创建,不随重部署覆盖。
+#   - 远端 .env(GW_MASTER_KEY / GW_IMAGE_TAG / GW_PG_PASSWORD)与卷(pgdata/、data/)
+#     只在缺失时创建,不随重部署覆盖。
 #
 # 前置:目标主机可免密 ssh;远端 docker compose v2;宿主发布口 17081/17090 空闲。
 # 用法:deploy/scripts/deploy.sh [GW_HOST]         (默认 aliyun;旧默认 lab 192.168.0.202 已非生产)
@@ -39,12 +40,15 @@ ssh "$HOST" "mkdir -p '$REMOTE_DIR'"
 if ssh "$HOST" "test -f '$REMOTE_DIR/.env'"; then
   echo "    远端 .env 已存在(GW_MASTER_KEY 保持不变,更新 GW_IMAGE_TAG)"
   ssh "$HOST" "grep -q '^GW_IMAGE_TAG=' '$REMOTE_DIR/.env' || printf 'GW_IMAGE_TAG=latest\n' >> '$REMOTE_DIR/.env'; sed -i 's|^GW_IMAGE_TAG=.*|GW_IMAGE_TAG=$VER|' '$REMOTE_DIR/.env'"
+  # PG 口令须存在,否则 compose 的 ${GW_PG_PASSWORD:?} 直接拒绝启动;老 .env 可能没有,补一个。
+  ssh "$HOST" "grep -q '^GW_PG_PASSWORD=' '$REMOTE_DIR/.env' || printf 'GW_PG_PASSWORD=%s\n' \"\$(openssl rand -hex 24)\" >> '$REMOTE_DIR/.env'"
 else
-  echo "    生成远端 .env(新主密钥)"
+  echo "    生成远端 .env(新主密钥 + 新 PG 口令)"
   umask 077
   TMPENV="$(mktemp)"
   trap 'rm -f "$TMPENV"' EXIT
-  printf 'GW_MASTER_KEY=%s\nGW_IMAGE_TAG=%s\n' "$(openssl rand -hex 32)" "$VER" > "$TMPENV"
+  printf 'GW_MASTER_KEY=%s\nGW_IMAGE_TAG=%s\nGW_PG_PASSWORD=%s\n' \
+    "$(openssl rand -hex 32)" "$VER" "$(openssl rand -hex 24)" > "$TMPENV"
   scp -q "$TMPENV" "$HOST:$REMOTE_DIR/.env"
 fi
 

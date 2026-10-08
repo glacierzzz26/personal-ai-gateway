@@ -1,9 +1,11 @@
-# 生产网关配置(构建时拷贝进镜像 /app/config.yaml;DB 落在 bind mount /data)。
-# 主密钥经 GW_MASTER_KEY 环境变量注入(.env),不需要 key 文件。
+# 生产网关配置(构建时拷贝进镜像 /app/config.yaml)。
+# 主密钥经 GW_MASTER_KEY 环境变量注入(.env),不需要 key 文件;key_dir 仅作回退落点。
+# DB = PostgreSQL(db 服务),口令由 .env 的 GW_PG_PASSWORD 注入,host 用 compose 服务名 db。
 # listen 保留明文合并面(容器 healthcheck 打 http://127.0.0.1:8787/healthz 用,不对外发布);
 # 对外的数据面/管理台两个 TLS 口由 tls 块定义,证书由 compose 挂载到 /certs。
 listen: ":8787"
-db_path: "/data/gateway-v2.db"
+db_dsn: "postgres://gw:${GW_PG_PASSWORD}@db:5432/gateway?sslmode=disable"
+key_dir: "/data"
 web_dir: "web-v2"
 tls:
   api_listen: ":17080"
