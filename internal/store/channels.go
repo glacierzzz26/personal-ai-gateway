@@ -4,18 +4,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/secret"
 )
 
+// isUniqueErr 唯一性冲突判定:PG SQLSTATE 23505(unique_violation)。
+// 比字符串匹配稳:错误文本受 locale/版本影响,SQLSTATE 不受。
 func isUniqueErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unique") || strings.Contains(msg, "2067")
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // CreateChannel 新建渠道。apiKey 非空则加密落库,明文不落盘。
@@ -26,21 +26,21 @@ func (s *Store) CreateChannel(in domain.ChannelInput) (domain.ChannelRow, error)
 		return domain.ChannelRow{}, err
 	}
 	now := formatRFC3339(s.nowUTC())
-	res, err := s.db.Exec(`INSERT INTO channels (
+	var id int64
+	err = s.db.QueryRow(`INSERT INTO channels (
 		name, provider, channel_type, egress_proto, base_url, api_key_cipher, key_masked,
 		priority, weight, timeout_ms, tags, enabled, max_failures, cooldown_sec, note,
 		quota_path, quota_shape, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 		in.Name, in.Provider, in.ChannelType, in.EgressProto, in.BaseURL, cipher, domain.MaskKey(in.APIKey),
 		in.Priority, in.Weight, in.TimeoutMs, encodeJSON(in.Tags), b2i(*in.Enabled),
-		in.MaxFailures, in.CooldownSec, in.Note, in.QuotaPath, in.QuotaShape, now, now)
+		in.MaxFailures, in.CooldownSec, in.Note, in.QuotaPath, in.QuotaShape, now, now).Scan(&id)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ChannelRow{}, ErrConflict
 		}
 		return domain.ChannelRow{}, fmt.Errorf("insert channel: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	return s.GetChannel(id)
 }
 

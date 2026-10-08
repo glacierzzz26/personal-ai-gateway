@@ -30,15 +30,15 @@ func (s *Store) CreateAdmin(username, passwordBcrypt string, role domain.Role) (
 		role = domain.RoleUser
 	}
 	now := formatRFC3339(s.nowUTC())
-	res, err := s.db.Exec(`INSERT INTO admins (username, password_bcrypt, role, created_at) VALUES (?,?,?,?)`,
-		username, passwordBcrypt, string(role), now)
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO admins (username, password_bcrypt, role, created_at) VALUES (?,?,?,?) RETURNING id`,
+		username, passwordBcrypt, string(role), now).Scan(&id)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.AdminUser{}, ErrConflict
 		}
 		return domain.AdminUser{}, err
 	}
-	id, _ := res.LastInsertId()
 	return domain.AdminUser{ID: id, Username: username, Role: role, CreatedAt: s.nowUTC()}, nil
 }
 

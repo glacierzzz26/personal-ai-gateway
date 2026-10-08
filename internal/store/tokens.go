@@ -219,7 +219,7 @@ func isExpired(e sql.NullString) bool {
 // 派生「可回显」(不把密文本身带出)。
 const tokenCols = `SELECT t.id, t.name, t.sha256, t.key_masked, t.allowed_models, t.quota_usd, t.used_usd,
 	t.rpm_limit, t.expires_at, t.status, t.last_used_at, t.created_at,
-	t.owner_id, COALESCE(a.username, ''), (t.key_cipher <> '')
+	t.owner_id, COALESCE(a.username, ''), CASE WHEN t.key_cipher <> '' THEN 1 ELSE 0 END
 	FROM tokens t LEFT JOIN admins a ON a.id = t.owner_id`
 
 // scanToken 按 tokenCols(15 列)顺序扫;sha256 不展露,用占位变量丢弃。

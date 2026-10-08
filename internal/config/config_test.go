@@ -23,23 +23,29 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Listen != ":8787" {
 		t.Errorf("listen default = %q, want :8787", cfg.Listen)
 	}
-	if cfg.DBPath != "gateway-v2.db" {
-		t.Errorf("db_path default = %q, want gateway-v2.db (v2 换新库)", cfg.DBPath)
+	if cfg.DBDSN != "postgres://gw:gw@127.0.0.1:5432/gateway?sslmode=disable" {
+		t.Errorf("db_dsn default = %q, want local PG dsn", cfg.DBDSN)
+	}
+	if cfg.KeyDir != "/data" {
+		t.Errorf("key_dir default = %q, want /data", cfg.KeyDir)
 	}
 }
 
 func TestLoadOverrides(t *testing.T) {
 	// os.ExpandEnv 在解析时执行,因此需先注入 env 再 Load
-	t.Setenv("TMP_DB", "/tmp/x.db")
-	cfg, err := Load(write(t, "listen: \":9999\"\ndb_path: \"${TMP_DB}\"\n"))
+	t.Setenv("TMP_DSN", "postgres://u:p@h:5432/db")
+	cfg, err := Load(write(t, "listen: \":9999\"\ndb_dsn: \"${TMP_DSN}\"\nkey_dir: \"/keys\"\n"))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if cfg.Listen != ":9999" {
 		t.Errorf("listen = %q, want :9999", cfg.Listen)
 	}
-	if cfg.DBPath != "/tmp/x.db" {
-		t.Errorf("db_path = %q, want /tmp/x.db", cfg.DBPath)
+	if cfg.DBDSN != "postgres://u:p@h:5432/db" {
+		t.Errorf("db_dsn = %q, want postgres://u:p@h:5432/db", cfg.DBDSN)
+	}
+	if cfg.KeyDir != "/keys" {
+		t.Errorf("key_dir = %q, want /keys", cfg.KeyDir)
 	}
 }
 

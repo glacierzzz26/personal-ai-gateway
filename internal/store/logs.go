@@ -159,7 +159,8 @@ func (s *Store) PruneLogs(days int) error {
 
 // ------------- 时区换算与桶 -------------
 
-// tzMod 生成 SQLite datetime 修饰符(如 "+480 minutes" / "-120 minutes")。
+// tzMod 生成 PG interval 文本(如 "+480 minutes" / "-120 minutes"),用于把 UTC 时间戳
+// 平移到展示时区后分桶。占位符经 `?::interval` 显式转型。
 func tzMod(offMin int) string { return fmt.Sprintf("%+d minutes", offMin) }
 
 // LocalDayWindowUTC 给定时区偏移与时刻,返回该「本地自然日」对应的 UTC 起止。
@@ -171,13 +172,14 @@ func LocalDayWindowUTC(tzOffMin int, at time.Time) (time.Time, time.Time) {
 		localMidnight.Add(24 * time.Hour).Add(-time.Duration(tzOffMin) * time.Minute)
 }
 
-// MetricBucket 返回 (bucketKey长度, 桶式) 供 series 用;hour=13,day=10。
-func MetricBucket(bucket string) int {
+// MetricBucket 返回该桶式对应的 date/time 格式串(strftime → to_char 的等价物):
+// hour → "YYYY-MM-DD HH24",day → "YYYY-MM-DD"。见 querySeriesWhere。
+func MetricBucket(bucket string) string {
 	switch bucket {
 	case "hour":
-		return 13 // "YYYY-MM-DD HH"
+		return "YYYY-MM-DD HH24"
 	default:
-		return 10 // "YYYY-MM-DD"
+		return "YYYY-MM-DD"
 	}
 }
 
@@ -205,7 +207,7 @@ func (s *Store) querySeries(bucket string, fromUTC, toUTC time.Time, tzOffMin in
 // querySeriesWhere 是时间桶聚合的公共实现;cond 为附加过滤片段(含前导 AND,可为空)。
 func (s *Store) querySeriesWhere(bucket string, fromUTC, toUTC time.Time, tzOffMin int, cond string, args []any) ([]domain.MetricPoint, error) {
 	n := MetricBucket(bucket)
-	rows, err := s.db.Query(`SELECT substr(datetime(ts, ?), 1, ?) AS bkt,
+	rows, err := s.db.Query(`SELECT to_char((ts::timestamptz + ?::interval) AT TIME ZONE 'UTC', ?) AS bkt,
 			COUNT(*),
 			SUM(CASE WHEN `+errCond+` THEN 1 ELSE 0 END),
 			COALESCE(SUM(cost), 0),

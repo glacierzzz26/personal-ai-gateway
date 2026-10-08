@@ -3,26 +3,16 @@ package engine
 import (
 	"errors"
 	"math/rand"
-	"path/filepath"
 	"testing"
 
 	"personal-ai-gateway/internal/domain"
-	"personal-ai-gateway/internal/secret"
 	"personal-ai-gateway/internal/store"
+	"personal-ai-gateway/internal/storetest"
 )
 
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
-	dir := t.TempDir()
-	if _, err := secret.BootstrapKey(dir); err != nil {
-		t.Fatalf("bootstrap master key: %v", err)
-	}
-	st, err := store.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-	return st
+	return storetest.Open(t)
 }
 
 func addChannel(t *testing.T, st *store.Store, name string, priority, weight int) int64 {

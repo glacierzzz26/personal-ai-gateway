@@ -37,18 +37,18 @@ func (s *Store) CreateModel(in domain.ModelInput) (domain.ModelRow, error) {
 	} else if taken {
 		return domain.ModelRow{}, ErrConflict
 	}
-	res, err := s.db.Exec(`INSERT INTO models (name, display_name, context_window, capabilities, enabled,
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO models (name, display_name, context_window, capabilities, enabled,
 		official_vendor, official_model_name, rate_override, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 		in.Name, display, in.ContextWindow, encodeJSON(in.Capabilities), b2i(*in.Enabled),
-		vendor, officialName, nullFloatPtr(in.RateOverride.Ptr()), now, now)
+		vendor, officialName, nullFloatPtr(in.RateOverride.Ptr()), now, now).Scan(&id)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.ModelRow{}, ErrConflict
 		}
 		return domain.ModelRow{}, fmt.Errorf("insert model: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	return s.GetModel(id)
 }
 
@@ -365,21 +365,21 @@ func (s *Store) CreateOffer(modelID int64, in domain.OfferInput) (domain.OfferRe
 		p := maxP + 1
 		in.Priority = &p
 	}
-	res, err := s.db.Exec(`INSERT INTO model_offers (
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO model_offers (
 		model_id, channel_id, input_price_usd, output_price_usd, cache_read_price_usd, cache_write_price_usd,
 		override_price, priority, enabled, rate_limit_rpm, timeout_ms, note,
 		price_source_url, price_fetched_at, price_currency, price_native_text, upstream_model
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 		modelID, in.ChannelID, in.InputPriceUsd, in.OutputPriceUsd, in.CacheReadPriceUsd, in.CacheWritePriceUsd,
 		b2i(in.OverridePrice), *in.Priority, b2i(*in.Enabled), in.RateLimitRpm, in.TimeoutMs, in.Note,
-		in.PriceSourceURL, in.PriceFetchedAt, in.PriceCurrency, in.PriceNativeText, in.UpstreamModel)
+		in.PriceSourceURL, in.PriceFetchedAt, in.PriceCurrency, in.PriceNativeText, in.UpstreamModel).Scan(&id)
 	if err != nil {
 		if isUniqueErr(err) {
 			return domain.OfferRead{}, ErrConflict
 		}
 		return domain.OfferRead{}, fmt.Errorf("insert offer: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	return s.GetOffer(id)
 }
 

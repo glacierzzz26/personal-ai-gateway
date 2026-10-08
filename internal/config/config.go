@@ -1,7 +1,7 @@
 // Package config 加载 YAML 配置并应用默认值。
 //
-// v2 起 config.yaml 只承载网关自身参数(listen/db_path)。
-// 账号、渠道、模型、令牌、路由规则等业务数据一律存 DB(gateway-v2.db),
+// v2 起 config.yaml 只承载网关自身参数(listen/db_dsn/key_dir)。
+// 账号、渠道、模型、令牌、路由规则等业务数据一律存 DB(PostgreSQL),
 // config 不再承载 keys/pricing/upstreams —— 见 DESIGN 决策(账号体系/渠道/令牌)。
 package config
 
@@ -14,7 +14,13 @@ import (
 
 type Config struct {
 	Listen string `yaml:"listen"`
+	// DBDSN 是 PostgreSQL 连接串(形如 postgres://user:pass@host:5432/db?sslmode=disable)。
+	// 取代旧 db_path(SQLite 文件)。
+	DBDSN string `yaml:"db_dsn"`
+	// DBPath 仅保留解析:旧 config 的 db_path 字段静默忽略,不再作为库位置。
 	DBPath string `yaml:"db_path"`
+	// KeyDir 主密钥(GW_MASTER_KEY 回退自动生成)所在目录。缺省 "/data";容器里挂持久卷。
+	KeyDir string `yaml:"key_dir"`
 	// WebDir 管理台前端源码目录(静态托管其 dist/ 构建产物,路径按进程 cwd 解析)。
 	// 缺省 "web-v2";空串关闭静态托管(纯 API 模式)。
 	WebDir string `yaml:"web_dir"`
@@ -63,9 +69,13 @@ func (c *Config) applyDefaults() {
 	if c.Listen == "" {
 		c.Listen = ":8787"
 	}
-	if c.DBPath == "" {
-		// v2 换新库文件,旧 gateway.db(含 v1 表)原样留档,不迁移。
-		c.DBPath = "gateway-v2.db"
+	// 本地 `go run` 免配:缺省连本机 PG(与 deploy/scripts/test-pg.sh 起的容器同参)。
+	// 生产/容器由 config.yaml 或环境注入真实 DSN。
+	if c.DBDSN == "" {
+		c.DBDSN = "postgres://gw:gw@127.0.0.1:5432/gateway?sslmode=disable"
+	}
+	if c.KeyDir == "" {
+		c.KeyDir = "/data"
 	}
 	if c.WebDir == "" {
 		c.WebDir = "web-v2"
