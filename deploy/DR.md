@@ -2,6 +2,8 @@
 
 > 本文件是 [issue #9](../.github/ISSUE_TEMPLATE) 讨论后定稿的落地方案。**尚未实施**,下面是设计、脚本清单与分阶段验收。
 > 目标:RPO ≤ 15min、RTO ≤ 2min、客户端零改动、不停机;入口层与家主机都能扛单点故障。
+>
+> ⚠️ **本文拓扑已过时,以 [`HA.md`](HA.md) 为准**。2026-10-08 起灾备按 **HA.md** 的路线落地:**绿地切换到 `tencent`（PG16 主）+ 切 DNS + `aliyun` 流复制热备**（见 [`pg-replica/README.md`](pg-replica/README.md)）。本文以 `home(lab)` 为主、`aliyun` 为备、靠 frps 端口切换的旧设计**不再采用**（`lab` 已明确不纳入）。下方内容仅作历史设计参考。
 
 ## 1. 现状(实测)
 
@@ -21,7 +23,7 @@
   公网入口现由宿主机 Nginx 终结公信证书;**这改变了本 DR 的「切到云」前提**:云冷备接管时需同时接管
   Nginx 层与其证书,而非只起 gateway 容器。
 - **frps 的 remotePort 独占**,端口本身就是「谁在服务」的仲裁者 —— 自动接管靠它天然防脑裂(见 §3)。
-- **存储迁往 PostgreSQL**（PG 版代码已实现、待切换；切换后 SQLite 退役,见 `HA.md` D1）——切换后快照不再是「拷单个 `.db` 文件」,而是 logical dump。`deploy/scripts/backup.sh` 已改为**在线**快照(在 `db` 容器内跑 `pg_dump -Fc`,不停容器);DR 里的加密/异地投递只需对这份 dump 做(见 §4)。
+- **存储已迁往 PostgreSQL**（**2026-10-08 绿地切换上线**：`tencent` 主 + `aliyun` 流复制热备，见 `HA.md` D1/P2/P3）——SQLite（`aliyun` 上的 `gateway-v2.db`）退役为回滚物证。快照不再是「拷单个 `.db` 文件」,而是 logical dump。`deploy/scripts/backup.sh` 已改为**在线**快照(在 `db` 容器内跑 `pg_dump -Fc`,不停容器);DR 里的加密/异地投递只需对这份 dump 做(见 §4)。
 
 ### 1.1 域名上线(2026-09-21,已实施)—— 对 DR 前提的影响
 

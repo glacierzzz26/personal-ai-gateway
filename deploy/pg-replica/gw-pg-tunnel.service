@@ -1,0 +1,29 @@
+# 从库（aliyun）侧:SSH 隧道到主库（tencent）的 PostgreSQL,供从库容器回连做流复制。
+#
+# 安装:cp 到 /etc/systemd/system/gw-pg-tunnel.service && systemctl daemon-reload
+#       && systemctl enable --now gw-pg-tunnel
+# 依赖:aliyun 的 ~/.ssh/config 里配好 `Host tencent`(HostName 124.223.188.186,密钥登录)。
+#
+# 说明:
+#   - autossh -M 0:用 ssh 自身的 ServerAlive 探测保活(不另开监控口);
+#     ExitOnForwardFailure=yes 确保转发失败即退出让 systemd 重拉,避免"隧道在但口没建起来"。
+#   - -L 0.0.0.0:15432:127.0.0.1:5433 —— 本地 0.0.0.0:15432 → 主库宿主 loopback:5433。
+#     绑 0.0.0.0(非 127.0.0.1)是因从库容器经 host.docker.internal(→docker 网桥网关,
+#     非 loopback)连入。**须确保 aliyun 入站不放行 15432**,否则隧道会被公网沾用。
+#   - 主库只在 loopback 发布 5433(deploy/pg-replica/compose-primary.override.yml),
+#     复制流量全程走 SSH(加密、且仅此一条转发)。
+# 见 deploy/pg-replica/README.md §4。
+[Unit]
+Description=SSH tunnel to tencent PG (streaming replication source)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+Environment=AUTOSSH_GATETIME=0
+ExecStart=/usr/bin/autossh -M 0 -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 0.0.0.0:15432:127.0.0.1:5433 tencent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
