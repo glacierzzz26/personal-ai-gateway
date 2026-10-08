@@ -2,7 +2,8 @@
 
 > 本目录是把 `aliyun` 作为 **`tencent` 的 PostgreSQL 流复制热备**（standby，只读）所需的
 > **主机侧资产 + 操作手册**。资产此前只落在两台主机上，此目录把它纳入仓库以求可复现。
-> 自动化脚本见 `../scripts/pg-replication.sh`；方案背景见 [`../HA.md`](../HA.md) §5.1/§5.2。
+> 自动化脚本见 `../scripts/pg-replication.sh`(建/核验/手动提升)与 `../scripts/ha-controller.sh`(自动 failover);
+> 方案背景见 [`../HA.md`](../HA.md) §5.1/§5.2。
 
 ## 1. 拓扑
 
@@ -103,9 +104,52 @@ docker exec ai-gateway-v2-db-1 psql -U gw -d gateway -c \
 
 期望：从库 `t` / `streaming`；主库槽 `active=t`、`state=streaming`、`lag_bytes≈0`。
 
-## 6. 故障切换（提升从库）
+## 6. 自动 failover（controller，推荐）
 
-**手动、有防脑裂检查**（自动 failover 未做，见 HA.md §8 P3）。
+从库 `aliyun` 上跑 **`ha-controller.sh`**（systemd timer 每 60s 触发一次 `once`）：主库失联时**自动**
+提升本机 → 切 DNS → 飞书告警 → **自锁**。判据用**两条独立信号**（都不经网关），区分「主库真死」与「网络抖」：
+
+| `repl_ok`（`pg_stat_wal_receiver.status=streaming`） | `ssh_ok`（ssh 到 `tencent`） | 动作 |
+|---|---|---|
+| ✓ | ✓ | 健康，清零失败计数 |
+| ✓ | ✗ | 主库 DB 存活（仅探针不通）→ **只告警，不提升** |
+| ✗ | ✓ | 主机活、复制断（多隧道/网络）→ **只告警，不提升** |
+| ✗ | ✗ | 候选故障 → 计数 +1；连续 **≥ `FAIL_THRESHOLD`**（默认 3）轮 → 提升 |
+
+提升链路（`do_failover`）：
+
+1. **best-effort fence**：尝试 `ssh tencent 'docker compose stop gateway'`（分区时必失败，仅尽力；降低双写窗口）。
+2. **提升**：复用 `pg-replication.sh promote --force`（`pg_promote` + 起网关）。
+3. **切 DNS**：`dnspod.sh set gateway|gatewayapi <STANDBY_IP>`（TC3，TTL 钳 ≥600）。
+4. **自锁**：写 `STATE_FILE`（`.ha-state`）`failed_over=1`；此后每轮直接跳过，**绝不自动回切**。
+
+命令：
+
+```sh
+ha-controller.sh status                            # 看判据/计数/锁态（只读）
+ha-controller.sh once --dry-run                    # 单轮演练：只判定打印,不提升/不切 DNS/不告警
+ha-controller.sh once --dry-run --force-failover   # 演练完整切换链路(打印计划)
+ha-controller.sh reset                             # 人工重建完成后清自锁
+```
+
+安装：把 §4 的脚本 + 本目录的 `ha-controller.{service,timer}` 装到 aliyun，写 `/opt/ai-gateway-v2/ha.env`
+（见 `../ha.env.example`，**不入库**）。**`enable --now ha-controller.timer` 之前，务必先跑 `--dry-run` 并做一次受控演练**
+（见下）；auto-failover 一开就会在真故障时自动改 DNS，判据必须确认无误。
+
+**受控演练**（低峰、有人在场）：`ssh tencent 'cd /opt/ai-gateway-v2 && docker compose stop gateway db'` 模拟主死 →
+观察连续 3 轮后自动提升 + 切 DNS + 告警；验证 `gateway`/`gatewayapi` 切到 aliyun 后可用。演练后按 §7 的回建流程复位。
+
+**RTO / RPO**：
+
+- **DB 侧 RPO ≈ 复制延迟（秒级）**。
+- **客户端 RTO ≈ DNS TTL 上限**：DNSPod 免费版 TTL 下限 **600s** → 最坏 ~10min 才全量切走（期间客户端/LB 缓存逐步失效）。
+  DB 与网关本身秒级就绪，**瓶颈在 DNS**。要更快需更好入口（云 LB 健康检查 / 第三节点 / 付费短 TTL 套餐）——**本期不做**。
+
+**残余风险（如实）**：2 节点无 fencing，**分区**（非宕机）时无法证明主库真死，存在脑裂窗口。缓解＝多重判活 + 连续阈值 + 自锁 + best-effort fence；**不追求理论根治**，靠告警让人介入。
+
+## 7. 手动故障切换（兜底 / 演练 / 回建）
+
+**手动、有防脑裂检查**（作为 controller 的兜底，或演练时用）。
 
 触发条件：`tencent` 真的不可用（网络/主机故障）。**提升前必须确认旧主不会再回来写**，否则脑裂。
 
@@ -117,16 +161,29 @@ bash pg-replication.sh promote            # 或 --force
 `promote` 做：
 
 1. 守卫：`ssh tencent 'docker ps'` 失败（即旧主不可达）才继续；否则拒绝。
-2. `pg_ctl promote`（在从库容器内），等到 `pg_is_in_recovery()=f`。
+2. `pg_promote`（在从库容器内），等到 `pg_is_in_recovery()=f`。
 3. `docker compose up -d gateway`（从库转正后重启网关）。
 
-**紧接着切 DNS**（人工/控制台或 TC3 API，见 [`../HA.md`](../HA.md) §5.1）：
-`gateway.5home.online` 与 `gatewayapi.5home.online` 的 A 记录 → `47.116.65.140`。
+**紧接着切 DNS**：`bash dnspod.sh set gateway 47.116.65.140` + `set gatewayapi 47.116.65.140`（或控制台人工）。
 
-> 旧主 `tencent` 恢复后**不可直接重启**——它的 PG 仍是旧主，会脑裂。必须
-> **`pg_rewind` 或重做 `pg_basebackup`** 把它降级为新从库，再 `up -d db`。恢复前保持其网关停用。
+**回建流程（旧主 `tencent` 恢复后，人工）**——**不可直接重启**，否则其 `restart: unless-stopped` 会自动起 PG → 双主：
 
-## 7. 回滚到 SQLite（切回迁移前状态）
+```sh
+# 1) 在 tencent 上先停栈(别让它自动起)
+ssh tencent 'cd /opt/ai-gateway-v2 && docker compose stop gateway db'
+# 2) 清掉旧数据目录,以【已转正的 aliyun】为主库重做 basebackup 降级为新从库
+#    (复用 primary/standby 的配置反向即可:tencent 建 ssh 到 aliyun 的隧道 + 复制槽/角色)
+# 3) 只起 db,校验它处于 recovery
+ssh tencent 'cd /opt/ai-gateway-v2 && docker compose up -d db'
+ssh tencent 'docker exec ai-gateway-v2-db-1 psql -U gw -d gateway -tA -c "select pg_is_in_recovery();"'  # 期望 t
+# 4) 冗余恢复后,在 aliyun 清自锁
+ssh aliyun 'bash /opt/ai-gateway-v2/ha-controller.sh reset'
+```
+
+> 回建的具体命令待按「反向流复制」逐步固化（当前 `pg-replication.sh` 的 primary/standby 子命令以
+> tencent 为主库写死）；在此之前按上述步骤人工执行。**自动回切不做**。
+
+## 8. 回滚到 SQLite（切回迁移前状态）
 
 绿地切换保留了 `aliyun` 上的 SQLite 库 `/opt/ai-gateway-v2/data/gateway-v2.db` 作即时回滚物证。
 回滚 = 在 `aliyun` 停 PG 栈、以 SQLite 版二进制起网关、把 DNS 切回 `aliyun`。

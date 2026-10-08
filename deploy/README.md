@@ -120,21 +120,29 @@ cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh
 
 生产 PG 主在 **`tencent`**;**`aliyun`** 是它的**流复制热备**(standby,只读)。复制走 **SSH 隧道**(`aliyun`→`tencent`),
 PG 端口只在主机 loopback 发布,不暴露公网。资产与完整操作手册见 [`pg-replica/README.md`](pg-replica/README.md),
-自动化脚本 [`scripts/pg-replication.sh`](scripts/pg-replication.sh)。
+自动化脚本 [`scripts/pg-replication.sh`](scripts/pg-replication.sh)(建/核验/手动提升)
+与 [`scripts/ha-controller.sh`](scripts/ha-controller.sh)(自动 failover)。
 
 ```bash
 # 核验(主/从各跑一次;主看槽与 lag,从看 recovery 与回放位点)
 ssh tencent 'bash /opt/ai-gateway-v2/pg-replication.sh status'
 ssh aliyun  'bash /opt/ai-gateway-v2/pg-replication.sh status'
 
-# 故障切换:确认 tencent 不可达后,在 aliyun 上提升 + 起网关,随后切 DNS
+# 自动 failover(跑在 aliyun,由 systemd timer 每 60s 触发;主库失联 → 提升 + 切 DNS + 告警 + 自锁)
+ssh aliyun 'bash /opt/ai-gateway-v2/ha-controller.sh status'              # 看判据/计数/锁态
+ssh aliyun 'bash /opt/ai-gateway-v2/ha-controller.sh once --dry-run'      # 演练:只判定,不动手
+ssh aliyun 'bash /opt/ai-gateway-v2/ha-controller.sh reset'               # 人工重建后清自锁
+
+# 手动兜底:确认 tencent 不可达后,在 aliyun 上提升 + 起网关,随后切 DNS
 ssh aliyun 'bash /opt/ai-gateway-v2/pg-replication.sh promote'
 ```
 
 - **主机侧资产**(此前只落在两台主机上,现纳入仓库):隧道单元 `pg-replica/gw-pg-tunnel.service`、两份 compose override
-  (`compose-primary.override.yml` = 主库发布 loopback:5433 供隧道回连;`compose-standby.override.yml` = 从库容器经 `host.docker.internal` 连隧道)。
+  (`compose-primary.override.yml` = 主库发布 loopback:5433 供隧道回连;`compose-standby.override.yml` = 从库容器经 `host.docker.internal` 连隧道)、
+  `pg-replica/ha-controller.{service,timer}`、配置样例 `ha.env.example`(真机放 `/opt/ai-gateway-v2/ha.env`,不入库)。
 - **前提**:两机 `.env` 的 `GW_MASTER_KEY` 与 `GW_PG_PASSWORD` **必须同值**(`gw` 口令随 `pg_basebackup` 复制到从库,不同则提升后网关连不上)。
-- **防脑裂**:promote 前必须确认旧主不可达;旧主恢复须 `pg_rewind`/重做 `pg_basebackup` 降级为新从库,**不可直接重启**。
+- **防脑裂**:promote 前必须确认旧主不可达(自动 controller 以「双信号 + 连续 3 轮」替代);旧主恢复须 `pg_rewind`/重做 `pg_basebackup` 降级为新从库,**不可直接重启**。
+- **DNS**:自动 failover 用 `scripts/dnspod.sh`(TC3)改 `gateway`/`gatewayapi` 的 A 记录;凭据取 aliyun 的 `/etc/host-infra/dnspod.env`。TTL 下限 600s(DNSPod 免费版)→ 客户端 RTO 最坏 ~10min。
 
 ## 一次性初始化(启用 ghcr 一键升级的前置)
 

@@ -1,0 +1,18 @@
+# 从库(aliyun)侧:每 60s 触发一次 HA 自动 failover 判定。
+#
+# 安装:cp 到 /etc/systemd/system/ha-controller.timer && systemctl daemon-reload
+#       && systemctl enable --now ha-controller.timer
+# 注意:enable 前**务必先跑 `ha-controller.sh --dry-run` 与受控演练**(见 pg-replica/README.md);
+#       auto-failover 一开就会在真故障时自动改 DNS,必须确认判据无误。
+[Unit]
+Description=周期触发 AI 网关 HA controller(每 60s)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=ha-controller.service
+
+[Install]
+WantedBy=timers.target

@@ -7,3 +7,4 @@ data/
 *.csr
 *.srl
 failover.env
+ha.env
