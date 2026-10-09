@@ -34,7 +34,7 @@
 | **D1** | 存储迁移到 **PostgreSQL**（路线乙）—— **✅ 已上线（2026-10-08 绿地切换）** | 为实现 R3 真·进程级零停机，并一举解锁 R2 干净灰度 + R1 真 HA。代价：`internal/store` 整层重写（已完成，见 §3）。 |
 | **D2** | **RPO = 分钟级** | PG 流复制实际达秒级，属超额交付。 |
 | **D3** | 拓扑 = **aliyun + tencent 双云**；**不纳入 `lab`** | 双云真故障隔离；家主机网络不稳，留作实验。 |
-| **D4** | 告警渠道 = **飞书自定义机器人 webhook** | 无 SDK、无审批，POST JSON 即可。 |
+| **D4** | 告警渠道 = **飞书自定义机器人 webhook** | 无 SDK、无审批，POST JSON 即可；机器人开加签时用 `FEISHU_SECRET`。 |
 | **D5** | 零停机 = **真·进程级**（非节点级蓝绿） | 由 D1（PG）支撑。 |
 
 ---
@@ -184,8 +184,9 @@
 ### 5.8 可观测与告警（R7 / D4）
 - 采集：`/healthz`（含 `version`/`schema`）、容器状态、PG 主从延迟、切换事件、备份成败。
 - 告警：**飞书自定义机器人 webhook**（POST JSON）—— 节点不可达、健康校验失败、备份失败、发生切换、复制延迟超阈。
-- **已实现**：`deploy/scripts/notify.sh`（飞书 webhook，告警失败不阻断主流程）由 HA controller 在切换路径调用；`ha-controller.sh status/日志`可查判据。**完整的指标采集与告警面板（P5）未做。**
-- **前提**：现网 `/healthz` **尚不回 `schema`**（旧格式二进制）→ 升级到新格式后才有此字段。
+  机器人若开启**签名校验（加签）**，需在 `ha.env` 另填 `FEISHU_SECRET`；否则 `notify.sh` 发明文会被飞书拒（`code 19021 sign match fail`）。
+- **已实现**：`deploy/scripts/notify.sh`（飞书 webhook，支持加签，告警失败不阻断主流程）由 HA controller 在切换路径调用；`ha-controller.sh status/日志`可查判据。**完整的指标采集与告警面板（P5）未做。**
+- `version`/`schema`：现网 `/healthz` 已回 `schema`/`version`（实测 `{"ok":true,"schema":14,...}`），采集端可据 `version` 核对跑的是哪个镜像。
 
 ### 5.9 密钥管理（R8）
 - `GW_MASTER_KEY` **全系统唯一、不可再生**（解渠道密钥密文）。

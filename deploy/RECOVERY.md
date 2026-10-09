@@ -172,5 +172,5 @@ deploy/scripts/claude-fallback.sh status
 - [ ] 管理台能登录、数据面 `/v1/models` 能列；
 - [ ] 若回退过：确认库回到正确快照（抽查一条近期记录）；
 - [ ] 若切过机：对账故障窗口内的写入；
-- [ ] 飞书告警是否触发（`deploy/scripts/notify-feishu.sh`,需设 `FEISHU_WEBHOOK`）；
+- [ ] 飞书告警是否触发（`deploy/scripts/notify.sh`，需设 `FEISHU_WEBHOOK`；机器人开加签时另设 `FEISHU_SECRET`）；
 - [ ] 复盘：把本次「升级 → 失败 → 回退」写回本手册 / `HA.md`。
