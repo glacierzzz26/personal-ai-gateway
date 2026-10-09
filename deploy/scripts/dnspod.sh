@@ -16,6 +16,8 @@
 #
 # 凭据形态:DP_Id 为 AKID 开头的 SecretId,DP_Key 为 SecretKey(与 host-infra 的 certs.sh 同源)。
 #   实测坑:**dp 文件里的值尾部可能带空格 → 必须 strip**;签名串里 canonical headers 之后必须留空行。
+#   实测坑:字段名大小写不一 —— **DescribeRecordList 用 `Subdomain`(小写 d)**,而
+#   **CreateRecord / ModifyRecord 用 `SubDomain`(大写 D)**;用错会报 UnknownParameter(已踩过)。
 # =====================================================================
 set -euo pipefail
 
@@ -120,11 +122,11 @@ cmd_set() {
 
   if [ -n "$rid" ]; then
     payload="$(jq -cn --arg d "$domain" --argjson id "$rid" --arg s "$sub" --arg v "$ip" --argjson ttl "$ttl" \
-      '{Domain:$d, RecordId:$id, Subdomain:$s, RecordType:"A", RecordLine:"默认", Value:$v, TTL:$ttl}')"
+      '{Domain:$d, RecordId:$id, SubDomain:$s, RecordType:"A", RecordLine:"默认", Value:$v, TTL:$ttl}')"
     resp="$(tc3 ModifyRecord "$payload")"
   else
     payload="$(jq -cn --arg d "$domain" --arg s "$sub" --arg v "$ip" --argjson ttl "$ttl" \
-      '{Domain:$d, Subdomain:$s, RecordType:"A", RecordLine:"默认", Value:$v, TTL:$ttl}')"
+      '{Domain:$d, SubDomain:$s, RecordType:"A", RecordLine:"默认", Value:$v, TTL:$ttl}')"
     resp="$(tc3 CreateRecord "$payload")"
   fi
   check_resp "$resp" || exit 1
