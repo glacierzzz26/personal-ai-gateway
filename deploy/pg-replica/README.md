@@ -133,11 +133,21 @@ ha-controller.sh reset                             # 人工重建完成后清自
 ```
 
 安装：把 §4 的脚本 + 本目录的 `ha-controller.{service,timer}` 装到 aliyun，写 `/opt/ai-gateway-v2/ha.env`
-（见 `../ha.env.example`，**不入库**）。**`enable --now ha-controller.timer` 之前，务必先跑 `--dry-run` 并做一次受控演练**
+（见 `../ha.env.example`，**不入库**）。飞书机器人若开了**加签**，`ha.env` 须同时填 `FEISHU_SECRET`
+（否则 `notify.sh` 明文被拒，飞书回 `code 19021`）。**`enable --now ha-controller.timer` 之前，务必先跑 `--dry-run` 并做一次受控演练**
 （见下）；auto-failover 一开就会在真故障时自动改 DNS，判据必须确认无误。
 
-**受控演练**（低峰、有人在场）：`ssh tencent 'cd /opt/ai-gateway-v2 && docker compose stop gateway db'` 模拟主死 →
-观察连续 3 轮后自动提升 + 切 DNS + 告警；验证 `gateway`/`gatewayapi` 切到 aliyun 后可用。演练后按 §7 的回建流程复位。
+**受控演练**有两种口径，按「能否承受生产流量中断」二选一：
+
+- **完整演练（会中断生产，须低峰 / 有人在场）**：`ssh tencent 'cd /opt/ai-gateway-v2 && docker compose stop gateway db'`
+  模拟主死 → 观察连续 3 轮后自动提升 + 切 DNS + 告警；验证 `gateway`/`gatewayapi` 切到 aliyun 后可用。
+  演练后按 §7 的回建流程复位。
+- **非中断演练（生产全程不断）**：适合「主库必须一直服务」。它验证**提升链路 + DNS 写路径**，
+  但**不制造旧主失联、不切生产 DNS**：
+  1. 判据：`DB_SERVICE=nope PRIMARY_SSH=no-such-host ha-controller.sh once --dry-run`（双信号全假 → 打印进入计数分支，dry-run 不落状态）。
+  2. DNS 写路径：用一次性记录走 `dnspod.sh set/get/delete`，不碰 `gateway`/`gatewayapi`。
+  3. 提升：在 aliyun `pg-replication.sh promote --force`（**不切 DNS、不动 tencent**，故无脑裂窗口）
+     → 校验 `pg_is_in_recovery()=f` 与网关 `/healthz`；随后 `pg-replication.sh standby --yes` 重建从库、确认恢复 `streaming`。
 
 **RTO / RPO**：
 
