@@ -18,10 +18,16 @@ type UserModelView struct {
 	ContextWindow int                 `json:"contextWindow"`
 	Capabilities  []domain.Capability `json:"capabilities"`
 	// Official 官方价锚(划线原价,计价币种,每百万 token);未录官方价时为空。
+	// 分时模型(PeakVaries)下这是**空闲档**官方价。
 	Official *UserPrice `json:"official,omitempty"`
+	// PeakOfficial 高峰档官方价;仅 PeakVaries 时有值。与 Official(空闲档)并列展示 ——
+	// 官方价分档时本站价也分档,两行同形;官方不分档(flat/tiered/折扣)时两者皆空。
+	PeakOfficial *UserPrice `json:"peakOfficial,omitempty"`
 	// Retail 本站价 = 官方价 × 倍率(客户实付口径);无官方价时为空。
+	// 分时模型下这是**空闲档**本站价(与 Official 同档)。
 	Retail *UserPrice `json:"retail,omitempty"`
-	// PeakVaries 该模型分时计价(峰谷两档价不同)。前端据此决定是否渲染第二行价格。
+	// PeakVaries 该模型分时计价(峰谷两档价不同)。前端据此决定是否渲染第二档价格。
+	// 只从官方价形态派生(ShapePeakOff 且两档可解析)——故「官方不分档 → 本站也不分档」天然成立。
 	PeakVaries bool `json:"peakVaries,omitempty"`
 	// PeakRetail 高峰档本站价;仅 PeakVaries 时有值。客户在页面上同时看到谷/峰两价 ——
 	// 报价是「现在买多少钱」,而计费按请求时刻选档,不并列展示就会出现「看到谷价、
@@ -95,6 +101,7 @@ func (s *Server) userModelsList(allowed []string) ([]UserModelView, error) {
 				pi, po, pc, pw := mustConvert(peak.In, q, settings), mustConvert(peak.Out, q, settings),
 					mustConvert(peak.CacheRead, q, settings), mustConvert(peak.CacheWrite, q, settings)
 				v.Official = &UserPrice{Input: oi, Output: oo, CacheRead: oc, CacheWrite: ow, Currency: cur}
+				v.PeakOfficial = &UserPrice{Input: pi, Output: po, CacheRead: pc, CacheWrite: pw, Currency: cur}
 				v.Retail = &UserPrice{
 					Input: pricing.Round6(oi * rate), Output: pricing.Round6(oo * rate),
 					CacheRead: pricing.Round6(oc * rate), CacheWrite: pricing.Round6(ow * rate), Currency: cur,

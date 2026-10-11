@@ -115,3 +115,92 @@ func approx(t *testing.T, label string, got, want float64) {
 }
 
 func boolPtrT(b bool) *bool { return &b }
+
+// TestModelsListPeakPrices 分时模型:官方价分档时,官方与本站两行**都**拆高峰/空闲两档
+// (official=空闲档,peakOfficial=高峰档;retail/peakRetail 各自 = 对应官方档 × 倍率)。
+// 官方不分档(上面的 flat 用例)时 peakOfficial/peakVaries 皆**不出现** —— 「官方不区分则本站不区分」。
+func TestModelsListPeakPrices(t *testing.T) {
+	srv, admin, st := newTestServer(t)
+	base := srv.URL
+	bootstrap(t, admin, base)
+
+	en := true
+	ch, err := st.CreateChannel(domain.ChannelInput{
+		Name: "ch", Provider: domain.ProviderOpenAI, BaseURL: "http://u.example/v1",
+		APIKey: "sk", Priority: 1, Enabled: &en, TimeoutMs: 30000, MaxFailures: 2, CooldownSec: 10,
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	m, err := st.CreateModel(domain.ModelInput{Name: "deepseek/deepseek-v4-pro", ContextWindow: 128000})
+	if err != nil {
+		t.Fatalf("create model: %v", err)
+	}
+	if _, err := st.CreateOffer(m.ID, domain.OfferInput{ChannelID: ch.ID, Enabled: boolPtrT(true)}); err != nil {
+		t.Fatalf("create offer: %v", err)
+	}
+	vendor, oname := string(domain.ProviderDeepSeek), "deepseek-v4-pro"
+	if _, err := st.UpdateModel(m.ID, domain.ModelInput{OfficialVendor: &vendor, OfficialModelName: &oname}); err != nil {
+		t.Fatalf("bind official: %v", err)
+	}
+	// 官方分时价(CNY):谷 ¥1/¥4,峰 ¥2/¥8。
+	if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderDeepSeek, ModelName: oname,
+		Currency: domain.CurrencyCNY, BillingShape: domain.ShapePeakOff,
+		InputPrice: 1, OutputPrice: 4, CacheReadPrice: 0.02,
+		Detail: map[string]any{
+			"offpeak": map[string]any{"in": 1.0, "out": 4.0, "cacheRead": 0.02},
+			"peak":    map[string]any{"in": 2.0, "out": 8.0, "cacheRead": 0.04},
+			"windows": []any{map[string]any{
+				"days": []any{1, 2, 3, 4, 5}, "start": "09:00", "end": "12:00", "tzOffsetMin": 480,
+			}},
+			"peakHours": "北京时间周一至周五 9:00-12:00",
+		},
+	}); err != nil {
+		t.Fatalf("upsert official: %v", err)
+	}
+	// 同币种(CNY)、倍率 2 → 本站价 = 官方价 × 2。
+	settings, _ := st.GetSettings()
+	settings.DisplayCurrency = domain.CurrencyCNY
+	settings.PriceMultiplier = 2
+	if err := st.SaveSettings(settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+
+	cust := loginAs(t, admin, base, "cust", "password123")
+	raw := mustGet(t, cust, base+"/api/v1/models")
+	views := decode[[]map[string]any](t, raw)
+	if len(views) != 1 {
+		t.Fatalf("user models = %+v", views)
+	}
+	v := views[0]
+	if v["peakVaries"] != true {
+		t.Fatalf("peakVaries = %v, want true", v["peakVaries"])
+	}
+	off := v["official"].(map[string]any)
+	pk := v["peakOfficial"].(map[string]any) // 官方高峰档必须有值
+	ret := v["retail"].(map[string]any)
+	pret := v["peakRetail"].(map[string]any)
+	approx(t, "official.input(空闲)", off["input"].(float64), 1)
+	approx(t, "official.output(空闲)", off["output"].(float64), 4)
+	approx(t, "peakOfficial.input(高峰)", pk["input"].(float64), 2)
+	approx(t, "peakOfficial.output(高峰)", pk["output"].(float64), 8)
+	approx(t, "retail.input(空闲)=官方谷×2", ret["input"].(float64), 2)
+	approx(t, "retail.output(空闲)", ret["output"].(float64), 8)
+	approx(t, "peakRetail.input(高峰)=官方峰×2", pret["input"].(float64), 4)
+	approx(t, "peakRetail.output(高峰)", pret["output"].(float64), 16)
+}
+
+// loginAs 建一个指定角色的账号并以其 cookie jar 登录,返回该客户端。
+func loginAs(t *testing.T, admin *http.Client, base, username, password string) *http.Client {
+	t.Helper()
+	code, body := doJSON(t, admin, http.MethodPost, base+"/api/v1/users",
+		map[string]any{"username": username, "password": password, "role": "user"})
+	mustStatus(t, code, http.StatusOK, "create user: "+string(body))
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	code, body = doJSON(t, c, http.MethodPost, base+"/api/v1/auth/login",
+		map[string]any{"username": username, "password": password})
+	mustStatus(t, code, http.StatusOK, "login: "+string(body))
+	return c
+}
