@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import {
-  IconChannels, IconDashboard, IconLogs, IconMegaphone, IconModels, IconPricing, IconRouting, IconSettings, IconTokens, IconUsers,
+  IconChannels, IconDashboard, IconLogs, IconMegaphone, IconModels, IconPricing, IconRouting, IconSelfUsage, IconSettings, IconTokens, IconUsers,
   IconWallet,
 } from '@/components/icons';
 
@@ -21,6 +21,8 @@ export interface NavItem {
  */
 export const NAV_ITEMS: NavItem[] = [
   { key: '/dashboard', label: '运行总览', group: '概览', icon: <IconDashboard />, adminOnly: true },
+  // 自用统计:站主自己名下流量的用量/花费(成本口径),与经营口径(只算客户)分开。
+  { key: '/self-usage', label: '自用统计', group: '概览', icon: <IconSelfUsage />, adminOnly: true },
   { key: '/channels', label: '渠道管理', group: '资源', icon: <IconChannels />, adminOnly: true },
   // 模型广场两侧都可见:管理员进可编辑的目录,普通用户进只读的售价视图(App.tsx 按角色分流)。
   { key: '/models', label: '模型广场', group: '资源', icon: <IconModels />, adminOnly: false },

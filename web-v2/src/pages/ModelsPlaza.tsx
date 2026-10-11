@@ -32,31 +32,28 @@ type CtxKey = '' | keyof typeof CTX;
 
 const NO_FILTER = { kw: '', cap: '' as '' | Capability, ctx: '' as CtxKey };
 
-/** 一行价格(划线的官方价 / 高亮的本站价)。 */
-function PriceLine({ label, input, output, currency, muted, dim }: {
-  label: string;
-  input?: number;
-  output?: number;
+/** 一对「输入 / 输出」价(可选档位标签 高峰/空闲)。muted = 官方原价(划线灰显)。 */
+function PricePair({ tag, input, output, currency, muted }: {
+  tag?: string;
+  input: number;
+  output: number;
   currency?: string;
   /** 划线灰显:被本站价压住的官方原价 */
   muted?: boolean;
-  /** 同色但弱一档:峰谷第二档价(不是原价,不该划线,但也不该抢主价的风头) */
-  dim?: boolean;
 }) {
-  if (input == null || output == null) return null;
   const sym = currency === 'USD' ? '$' : '¥';
   const n = (v: number) => `${sym}${v.toFixed(v > 0 && v < 0.005 ? 4 : 2)}`;
-  const inColor = muted ? 'var(--gw-text-3)' : dim ? 'var(--gw-text-2)' : 'var(--gw-primary)';
+  const inColor = muted ? 'var(--gw-text-3)' : 'var(--gw-primary)';
   const outColor = muted ? 'var(--gw-text-3)' : 'var(--gw-text)';
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, fontSize: 13 }}>
-      <span style={{ color: 'var(--gw-text-3)', minWidth: 52 }}>{label}</span>
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, fontSize: 13 }}>
+      {tag && <span style={{ color: 'var(--gw-text-3)', fontSize: 11 }}>{tag}</span>}
       <span
         className="gw-num"
         style={{
           color: inColor,
-          fontWeight: muted ? 400 : dim ? 400 : 500,
-          fontSize: muted || dim ? 13 : 15,
+          fontWeight: muted ? 400 : 500,
+          fontSize: muted ? 13 : 15,
           textDecoration: muted ? 'line-through' : undefined,
         }}
       >
@@ -67,12 +64,38 @@ function PriceLine({ label, input, output, currency, muted, dim }: {
         className="gw-num"
         style={{
           color: outColor,
-          fontWeight: muted ? 400 : dim ? 400 : 500,
+          fontWeight: muted ? 400 : 500,
           textDecoration: muted ? 'line-through' : undefined,
         }}
       >
         {n(output)}
       </span>
+    </span>
+  );
+}
+
+/**
+ * 一行价格:左侧档名(官方价 / 本站价),右侧一组价。
+ *
+ * 分时模型(官方价分档)并列「高峰 / 空闲」两档 —— 官方一行、本站一行,行内两档同形。
+ * 非分时模型 peak 为空,退化为单档,与原展示逐位一致。
+ */
+function PriceRow({ label, muted, off, peak }: {
+  label: string;
+  /** 划线灰显:官方原价 */
+  muted?: boolean;
+  /** 空闲档(非分时模型即唯一价) */
+  off?: { input: number; output: number; currency?: string };
+  /** 高峰档;仅分时模型有值 */
+  peak?: { input: number; output: number; currency?: string };
+}) {
+  if (!off && !peak) return null;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 10, fontSize: 13, flexWrap: 'wrap' }}>
+      <span style={{ color: 'var(--gw-text-3)', minWidth: 52 }}>{label}</span>
+      {/* 高峰在前(与展示面的档位顺序一致);单档模型无档位标签 */}
+      {peak && <PricePair tag="高峰" input={peak.input} output={peak.output} currency={peak.currency} muted={muted} />}
+      {off && <PricePair tag={peak ? '空闲' : undefined} input={off.input} output={off.output} currency={off.currency} muted={muted} />}
     </span>
   );
 }
@@ -104,24 +127,25 @@ function ModelCard({ m }: { m: UserModelItem }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {r ? (
           <>
-            {/* 分时模型并列列两档:展示面刻意不随当前时钟跳变 —— 客户截图给谁看都对得上账,
+            {/* 官方价在上(划线原价)、本站价在下(实付),与非分时模型的「原价→现价」读法一致。
+                分时模型(官方价分档)官方/本站两行都拆「高峰 / 空闲」两档;非分时模型各自单值。
+                展示面刻意不随当前时钟跳变 —— 客户截图给谁看都对得上账,
                 也不会出现「按谷价看到报价、恰在峰时段请求被按峰价收费」的意外。 */}
-            <PriceLine
-              label={m.peakVaries ? '空闲价' : '本站价'}
-              input={r.input}
-              output={r.output}
-              currency={r.currency}
+            <PriceRow
+              label="官方价"
+              muted
+              off={o ? { input: o.input, output: o.output, currency: o.currency } : undefined}
+              peak={m.peakOfficial
+                ? { input: m.peakOfficial.input, output: m.peakOfficial.output, currency: m.peakOfficial.currency }
+                : undefined}
             />
-            {m.peakVaries && m.peakRetail && (
-              <PriceLine
-                label="高峰价"
-                input={m.peakRetail.input}
-                output={m.peakRetail.output}
-                currency={m.peakRetail.currency}
-                dim
-              />
-            )}
-            {o && <PriceLine label="官方价" input={o.input} output={o.output} currency={o.currency} muted />}
+            <PriceRow
+              label="本站价"
+              off={{ input: r.input, output: r.output, currency: r.currency }}
+              peak={m.peakRetail
+                ? { input: m.peakRetail.input, output: m.peakRetail.output, currency: m.peakRetail.currency }
+                : undefined}
+            />
             {m.peakVaries && m.peakHours && (
               <Tooltip title={`高峰时段:${m.peakHours}。其余时间为空闲价`}>
                 <span style={{ fontSize: 11, color: 'var(--gw-text-3)' }}>

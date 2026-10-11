@@ -208,8 +208,11 @@ export interface UserModelItem {
   name: string;
   contextWindow: number;
   capabilities: Capability[];
-  /** 官方价锚(划线原价,计价币种,每百万 token);未录官方价时缺省 */
+  /** 官方价锚(划线原价,计价币种,每百万 token);未录官方价时缺省。
+   *  分时模型这里是**空闲档**官方价 */
   official?: UserPrice;
+  /** 高峰档官方价;仅 peakVaries 时有值。与 official(空闲档)并列展示 */
+  peakOfficial?: UserPrice;
   /** 本站价 = 官方价 × 倍率(客户实付口径);无官方价时缺省。
    *  分时模型这里是**空闲档**价(展示面刻意不随当前时钟变,免得截图对不上账) */
   retail?: UserPrice;
