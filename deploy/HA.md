@@ -185,7 +185,9 @@
 - 采集：`/healthz`（含 `version`/`schema`）、容器状态、PG 主从延迟、切换事件、备份成败。
 - 告警：**飞书自定义机器人 webhook**（POST JSON）—— 节点不可达、健康校验失败、备份失败、发生切换、复制延迟超阈。
   机器人若开启**签名校验（加签）**，需在 `ha.env` 另填 `FEISHU_SECRET`；否则 `notify.sh` 发明文会被飞书拒（`code 19021 sign match fail`）。
-- **已实现**：`deploy/scripts/notify.sh`（飞书 webhook，支持加签，告警失败不阻断主流程）由 HA controller 在切换路径调用；`ha-controller.sh status/日志`可查判据。**完整的指标采集与告警面板（P5）未做。**
+  消息为**飞书交互卡片**（`msg_type=interactive`）：标题栏按级别着色（info 绿 / warn 橙 / error 红）、
+  正文首行加粗事件标题、页脚标 `ai-gateway · 主机 · 时间`；主机名取 `ha.env` 的 `NOTIFY_HOST_LABEL`（缺省 `hostname -s`）。
+- **已实现**：`deploy/scripts/notify.sh`（飞书交互卡片，支持加签，告警失败不阻断主流程）由 HA controller 在切换路径调用；`ha-controller.sh status/日志`可查判据。**完整的指标采集与告警面板（P5）未做。**
 - `version`/`schema`：现网 `/healthz` 已回 `schema`/`version`（实测 `{"ok":true,"schema":14,...}`），采集端可据 `version` 核对跑的是哪个镜像。
 
 ### 5.9 密钥管理（R8）

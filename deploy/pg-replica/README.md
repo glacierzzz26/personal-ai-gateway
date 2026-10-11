@@ -134,7 +134,7 @@ ha-controller.sh reset                             # 人工重建完成后清自
 
 安装：把 §4 的脚本 + 本目录的 `ha-controller.{service,timer}` 装到 aliyun，写 `/opt/ai-gateway-v2/ha.env`
 （见 `../ha.env.example`，**不入库**）。飞书机器人若开了**加签**，`ha.env` 须同时填 `FEISHU_SECRET`
-（否则 `notify.sh` 明文被拒，飞书回 `code 19021`）。**`enable --now ha-controller.timer` 之前，务必先跑 `--dry-run` 并做一次受控演练**
+（否则 `notify.sh` 明文被拒，飞书回 `code 19021`）；卡片页脚的主机名可另设 `NOTIFY_HOST_LABEL`（缺省 `hostname -s`，云主机名是随机串，建议显式设成 `aliyun`/`tencent`）。**`enable --now ha-controller.timer` 之前，务必先跑 `--dry-run` 并做一次受控演练**
 （见下）；auto-failover 一开就会在真故障时自动改 DNS，判据必须确认无误。
 
 **受控演练**有两种口径，按「能否承受生产流量中断」二选一：
