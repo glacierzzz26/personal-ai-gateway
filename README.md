@@ -27,6 +27,7 @@ go run ./cmd/gateway -config config.yaml
 
 **首启引导**:库里没有管理员账号时,登录页自动出现「创建管理员」
 (或 `POST /api/v1/auth/bootstrap`)。之后的登录走会话 Cookie,`config.yaml` 不含任何凭据。
+会话**滑动续期**:连续 1h 无请求即失效(每次请求刷新空闲窗),另有 7 天绝对上限(自首次登录起算,不续期)。
 
 ## 常用命令
 
@@ -92,7 +93,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 - `internal/engine` 选路决策:候选(启用供给源 ∩ 未熔断渠道 ∩ 命中规则)→ 策略排序 → 重试/兜底
 - `internal/pricing` 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 DESIGN §5.6)+ 厂商登记表 + 手工录入 + 分时选价
 - `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
-- `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生)
+- `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生;空闲 1h + 7 天绝对上限,滑动续期)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管
 - `web-v2/` 管理台前端源码(React 18 + antd v5 + react-query + echarts)
 

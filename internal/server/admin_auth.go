@@ -90,7 +90,8 @@ func (s *Server) loginAs(w http.ResponseWriter, r *http.Request, username, passw
 		writeStoreErr(w, err)
 		return
 	}
-	setSessionCookie(w, r, token, int(auth.SessionTTL/time.Second))
+	// cookie MaxAge = 空闲窗:浏览器在连续 1h 无请求后自行丢弃 cookie(与 JWT exp 一致)。
+	setSessionCookie(w, r, token, int(auth.SessionIdleTTL/time.Second))
 	writeJSON(w, http.StatusOK, domain.MeResp{ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: admin.CreatedAt})
 }
 

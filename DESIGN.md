@@ -104,6 +104,10 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - **管理面**(`/api/*`):会话 **JWT**(HS256,签名密钥由主密钥经 `secret.DeriveSubkey` 派生),写 httpOnly
   cookie `gw_session`。无状态:登出=清 cookie;为让改密码/改角色/删号立即生效,中间件除验签外还用
   `AdminByID` 复核角色与密码版本(`pv` claim)。`GET /auth/state` 匿名放行(仅回 `adminExists`,驱动首启引导)。
+- **会话过期是两重的**(`auth.SessionIdleTTL` / `SessionMaxTTL`):`exp` = **空闲窗 1h** —— 滑动续期,
+  每次通过鉴权的请求都会**重签会话、把空闲窗从此刻重算**(中间件下发新 `gw_session`),连续无请求超过 1h 即失效;
+  `abs` claim = **绝对上限 7 天** —— 自**首次登录**起算,续签时原样保留、**不重置**,到期强制重登(给被盗会话封顶)。
+  登入/改密签发的 cookie `Max-Age` = 空闲窗,与 JWT `exp` 一致。
 - **角色授权**:`requireAdmin` 闸门保护 channels/models 写/rules/logs/settings/overview/usage/users;
   `GET /models` 与 tokens 面为「已登录即可」。令牌端点按 owner 收束:user 只见/操作自己名下,越权回 404。
 - **模型面**(`/v1/*`):访问令牌。`extractSecret`(x-api-key | Authorization Bearer)→ sha256 查 tokens;
