@@ -145,3 +145,11 @@ export const IconMegaphone = (p: IconProps) => (
     <path d="M18 6a8.5 8.5 0 0 1 0 12" />
   </Svg>
 );
+
+/** 柱状图 —— 自用统计(站主自己名下的用量/花费)。 */
+export const IconSelfUsage = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 20V13M9.4 20V5M14.8 20v-9M20.2 20V8" />
+    <path d="M2 20h20" />
+  </Svg>
+);

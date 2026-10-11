@@ -12,6 +12,7 @@ import { useCurrency } from '@/stores/currency';
 import { queryClient } from '@/main';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const SelfUsage = lazy(() => import('@/pages/SelfUsage'));
 const Models = lazy(() => import('@/pages/Models'));
 const ModelsPlaza = lazy(() => import('@/pages/ModelsPlaza'));
 const OfficialPricing = lazy(() => import('@/pages/OfficialPricing'));
@@ -161,6 +162,7 @@ export default function App() {
         <Route path="/" element={<AppLayout />}>
           <Route index element={<Home />} />
           <Route path="dashboard" element={wrap(<Dashboard />)} />
+          <Route path="self-usage" element={wrap(<SelfUsage />)} />
           <Route path="models" element={<ModelsRoute />} />
           <Route path="pricing" element={wrap(<OfficialPricing />)} />
           <Route path="channels" element={wrap(<Channels />)} />
