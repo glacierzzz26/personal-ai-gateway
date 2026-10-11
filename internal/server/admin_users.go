@@ -151,12 +151,13 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// 密码已变 → pv 变 → 旧 JWT 全失效;给当前设备重签一张,免得自己被动登出。
+	// 重签即全新登录:空闲窗与绝对上限都从此刻重算。
 	token, err := auth.IssueSession(admin.ID, admin.Username, admin.Role, newHash)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
-	setSessionCookie(w, r, token, int(auth.SessionTTL/time.Second))
+	setSessionCookie(w, r, token, int(auth.SessionIdleTTL/time.Second))
 	writeJSON(w, http.StatusOK, domain.MeResp{
 		ID: admin.ID, Username: admin.Username, Role: admin.Role, CreatedAt: admin.CreatedAt,
 	})

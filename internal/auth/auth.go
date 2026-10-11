@@ -15,8 +15,13 @@ import (
 // SessionCookie 会话 cookie 名。
 const SessionCookie = "gw_session"
 
-// SessionTTL 会话有效期。
-const SessionTTL = 7 * 24 * time.Hour
+// SessionIdleTTL 空闲窗口:连续无请求超过此值,会话即失效。
+// 会话**滑动续期** —— 每次带有效会话的请求都会重签、把空闲窗从此刻重新起算(见 server/middleware.go)。
+const SessionIdleTTL = 1 * time.Hour
+
+// SessionMaxTTL 会话绝对上限:自**首次登录**起算,到期后无论是否活跃都必须重新登录。
+// 滑动续期时它原样保留、**不重置** —— 给被盗会话封顶(见 auth.RefreshSession / jwt.go abs claim)。
+const SessionMaxTTL = 7 * 24 * time.Hour
 
 // HashPassword bcrypt 哈希管理员密码(明文不入库)。
 func HashPassword(pw string) (string, error) {
