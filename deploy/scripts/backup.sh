@@ -27,7 +27,9 @@ PG_DB="${GW_PG_DB:-gateway}"
 mkdir -p "$DEST"
 # 时间戳带纳秒(取 %N),避免同一秒内两次备份撞名 —— 撞名会让后写的覆盖先写的,
 # 且 make backup 与 upgrade.sh 的「升级前备份」可能在同一秒前后脚触发。
-stamp="$(date +%Y%m%d-%H%M%S)-$(printf '%06d' "$(( $(date +%N) / 1000 ))")"
+# 10# 强制十进制:`date +%N` 恒 9 位、常带前导 0,裸算会被 bash 当**八进制**,
+# 含 8/9 时直接报 "value too great for base" —— 备份(升级的强制前置)随之全废。
+stamp="$(date +%Y%m%d-%H%M%S)-$(printf '%06d' "$(( 10#$(date +%N) / 1000 ))")"
 out="$DEST/gateway-$stamp.dump"
 
 # 经 compose 在 db 容器内 dump;若失败 stdout 可能半截,故先写临时文件再原子改名,
