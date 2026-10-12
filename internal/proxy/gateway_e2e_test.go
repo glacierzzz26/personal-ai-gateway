@@ -1058,10 +1058,10 @@ func TestE2EChannelRatioDefaultsToOne(t *testing.T) {
 	}
 }
 
-// TestE2EOfficialPriceSourceByChannelType 官方价来源按**渠道类型**解析:
-// 同一 (厂商, 模型) 的 CC 与 opencode 两行并存时,opencode 渠道取 OC 行,其余(commandcode/thirdparty)
-// 取 CC 行 —— 这是「双来源并存」计费侧的核心验收,也是「非 opencode 路径逐位不变」的红线。
-func TestE2EOfficialPriceSourceByChannelType(t *testing.T) {
+// TestE2EOfficialPriceUnifiedAcrossChannelTypes 官方价来源已收敛为单一(commandcode):
+// 无论渠道类型是 commandcode / opencode / thirdparty,同一 (厂商, 模型) 都取 CC 行 ——
+// 即「每一个渠道显示的官方价就是这个价格」。即便库中另存了一行非 CC 来源的行,也不再被任何渠道选中。
+func TestE2EOfficialPriceUnifiedAcrossChannelTypes(t *testing.T) {
 	e := newE2E(t)
 	up := openaiUpstream(t, "pong", http.StatusOK)
 	ccCh := e.addChannelType("cc", domain.ProviderOpenAI, up.URL, "sk-cc", domain.ChannelTypeCommandCode)
@@ -1073,18 +1073,19 @@ func TestE2EOfficialPriceSourceByChannelType(t *testing.T) {
 	e.addModelOffer(mOC, ocCh, 1)
 	e.addModelOffer(mTP, tpCh, 1)
 
-	// 双来源并存:同一 (Anthropic, claude-sonnet-5) 各存一行,单价刻意不同以便区分来源。
+	// 同 (Anthropic, claude-sonnet-5) 存两来源、单价刻意不同:CC 行(唯一被采信)+ 一行非 CC 来源
+	// (应被忽略 —— 证明来源不再随渠道类型切换)。
 	ccRow := domain.OfficialPriceRow{
 		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
 		InputPrice: 3, OutputPrice: 15, Source: domain.PriceSourceCommandCode,
 	}
-	ocRow := domain.OfficialPriceRow{
+	otherRow := domain.OfficialPriceRow{
 		Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
-		InputPrice: 5, OutputPrice: 20, Source: domain.PriceSourceOpenCode,
+		InputPrice: 5, OutputPrice: 20, Source: domain.PriceSource("alt-source"),
 	}
 	for _, m := range []string{mCC, mOC, mTP} {
 		e.bindOfficial(m, domain.ProviderAnthropic, "claude-sonnet-5", ccRow)
-		e.bindOfficial(m, domain.ProviderAnthropic, "claude-sonnet-5", ocRow)
+		e.bindOfficial(m, domain.ProviderAnthropic, "claude-sonnet-5", otherRow)
 	}
 
 	settings, _ := e.st.GetSettings()
@@ -1105,15 +1106,15 @@ func TestE2EOfficialPriceSourceByChannelType(t *testing.T) {
 	for _, l := range e.logsFor() {
 		byModel[l.Model] = l
 	}
-	// 无系数行 → ratio 1.0;假上游固定 usage 12/8。成本 = 官方价原值。
+	// 无系数行 → ratio 1.0;假上游固定 usage 12/8。成本 = CC 官方价原值,与渠道类型无关。
 	cases := []struct {
 		model string
 		want  float64
 		why   string
 	}{
 		{mCC, 0.000156, "commandcode 渠道取 CC 行 (12×3+8×15)/1e6"},
-		{mOC, 0.00022, "opencode 渠道取 OC 行 (12×5+8×20)/1e6"},
-		{mTP, 0.000156, "thirdparty 渠道回落 CC 行"},
+		{mOC, 0.000156, "opencode 渠道也取 CC 行(来源不再随渠道类型切换)"},
+		{mTP, 0.000156, "thirdparty 渠道取 CC 行"},
 	}
 	for _, c := range cases {
 		l, ok := byModel[c.model]

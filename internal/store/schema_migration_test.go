@@ -3,11 +3,13 @@ package store
 import (
 	"testing"
 
+	"personal-ai-gateway/internal/domain"
 	"personal-ai-gateway/internal/pgtest"
 )
 
-// TestMigrateFromV14AddsModelRatioTable 已存在的 v14 库打开后应**走增量步骤**升到 v15:
-// 建出 channel_model_cost_ratios 表,且旧数据不丢、不重跑基线(重跑会 CREATE TABLE 冲突)。
+// TestMigrateFromV14AddsModelRatioTable 已存在的 v14 库打开后应**走增量步骤**升到当前版本:
+// 建出 channel_model_cost_ratios 表(v15)、跑官方价来源收敛(v16),且旧数据不丢、不重跑基线
+// (重跑会 CREATE TABLE 冲突)。
 //
 // 复现方式:先 Open 一次(拿到 v15 全表),再手工把它打回「v14 的样子」——
 //   - DROP 掉 v15 才有的表(连带其索引);
@@ -42,7 +44,7 @@ func TestMigrateFromV14AddsModelRatioTable(t *testing.T) {
 
 	sv, err := st2.SchemaVersion()
 	mustNoErr(t, err, "schema version")
-	mustEqual(t, sv, schemaVersion, "升级后版本 = schemaVersion(15)")
+	mustEqual(t, sv, schemaVersion, "升级后版本 = schemaVersion")
 
 	// 新表存在(未随 DROP 缺失)。
 	var n int
@@ -63,4 +65,72 @@ func TestMigrateFromV14AddsModelRatioTable(t *testing.T) {
 	defer st3.Close()
 	sv3, _ := st3.SchemaVersion()
 	mustEqual(t, sv3, schemaVersion, "重复打开版本稳定")
+}
+
+// TestMigrateFromV15RebindsZenAndDropsZenRows v15 → v16 的官方价来源收敛:
+// 绑定在 opencode(zen)点号 slug 上的模型**改绑**到 CC 连字符孪生(仅当 CC 确有该行),随后删光 zen 行。
+// 三条绑定覆盖三种情形:①点号且 CC 有连字符孪生 → 改绑;②点号但 CC 本身用点号(孪生不存在)→ 不动;
+// ③点号但 CC 无任何孪生 → 不动。
+func TestMigrateFromV15RebindsZenAndDropsZenRows(t *testing.T) {
+	dsn := pgtest.SchemaDSN(t)
+
+	st, err := Open(dsn)
+	mustNoErr(t, err, "first open")
+
+	putPrice := func(p domain.Provider, model string, src domain.PriceSource) {
+		t.Helper()
+		q := mkOfficialPrice(p, model, "https://example.test/p", 1, 2)
+		q.Source, q.Currency, q.BillingShape = src, domain.CurrencyUSD, domain.ShapeFlat
+		_, uerr := st.UpsertOfficialPrice(q)
+		mustNoErr(t, uerr, "upsert price "+model+"/"+string(src))
+	}
+	// zen 来源字面量(opencode 常量已随来源收敛删除;库里历史行仍是 'opencode')。
+	const zenSrc = domain.PriceSource("opencode")
+	// CC 行(连字符)+ zen 行(点号),同一模型 OpenAI/gpt-5.6-sol。
+	putPrice(domain.ProviderOpenAI, "gpt-5-6-sol", domain.PriceSourceCommandCode)
+	putPrice(domain.ProviderOpenAI, "gpt-5.6-sol", zenSrc)
+	// CC 本身用点号的 qwen:连字符孪生(qwen3-6-plus)在 CC 不存在 → 不该被改绑。
+	putPrice(domain.ProviderQwen, "qwen3.6-plus", domain.PriceSourceCommandCode)
+
+	insModel := func(name, vendor, off string) {
+		t.Helper()
+		now := nowRFC3339()
+		_, e := st.db.Exec(`INSERT INTO models (name, official_vendor, official_model_name, created_at, updated_at)
+			VALUES (?,?,?,?,?)`, name, vendor, off, now, now)
+		mustNoErr(t, e, "insert model "+name)
+	}
+	insModel("gpt-5.6-sol", string(domain.ProviderOpenAI), "gpt-5.6-sol")        // ①改绑
+	insModel("Qwen/Qwen3.6-Plus", string(domain.ProviderQwen), "qwen3.6-plus")  // ②不动
+	insModel("orphan-1", string(domain.ProviderOpenAI), "gpt-9.9-x")            // ③不动
+
+	// 打回 v15:让 step 16 重跑。
+	if _, err := st.db.Exec(`DELETE FROM schema_migrations`); err != nil {
+		t.Fatalf("clear version: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (15, ?)`, nowRFC3339()); err != nil {
+		t.Fatalf("set v15: %v", err)
+	}
+	mustNoErr(t, st.Close(), "close")
+
+	st2, err := Open(dsn)
+	mustNoErr(t, err, "reopen")
+	defer st2.Close()
+	sv, _ := st2.SchemaVersion()
+	mustEqual(t, sv, schemaVersion, "升级后 = schemaVersion")
+
+	modelOff := func(name string) string {
+		var off string
+		mustNoErr(t, st2.db.QueryRow(`SELECT official_model_name FROM models WHERE name=?`, name).Scan(&off), "read binding "+name)
+		return off
+	}
+	mustEqual(t, modelOff("gpt-5.6-sol"), "gpt-5-6-sol", "①点号+CC 连字符孪生 → 改绑")
+	mustEqual(t, modelOff("Qwen/Qwen3.6-Plus"), "qwen3.6-plus", "②CC 自身用点号 → 不动")
+	mustEqual(t, modelOff("orphan-1"), "gpt-9.9-x", "③无孪生 → 不动")
+
+	// zen 行全删,CC 行保留。
+	var zen, cc int
+	mustNoErr(t, st2.db.QueryRow(`SELECT COUNT(*) FROM official_prices WHERE source='opencode'`).Scan(&zen), "count zen")
+	mustNoErr(t, st2.db.QueryRow(`SELECT COUNT(*) FROM official_prices WHERE source='commandcode'`).Scan(&cc), "count cc")
+	mustEqual(t, zen, 0, "opencode 行被清")
+	mustEqual(t, cc, 2, "commandcode 行保留")
 }

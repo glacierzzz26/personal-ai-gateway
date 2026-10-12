@@ -172,14 +172,13 @@ func (s *Server) handleChannelModelCostRatioDelete(w http.ResponseWriter, r *htt
 // 前端 axios 的超时需同步放宽,否则会在后端仍在跑时先断开。
 const refreshTimeout = 120 * time.Second
 
-// handleOfficialPricesRefresh 批量刷新官方价:先抓 commandcode 单页锚点(issue #27 后的主力来源),
-// 再抓 opencode zen 锚点(第二来源,与 CC 并存),随后把调用方显式指定的 providers 走旧逐厂商路径,
-// 最后回填模型绑定。
+// handleOfficialPricesRefresh 批量刷新官方价:先抓 commandcode 单页锚点(唯一来源),随后把调用方
+// 显式指定的 providers 走旧逐厂商路径,最后回填模型绑定。
 //
-// 为什么把 CC/opencode 放在最前:它们才是本站官方价的**可抓来源**(逐厂商官网抓取已停用),批量
-// 按钮若还按 pricing.Vendors() 里非 ManualOnly 的厂商循环,会得到空集、整个按钮变成空操作。
+// 为什么把 CC 放在最前:它才是本站官方价的**可抓来源**(逐厂商官网抓取已停用),批量按钮若还按
+// pricing.Vendors() 里非 ManualOnly 的厂商循环,会得到空集、整个按钮变成空操作。
 //
-// 逐厂商独立成败的语义保留:两个锚点来源与显式厂商之间,任一失败不影响其他。
+// 逐厂商独立成败的语义保留:锚点来源与显式厂商之间,任一失败不影响其他。
 func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Providers []domain.Provider `json:"providers"`
@@ -197,7 +196,7 @@ func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Requ
 
 	resp := domain.RefreshPricingResp{Results: make([]domain.RefreshProviderResult, 0, len(req.Providers))}
 
-	// ① CC 单页锚点(主力来源)。
+	// ① CC 单页锚点(唯一来源)。
 	cc, status, typ, err := s.fetchCommandCode(ctx)
 	switch {
 	case err != nil && status != 0:
@@ -209,20 +208,6 @@ func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Requ
 		resp.CommandCode = &cc
 		resp.TotalUpserted += cc.Upserted
 		resp.TotalRemoved += cc.Removed
-	}
-
-	// ①b opencode zen 锚点(第二来源,与 CC 并存,各存一行)。独立成败:CC 失败不影响它,反之亦然。
-	oc, ocStatus, ocTyp, ocErr := s.fetchOpenCode(ctx)
-	switch {
-	case ocErr != nil && ocStatus != 0:
-		resp.OpenCodeError = ocErr.Error()
-		_ = ocTyp
-	case ocErr != nil:
-		resp.OpenCodeError = ocErr.Error()
-	default:
-		resp.OpenCode = &oc
-		resp.TotalUpserted += oc.Upserted
-		resp.TotalRemoved += oc.Removed
 	}
 
 	// ①c 订阅计划页 → 按模型派生成本系数($10 档,自动写入 source='plan',不覆盖人工行)。

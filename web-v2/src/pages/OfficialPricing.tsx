@@ -14,8 +14,8 @@ import { api } from '@/services/api';
 import { fmt } from '@/utils/format';
 import { buildOfficialIndex, modelBinding, officialFor } from '@/utils/official';
 import type {
-  BillingShape, CommandCodeFetchResult, ModelCatalogItem, OfficialPriceView, OpenCodeFetchResult,
-  PlanChannelType, PlanFetchResult, PlanSourceResult, PriceSource, Provider, RefreshPricingResp,
+  BillingShape, CommandCodeFetchResult, ModelCatalogItem, OfficialPriceView,
+  PlanChannelType, PlanFetchResult, PlanSourceResult, Provider, RefreshPricingResp,
 } from '@/types';
 
 /** 计费形态标签。分时/阶梯/折扣必须显式标注 —— 计费按请求时刻选档,展示列的是「生效默认」档。 */
@@ -26,24 +26,17 @@ const SHAPE_LABEL: Record<BillingShape, string> = {
   discount: '限时折扣',
 };
 
-/** 官方价来源标签(与后端 domain.PriceSource 一致)。空串 = 迁移前遗留,读作 commandcode。 */
-const SOURCE_LABEL: Record<string, string> = {
-  commandcode: 'command code',
-  opencode: 'opencode',
-};
-
-const sourceLabel = (s?: PriceSource) => SOURCE_LABEL[s || 'commandcode'] ?? s ?? '—';
-/** 来源归一:空串(遗留行)读作 commandcode。 */
-const normSrc = (s?: PriceSource): PriceSource => (s || 'commandcode');
+/** 官方价来源显示名。2026-10 起收敛为单一来源 commandcode。 */
+const SOURCE_LABEL = 'command code';
 
 const dash = <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
 const curOf = (c: string) => (c === 'CNY' ? '¥' : '$');
 
-/** 一个官方价来源的抓取结果块。CC / opencode 同形共用;opencode 另报分档/折扣 slug。
- *  失败分支显示 err(不显示空块),成功分支列出免费行/分档/折扣 —— 被剔除或改写的信息必须显式回报。 */
+/** commandcode 单页锚点的抓取结果块。失败分支显示 err(不显示空块):
+ *  被剔除或改写的信息必须显式回报。 */
 function SourceResult({ label, res, err }: {
   label: string;
-  res?: CommandCodeFetchResult | OpenCodeFetchResult;
+  res?: CommandCodeFetchResult;
   err?: string;
 }) {
   if (!res) {
@@ -51,12 +44,10 @@ function SourceResult({ label, res, err }: {
     return (
       <div className="gw-note" role="alert" style={{ borderLeftColor: 'var(--gw-err)', marginBottom: 14 }}>
         <b style={{ color: 'var(--gw-err)' }}>{label} 抓取失败</b>
-        <span>{err}(未改动该来源的官方价;旧数据仍在)</span>
+        <span>{err}(未改动官方价;旧数据仍在)</span>
       </div>
     );
   }
-  const tieredSlugs = 'tieredSlugs' in res ? res.tieredSlugs : undefined;
-  const discountSlugs = 'discountSlugs' in res ? res.discountSlugs : undefined;
   const chipRow = (title: string, items: string[] | undefined, mono = false) => (
     (items?.length ?? 0) > 0 && (
       <div style={{ marginBottom: 14 }}>
@@ -102,8 +93,6 @@ function SourceResult({ label, res, err }: {
 
       {chipRow('免费模型(无单价,未落库)', res.freeSkipped, true)}
       {chipRow('未登记厂商(已跳过,请在 ccVendorPrefixes 补映射)', res.unmappedSkipped, true)}
-      {chipRow('分档模型(多档已合并为一行,标量取基准档)', tieredSlugs, true)}
-      {chipRow('折扣模型(<del> 划原价,取现价)', discountSlugs, true)}
     </>
   );
 }
@@ -178,8 +167,6 @@ export default function OfficialPricing() {
   const navigate = useNavigate();
 
   const [vendor, setVendor] = useState<Provider | ''>('');
-  // 来源筛选('' = 全部);官方价锚点来源:commandcode / opencode。
-  const [src, setSrc] = useState<PriceSource>('');
   const [kw, setKw] = useState('');
   const [manualOpen, setManualOpen] = useState(false);
   // 批量刷新结果(CC 锚点抓取 + 显式重试厂商的成败 + 本次新绑定的模型)。
@@ -262,16 +249,16 @@ export default function OfficialPricing() {
   const runBulkRefresh = (only?: Provider[]) => {
     const retry = only && only.length > 0;
     modal.confirm({
-      title: retry ? `仅重试失败的 ${only.length} 个厂商` : '重新抓取官方价(command code + opencode)',
+      title: retry ? `仅重试失败的 ${only.length} 个厂商` : '重新抓取官方价(command code)',
       content: (
         <>
-          从 commandcode 模型页与 opencode zen 定价页各抓一轮作为官方价锚点(同一模型两来源各存一行),并
-          <b>删除该来源下已下架、页面上不再列出的模型行</b>。
+          从 commandcode 模型页抓一轮作为官方价锚点,并
+          <b>删除页面上已下架、不再列出的模型行</b>。
           同时从订阅计划页(CC GOAT / opencode Go)抓 Monthly credits,按模型派生成本系数写入对应渠道。
           抓完会自动把能唯一对上的模型绑定到官方价(成本与售价随之重算)。
           {!retry && (
             <div style={{ marginTop: 8, color: 'var(--gw-text-3)', fontSize: 12.5 }}>
-              两个来源独立成败,一方失败不影响另一方;供给源成本按其渠道类型取对应来源的官方价。
+              官方价只有一个来源(command code 单页锚点);供给源成本据此官方价 × 渠道系数重算。
               成本系数(模型级)由订阅计划页自动派生(系数 = 订阅价 ÷ 该模型额度),可在渠道页手工覆盖。
             </div>
           )}
@@ -335,13 +322,12 @@ export default function OfficialPricing() {
     const q = kw.trim().toLowerCase();
     return rows
       .filter(r => (!vendor || r.provider === vendor)
-        && (!src || normSrc(r.source) === src)
         && (!q || r.modelName.toLowerCase().includes(q)))
       .sort((a, b) =>
         a.provider === b.provider
           ? a.modelName.localeCompare(b.modelName)
           : a.provider.localeCompare(b.provider));
-  }, [rows, vendor, src, kw]);
+  }, [rows, vendor, kw]);
 
   const cols: ColumnsType<OfficialPriceView> = [
     {
@@ -391,16 +377,12 @@ export default function OfficialPricing() {
         </Tooltip>
       ),
     },
-    // 锚点来源:同一 (厂商, 模型) 可两来源并存各存一行(commandcode / opencode)。
+    // 单一来源(commandcode 单页锚点),不再按来源分行。
     {
       title: '来源', key: 'anchor', width: 116,
-      render: (_, r) => (
-        <Tooltip title={normSrc(r.source) === 'opencode'
-          ? 'opencode zen 定价页锚点(该来源渠道的供给源成本据此派生)'
-          : 'command code 单页锚点(主力 / 兜底来源)'}>
-          <Tag color={normSrc(r.source) === 'opencode' ? 'blue' : 'default'} style={{ marginInlineEnd: 0 }}>
-            {sourceLabel(r.source)}
-          </Tag>
+      render: () => (
+        <Tooltip title="command code 单页锚点(唯一官方价来源)">
+          <Tag style={{ marginInlineEnd: 0 }}>{SOURCE_LABEL}</Tag>
         </Tooltip>
       ),
     },
@@ -469,7 +451,7 @@ export default function OfficialPricing() {
   ) : rows.length === 0 ? (
     <EmptyState
       title="还没有官方参考价"
-      desc="点「抓取官方价」从 command code 模型页与 opencode zen 定价页各拉一轮(覆盖全部厂商);页面动态渲染、抓不到的厂商可「手工录入」。"
+      desc="点「抓取官方价」从 command code 模型页拉一轮(覆盖全部厂商);页面动态渲染、抓不到的厂商可「手工录入」。"
       action={
         <Button size="small" type="primary" loading={bulkRunning} onClick={() => runBulkRefresh()}>
           抓取官方价
@@ -488,7 +470,7 @@ export default function OfficialPricing() {
     <div className="gw-page">
       <PageHeader
         title="官方定价"
-        desc="官方参考价锚点来自 command code 与 opencode 两个来源(同一模型可两来源并存各存一行);抓取/手工录入只写官方价,不改动渠道报价"
+        desc="官方参考价锚点来自 command code 单页(唯一来源);所有渠道的供给源官方价统一取此价。抓取/手工录入只写官方价,不改动渠道报价"
         extra={
           <>
             <Tooltip title="从 CC GOAT / opencode Go 两个 $10 订阅页抓 Monthly credits → 按模型派生成本系数(系数 = 订阅价 ÷ 该模型额度,写入对应渠道;人工覆盖不动)">
@@ -497,7 +479,7 @@ export default function OfficialPricing() {
               </Button>
             </Tooltip>
             <Button onClick={() => setManualOpen(true)}>手工录入</Button>
-            <Tooltip title="从 command code 模型页与 opencode zen 定价页各抓一轮并回填模型绑定 —— 供给源成本按「官方价 × 渠道系数」随之重算">
+            <Tooltip title="从 command code 模型页抓一轮并回填模型绑定 —— 供给源成本按「官方价 × 渠道系数」随之重算">
               <Button type="primary" loading={bulkRunning} onClick={() => runBulkRefresh()}>
                 抓取官方价
               </Button>
@@ -516,17 +498,6 @@ export default function OfficialPricing() {
               value={vendor || undefined}
               onChange={v => setVendor((v as Provider) ?? '')}
               options={vendors.map(v => ({ value: v.provider, label: v.provider }))}
-            />
-            <Select
-              allowClear
-              style={{ width: 168 }}
-              placeholder="全部来源"
-              value={src || undefined}
-              onChange={v => setSrc((v as PriceSource) ?? '')}
-              options={[
-                { value: 'commandcode', label: 'command code' },
-                { value: 'opencode', label: 'opencode' },
-              ]}
             />
             <Input.Search
               allowClear
@@ -569,7 +540,7 @@ export default function OfficialPricing() {
         onClose={() => setManualOpen(false)}
       />
 
-      {/* 重抓结果:两个官方价来源(CC / opencode)各自单列成败,逐厂商结果另列(一个失败不该淹没另一个的成功) */}
+      {/* 重抓结果:官方价单一来源(command code),逐厂商结果另列(显式重试时才非空) */}
       <Modal
         title="重抓官方价结果"
         open={!!bulkRes}
@@ -597,9 +568,8 @@ export default function OfficialPricing() {
               未绑定的仍走手填兜底或显示「未知」。
             </div>
 
-            {/* —— 两个官方价来源:各自独立成败,一个失败不淹没另一个 —— */}
+            {/* —— 官方价唯一来源:command code 单页锚点 —— */}
             <SourceResult label="command code" res={bulkRes.commandCode} err={bulkRes.commandCodeError} />
-            <SourceResult label="opencode" res={bulkRes.openCode} err={bulkRes.openCodeError} />
 
             {/* —— 订阅计划页派生的模型级成本系数(CC GOAT / opencode Go,$10 档) —— */}
             {(bulkRes.plans || bulkRes.plansError) && (
@@ -628,7 +598,7 @@ export default function OfficialPricing() {
                     {r.error ? (
                       <span style={{ color: 'var(--gw-err)', flex: 1 }}>
                         {r.errorType === 'manual_only'
-                          ? '仅手工录入(逐厂商抓取已停用,官方价由 commandcode / opencode 锚点写入)'
+                          ? '仅手工录入(逐厂商抓取已停用,官方价由 command code 锚点写入)'
                           : `失败(${r.errorType}):${r.error}`}
                       </span>
                     ) : (

@@ -15,7 +15,7 @@ import (
 // ---- 订阅计划页(CC GOAT / opencode Go)抓取 → 按模型派生成本系数的端到端 ----
 
 // planFixtureServer 一个按**请求路径**分派夹具的假上游。redirectRT 只改 host、保留 path,
-// 故同一起服务可同时满足四个来源:CC 模型页、opencode zen、CC GOAT 计划页、opencode Go 计划页。
+// 故同一起服务可同时满足三个来源:CC 模型页、CC GOAT 计划页、opencode Go 计划页。
 //
 // failPaths 里的路径返回 500(用于验证「某来源失败不影响另一个」)。
 func planFixtureServer(t *testing.T, failPaths map[string]bool) *httptest.Server {
@@ -23,8 +23,6 @@ func planFixtureServer(t *testing.T, failPaths map[string]bool) *httptest.Server
 	dir := filepath.Join("..", "pricing", "testdata")
 	files := map[string]string{
 		"/models":          "commandcode_models.html",
-		"/docs/zen":        "opencode_zen.html",
-		"/docs/zen/":       "opencode_zen.html",
 		"/docs/plans/goat": "commandcode_goat.html",
 		"/docs/go":         "opencode_go.html",
 		"/docs/go/":        "opencode_go.html",
@@ -181,9 +179,9 @@ func TestFetchPlansSourceIndependence(t *testing.T) {
 }
 
 // TestRefreshPlansBlockIndependent 批量刷新的三块独立:订阅计划全部失败 → PlansError 置位、
-// Plans 为空,但 CC / opencode 官方价抓取照常成功(计划页失败不淹没官方价)。
+// Plans 为空,但 CC 官方价抓取照常成功(计划页失败不淹没官方价)。
 func TestRefreshPlansBlockIndependent(t *testing.T) {
-	// 计划页两条路径 500;模型/zen 定价页正常。
+	// 计划页两条路径 500;模型定价页正常。
 	srvUp := planFixtureServer(t, map[string]bool{"/docs/plans/goat": true, "/docs/go": true, "/docs/go/": true})
 
 	srv, c, st, s := newTestServerS(t)
@@ -199,9 +197,6 @@ func TestRefreshPlansBlockIndependent(t *testing.T) {
 	res := decode[domain.RefreshPricingResp](t, body)
 	if res.CommandCode == nil {
 		t.Errorf("CC 官方价应仍成功: %+v", res.CommandCodeError)
-	}
-	if res.OpenCode == nil {
-		t.Errorf("opencode 官方价应仍成功: %+v", res.OpenCodeError)
 	}
 	if res.Plans != nil {
 		t.Errorf("订阅计划全失败时 Plans 应为空, got %+v", res.Plans)

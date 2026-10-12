@@ -1,7 +1,7 @@
 /** 真实厂商(卖的是谁的模型)。已不含 Azure / 聚合中转 —— 出站协议见 EgressProto,
  *  渠道上游归属见 ChannelType。空串 = 不是单一厂商(多厂商聚合渠道)。
  *  与后端 domain.Providers 一致(commandcode 单页含 20 家,见 issue #27;
- *  后 opencode 页引入 Mistral,共 21 家)。 */
+ *  Mistral 原由已删除的 opencode zen 页引入,现仅余手工录入)。 */
 export type Provider =
   | 'OpenAI' | 'Anthropic' | 'DeepSeek'
   | '通义千问' | '智谱' | 'Moonshot'
@@ -352,10 +352,6 @@ export interface RefreshPricingResp {
   commandCode?: CommandCodeFetchResult;
   /** commandcode 抓取失败原因(不影响 results 里的其他结果) */
   commandCodeError?: string;
-  /** opencode zen 定价页锚点抓取结果(与 CC 并存,各存一行) */
-  openCode?: OpenCodeFetchResult;
-  /** opencode 抓取失败原因(不影响 results 与其他来源) */
-  openCodeError?: string;
   /** 订阅计划页(CC GOAT / opencode Go)派生成本系数的结果($10 档,自动写入) */
   plans?: PlanFetchResult;
   /** 订阅计划抓取失败原因(不影响其余来源) */
@@ -579,16 +575,16 @@ export interface Settings {
 export type BillingShape = 'flat' | 'peak_offpeak' | 'tiered' | 'discount';
 export type PriceCurrency = 'CNY' | 'USD';
 
-/** 官方价的**来源**锚点(与后端 domain.PriceSource 一致)。同一 (厂商, 模型) 可两来源并存各存一行。
- *  commandcode = CC 单页锚点(主力/兜底来源);opencode = opencode zen 定价页;空串 = 迁移前遗留(等价 commandcode)。 */
-export type PriceSource = 'commandcode' | 'opencode' | '';
+/** 官方价的**来源**锚点(与后端 domain.PriceSource 一致)。2026-10 起收敛为单一来源:
+ *  commandcode = CC 单页锚点(唯一来源);空串 = 迁移前遗留(等价 commandcode)。 */
+export type PriceSource = 'commandcode' | '';
 
 /** 官方参考价一行(原币种 / 百万 token)。分时类取空闲价为「生效默认」,明细在 detail。 */
 export interface OfficialPrice {
   id: number;
   provider: Provider;
   modelName: string;
-  /** 来源锚点:commandcode(CC 单页)/ opencode(zen 页);空串 = 遗留行(读作 commandcode) */
+  /** 来源锚点:commandcode(CC 单页,唯一来源);空串 = 遗留行(读作 commandcode) */
   source?: PriceSource;
   sourceUrl: string;
   fetchedAt: string;
@@ -645,26 +641,6 @@ export interface CommandCodeFetchResult {
   freeSkipped?: string[];
   /** 付费但未归属厂商、被跳过的模型("显示名(slug)") */
   unmappedSkipped?: string[];
-}
-
-/** POST /official-prices/fetch-opencode 返回。与 CommandCodeFetchResult 同形,
- *  另加分档/折扣统计(它们被并进单行或记入 detail,必须显式回报)。 */
-export interface OpenCodeFetchResult {
-  sourceUrl: string;
-  contentSha256?: string;
-  /** 定价表数据行数(含免费行与各分档行) */
-  totalRows: number;
-  /** 落库行数(免费行剔除、同 slug 分档合并后) */
-  upserted: number;
-  removed?: number;
-  perVendor: ProviderCount[];
-  freeSkipped?: string[];
-  /** 付费但未归属厂商、被跳过的模型("显示名(slug)") */
-  unmappedSkipped?: string[];
-  /** 合并了多档的 slug */
-  tieredSlugs?: string[];
-  /** 含折扣(<del> 原价)的 slug */
-  discountSlugs?: string[];
 }
 
 /** POST /channels/{id}/fetch-pricing 返回。失败即失败:failed 非空且 upserted=0。 */

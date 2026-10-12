@@ -4,7 +4,8 @@ import type { Capability, ChannelType, EgressProto, Provider, QuotaShape } from 
  *  已不含 Azure / 聚合中转 —— 前者按区域部署定价不是厂商,后者根本是渠道而非厂商。
  *  commandcode 单页含 20 家模型来源(见 issue #27),后 14 家据此扩容;
  *  厂商归属按 CC 详情页 JSON-LD 的 brand 逐模型核对(LongCat→Meituan)。
- *  Mistral 由 opencode zen 定价页引入(付费行 Mistral Large 4),共 21 家。 */
+ *  Mistral 原由现已删除的 opencode zen 定价页引入(付费行 Mistral Large 4),共 21 家;
+ *  删 zen 官方价来源后无自动来源产出 Mistral,保留枚举供手工录入。 */
 export const providers: Provider[] = [
   'OpenAI', 'Anthropic', 'DeepSeek', '通义千问', '智谱', 'Moonshot',
   'Google', 'xAI', 'Xiaomi', 'Meta', 'MiniMax',
