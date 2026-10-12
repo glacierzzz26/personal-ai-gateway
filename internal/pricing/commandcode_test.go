@@ -1,6 +1,9 @@
 package pricing
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -346,19 +349,48 @@ func TestFetchCommandCodeExcludesFreeAndReports(t *testing.T) {
 	}
 }
 
-// 未登记厂商前缀必须硬错(不得静默丢弃或猜测)。
-func TestParseCommandCodeUnattributedFails(t *testing.T) {
+// 付费行未登记厂商前缀 → 不再整批硬错,而是标记为未归属行(由 FetchCommandCode 跳过并上报)。
+// 顺序红线:新厂商的付费模型只应「跳过该行」,不该拖垮整页官方价抓取。
+func TestParseCommandCodeUnmappedPaidRowIsSkipped(t *testing.T) {
 	page := `<!doctype html><html><body><table>
 <tr><th>Model</th><th>Context</th><th>Intelligence</th><th>Tok/s</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Caps</th></tr>
 <tr><td><a href="/models/zzz-1"><span class="truncate">Zzz 1</span></a></td><td>1M</td><td>-</td><td>-</td>
 <td><span>$1.00</span></td><td><span>$2.00</span></td><td><span>$0.10</span></td><td><span>$1.25</span></td><td></td></tr>
 </table></body></html>`
-	_, err := parseCommandCode([]byte(page))
-	if err == nil {
-		t.Fatal("未登记厂商前缀应报错")
+	rows, err := parseCommandCode([]byte(page))
+	if err != nil {
+		t.Fatalf("未登记厂商不再硬错,应解析成功,得到: %v", err)
 	}
-	if !strings.Contains(err.Error(), "未登记厂商前缀") || !strings.Contains(err.Error(), "Zzz 1") {
-		t.Errorf("错误应点名未归属模型,得到: %v", err)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if !rows[0].Unmapped {
+		t.Errorf("付费未归属行应标 Unmapped,got %+v", rows[0])
+	}
+	if rows[0].Provider != "" {
+		t.Errorf("未归属行 Provider 应为空,got %q", rows[0].Provider)
+	}
+}
+
+// 免费行 + 未登记厂商前缀 → 豁免归属、识别为免费行,不得拖垮整页(Glyph Cluster 回归)。
+func TestParseCommandCodeFreeRowWithUnknownVendor(t *testing.T) {
+	page := `<!doctype html><html><body><table>
+<tr><th>Model</th><th>Context</th><th>Intelligence</th><th>Tok/s</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Caps</th></tr>
+<tr><td><a href="/models/glyph-cluster-free"><span class="truncate">Glyph Cluster</span></a></td><td>1M</td><td>-</td><td>-</td>
+<td><span>Free</span></td><td><span>Free</span></td><td><span>Free</span></td><td>—</td><td></td></tr>
+</table></body></html>`
+	rows, err := parseCommandCode([]byte(page))
+	if err != nil {
+		t.Fatalf("免费行(未知厂商)不应触发硬错,应解析成功,得到: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if !rows[0].Free {
+		t.Errorf("应识别为免费行,got %+v", rows[0])
+	}
+	if rows[0].Unmapped {
+		t.Errorf("免费行应豁免归属,不应标 Unmapped")
 	}
 }
 
@@ -412,5 +444,53 @@ func TestCommandCodeAllowlist(t *testing.T) {
 	req2, _ := http.NewRequest(http.MethodGet, "https://evil.example.com/models", nil)
 	if _, err := c.Do(req2); err == nil {
 		t.Fatal("非白名单域名应拒绝")
+	}
+}
+
+// bodyRT 返回固定正文的 RoundTripper(FetchCommandCode 端到端,不走网络)。
+type bodyRT struct{ body string }
+
+func (b bodyRT) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(b.body))}, nil
+}
+
+// ccSyntheticPage 生成 ≥40 行的 CC 表:40 个已知厂商付费行 + 1 免费未知厂商行 + 1 付费未知厂商行。
+func ccSyntheticPage() string {
+	var b strings.Builder
+	b.WriteString("<!doctype html><html><body><table>\n" +
+		"<tr><th>Model</th><th>Context</th><th>Intelligence</th><th>Tok/s</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Caps</th></tr>\n")
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&b, `<tr><td><a href="/models/deepseek-model-%d"><span class="truncate">DeepSeek Model %d</span></a></td><td>1M</td><td>-</td><td>-</td><td><span>$1.00</span></td><td><span>$2.00</span></td><td><span>$0.10</span></td><td><span>$1.25</span></td><td></td></tr>`+"\n", i, i)
+	}
+	b.WriteString(`<tr><td><a href="/models/glyph-cluster-free"><span class="truncate">Glyph Cluster</span></a></td><td>1M</td><td>-</td><td>-</td><td><span>Free</span></td><td><span>Free</span></td><td><span>Free</span></td><td>—</td><td></td></tr>` + "\n")
+	b.WriteString(`<tr><td><a href="/models/zzz-1"><span class="truncate">Zzz 1</span></a></td><td>1M</td><td>-</td><td>-</td><td><span>$1.00</span></td><td><span>$2.00</span></td><td><span>$0.10</span></td><td><span>$1.25</span></td><td></td></tr>` + "\n")
+	b.WriteString("</table></body></html>")
+	return b.String()
+}
+
+// 未知厂商上线不再打死整页:付费未归属行跳过并计入 UnmappedSkipped,免费行计入 FreeSkipped,
+// 其余正常落库(Glyph Cluster 回归,端到端;对称于 opencode)。
+func TestFetchCommandCodeSkipsUnmappedAndFree(t *testing.T) {
+	client := &http.Client{Transport: bodyRT{body: ccSyntheticPage()}}
+	rows, rep, err := FetchCommandCode(context.Background(), client, 0)
+	if err != nil {
+		t.Fatalf("FetchCommandCode: %v", err)
+	}
+	if rep.TotalRows != 42 {
+		t.Errorf("totalRows = %d, want 42", rep.TotalRows)
+	}
+	if rep.Priced != 40 || len(rows) != 40 {
+		t.Errorf("落库 = %d/%d 行, want 40", rep.Priced, len(rows))
+	}
+	if len(rep.FreeSkipped) != 1 || !strings.Contains(rep.FreeSkipped[0], "Glyph Cluster") {
+		t.Errorf("freeSkipped = %v, want 1 条 Glyph Cluster", rep.FreeSkipped)
+	}
+	if len(rep.UnmappedSkipped) != 1 || !strings.Contains(rep.UnmappedSkipped[0], "Zzz 1") {
+		t.Errorf("unmappedSkipped = %v, want 1 条 Zzz 1", rep.UnmappedSkipped)
+	}
+	for _, r := range rows {
+		if r.Provider == "" || r.ModelName == "glyph-cluster-free" || r.ModelName == "zzz-1" {
+			t.Errorf("不应落库的行混入: %+v", r)
+		}
 	}
 }

@@ -55,14 +55,15 @@ func OpenCodeHosts() []string { return openCodeHosts }
 // OpenCodeReport 一次 opencode 抓取的统计。免费行/分档行/折扣行必须显式上报 ——
 // 它们被剔除或合并,不报就是静默丢信息。
 type OpenCodeReport struct {
-	SourceURL     string                  `json:"sourceUrl"`
-	ContentSHA    string                  `json:"contentSha256"`
-	TotalRows     int                     `json:"totalRows"` // 定价表数据行数(含免费行与各分档行)
-	Priced        int                     `json:"priced"`    // 落库行数(免费剔除、分档合并后)
-	PerVendor     map[domain.Provider]int `json:"perVendor"`
-	FreeSkipped   []string                `json:"freeSkipped"`   // 免费行 "显示名(slug)"
-	TieredSlugs   []string                `json:"tieredSlugs"`   // 合并了多档的 slug
-	DiscountSlugs []string                `json:"discountSlugs"` // 含折扣(<del> 原价)的 slug
+	SourceURL       string                  `json:"sourceUrl"`
+	ContentSHA      string                  `json:"contentSha256"`
+	TotalRows       int                     `json:"totalRows"` // 定价表数据行数(含免费行与各分档行)
+	Priced          int                     `json:"priced"`    // 落库行数(免费剔除、分档合并后)
+	PerVendor       map[domain.Provider]int `json:"perVendor"`
+	FreeSkipped     []string                `json:"freeSkipped"`     // 免费行 "显示名(slug)"
+	UnmappedSkipped []string                `json:"unmappedSkipped"` // 付费但未归属厂商的行 "显示名(slug)"
+	TieredSlugs     []string                `json:"tieredSlugs"`     // 合并了多档的 slug
+	DiscountSlugs   []string                `json:"discountSlugs"`   // 含折扣(<del> 原价)的 slug
 }
 
 // ---------- 解析中间结构 ----------
@@ -73,6 +74,8 @@ type ocParsed struct {
 	Slug    string // 由清单表 join 得到的 Model ID;免费行未 join 到时可空
 	Base    string // 剥括号后缀后的显示名
 	Free    bool
+	// 付费行但显示名无登记厂商前缀(跳过落库,由调用方上报)。
+	Unmapped bool
 	// 付费行才有意义:
 	Provider      domain.Provider
 	BandLabel     string  // 括号后缀内容(如 "≤ 200K tokens"),""=无分档
@@ -182,7 +185,6 @@ func parseOpenCode(body []byte) ([]ocParsed, error) {
 		return nil, fmt.Errorf("opencode 定价表无数据行(页面结构可能已变更)")
 	}
 	var out []ocParsed
-	var unmapped []string
 	for _, tr := range trs[1:] {
 		cells := ccCellNodes(tr)
 		if len(cells) != width {
@@ -193,18 +195,9 @@ func parseOpenCode(body []byte) ([]ocParsed, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !r.Free {
-			if r.Provider == "" {
-				unmapped = append(unmapped, r.Display)
-				continue // 汇总为硬错
-			}
-		}
+		// 免费行(r.Free)与「付费未归属」行(r.Unmapped)都保留在此,由 FetchOpenCode
+		// 分流并上报 —— 不在此硬错:新模型(尤其匿名/免费)上线不应拖垮整页官方价抓取。
 		out = append(out, r)
-	}
-	if len(unmapped) > 0 {
-		// 不得静默落库:未登记的厂商前缀必须补映射表,而不是丢掉或猜一个。
-		return nil, fmt.Errorf("opencode 出现未登记厂商前缀:%s(须补 ccVendorPrefixes,不得静默落库)",
-			strings.Join(unmapped, "、"))
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("opencode 定价表未解析出任何数据行(页面结构可能已变更)")
@@ -253,7 +246,7 @@ func ocParseRow(cells []*html.Node, iModel, iInput, iOutput, iCacheRead, iCacheW
 		r.Provider = p
 		_ = brand
 	} else {
-		return r, nil // 由调用方汇总为「未归属」硬错
+		r.Unmapped = true // 付费未归属:由调用方跳过并上报(不再硬错)
 	}
 
 	in, _, err := ccMoney(inC.Current)
@@ -459,19 +452,27 @@ func FetchOpenCode(ctx context.Context, client *http.Client, previousRows int) (
 			len(rows), openCodeMinRows)
 	}
 
-	// 免费行排除在落库之外,但必须上报(否则是静默丢数据)。
+	// 免费行与「付费未归属」行都排除在落库之外,但必须上报(否则是静默丢数据)。
 	// 排除必须在 validate 之前:validate 会因 in/out 全 0 拒绝**整批**。
 	priced := make([]ocParsed, 0, len(rows))
 	for _, r := range rows {
-		if r.Free {
+		switch {
+		case r.Free:
 			rep.FreeSkipped = append(rep.FreeSkipped, fmt.Sprintf("%s(%s)", r.Display, r.Slug))
-			continue
+		case r.Unmapped:
+			rep.UnmappedSkipped = append(rep.UnmappedSkipped, fmt.Sprintf("%s(%s)", r.Display, r.Slug))
+		default:
+			priced = append(priced, r)
 		}
-		priced = append(priced, r)
 	}
 
 	merged := ocMerge(priced)
 	rep.Priced = len(merged)
+	if len(merged) == 0 {
+		// 全被跳过 → keep 集合为空 → 对账会删光既有 opencode 价。宁可不动,不可误删。
+		return nil, rep, fmt.Errorf("opencode 解析出 %d 行但无一可落库(免费 %d / 未归属 %d),拒绝落库与对账",
+			len(rows), len(rep.FreeSkipped), len(rep.UnmappedSkipped))
+	}
 	if previousRows > 0 && float64(len(merged)) < openCodeFloorRatio*float64(previousRows) {
 		return nil, rep, fmt.Errorf("opencode 页面行数骤降:%d 行 < 上次 %d 行的 %.0f%%,拒绝落库",
 			len(merged), previousRows, openCodeFloorRatio*100)

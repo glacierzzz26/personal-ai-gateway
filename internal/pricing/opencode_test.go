@@ -257,20 +257,27 @@ func TestParseOpenCodeCacheWrite(t *testing.T) {
 	}
 }
 
-// 未登记厂商前缀必须硬错(付费行);免费昵称行不在此列。
-func TestParseOpenCodeUnattributedFails(t *testing.T) {
+// 付费行未登记厂商前缀 → 不再整批硬错,而是标记为未归属行(由 FetchOpenCode 跳过并上报)。
+// 与 CC 一致:新厂商的付费模型只应「跳过该行」,不该拖垮整页官方价抓取。
+func TestParseOpenCodeUnmappedPaidRowIsSkipped(t *testing.T) {
 	page := `<!doctype html><html><body>
 <table><tr><th>Model</th><th>Model ID</th><th>Endpoint</th><th>AI SDK Package</th></tr>
 <tr><td>Zzz 1</td><td>zzz-1</td><td>/x</td><td>x</td></tr></table>
 <table><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached Read</th><th>Cached Write</th></tr>
 <tr><td>Zzz 1</td><td>$1.00</td><td>$2.00</td><td>$0.10</td><td>-</td></tr></table>
 </body></html>`
-	_, err := parseOpenCode([]byte(page))
-	if err == nil {
-		t.Fatal("未登记厂商前缀应报错")
+	rows, err := parseOpenCode([]byte(page))
+	if err != nil {
+		t.Fatalf("未登记厂商不再硬错,应解析成功,得到: %v", err)
 	}
-	if !strings.Contains(err.Error(), "未登记厂商前缀") || !strings.Contains(err.Error(), "Zzz 1") {
-		t.Errorf("错误应点名未归属模型,得到: %v", err)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if !rows[0].Unmapped {
+		t.Errorf("付费未归属行应标 Unmapped,got %+v", rows[0])
+	}
+	if rows[0].Free {
+		t.Errorf("付费未归属行不应标免费")
 	}
 }
 

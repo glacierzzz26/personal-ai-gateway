@@ -337,6 +337,10 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   匹配词后紧跟字母不算命中(防 `GPT` 命中 `gptx`)。依据是 2026-09-23 逐模型核对 CC 详情页 JSON-LD 的 `brand`
   (81/81 命中,零冲突):**LongCat 的 brand 是 Meituan(不是 ByteDance),Ling 的 brand 是 inclusionAI**。
   `brand` 随行记入 `detail_json` 作留证,便于日后复核;运行时不吃 81 次详情页请求。
+- **未知厂商不拖垮整页(容错,与 opencode 对齐)**:CC 会持续上线新模型(含匿名/免费,如 `Glyph Cluster`/brand `Stealth`),
+  若对「未登记厂商前缀」**整批硬错**,一个新模型就会让**全站官方价停更、成本派生全断**。故:① 免费行(判定先于归属)
+  **豁免厂商归属**;② 付费行归属失败**不再硬错**,而是标记 `ccRow.Unmapped`、由 `FetchCommandCode` **跳过该行并计入报告
+  `unmappedSkipped`**(非静默),其余行照常落库。护栏仍在:见下方三道闸。
 - **`model_name` 落 slug**(`<a href="/models/<slug>">` 的最后一段,`-` 分隔),与 `canonicalModelKey`
   (取最后 `/` 段小写)同口径;显示名不落库。厂商枚举据此从 6 家扩到 **20 家**(opencode 来源再加 Mistral,共 21 家;见 §3 `domain.Provider`)。
 - 价格单元格**四态**必须逐态解析,不能整格 `parseMoney`(会把删除线原价当现价):
@@ -348,8 +352,9 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   计费回落输入价(见 §5.7)。峰谷行的缓存写只给一个标量(不分档),按行级值落地。
 - 分档明细(多档)只在详情页;列表页 `aria-label="...N context price bands"` 只给**档位数**,记
   `detail_json["tierBands"]` 留证,**不参与选价**(与 `window.go` 的阶梯红线一致)。
-- **宁缺勿假的三道闸**:① 结构异常(表列数不符/行无 slug)**硬失败**,绝不静默给出错误值;
-  ② 免费行在 `validate()` 之前剔除(否则 in/out 全 0 会让整批被拒);③ **两道行数地板**(独立,任一不过即拒):
+- **宁缺勿假的四道闸**:① 结构异常(表列数不符/行无 slug)**硬失败**,绝不静默给出错误值;
+  ② 免费行在 `validate()` 之前剔除(否则 in/out 全 0 会让整批被拒);③ **可落库行数为 0 即硬失败**
+  (全被免费/未归属跳过 → keep 集合为空 → 对账会删光该来源,故拒绝落库与对账);④ **两道行数地板**(独立,任一不过即拒):
   绝对数 < 40(挡「解析到半张表/抓错表」),或本次行数 < 上次成功抓取的 80%(挡改版半张表覆盖全部)。
 - **对账按来源整体做**(`ReconcileOfficialPricesFromSource`),不是逐厂商:unique 键是
   `(provider, model_name)`,逐厂商删漏掉两种情况 —— ① 模型换了厂商归属(同 slug 落到了别的 provider);
@@ -369,8 +374,11 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 与 CC 的三处关键差异:① 定价表**不带 slug**,须先解析清单表得「显示名 → slug」再回填;
   ② 折扣用 `<del>` 标删除线原价(CC 用活动按钮);③ **免费行混杂付费行之间**。
 - **免费剔除必须在厂商归属之前**(顺序红线):免费昵称模型(`Big Pickle`/`Space Bunny` 等)无厂商前缀,
-  若先归属会被判「未登记厂商」而误报硬错。免费判定 = 输入与输出**都**为 `Free`(单侧 Free 如 `Jev 1.13`
+  若先归属会被判「未登记厂商」而误报。免费判定 = 输入与输出**都**为 `Free`(单侧 Free 如 `Jev 1.13`
   输入有价、输出 Free → **保留**,免费侧按 0 计)。
+- **未知厂商不拖垮整页(与 CC 一致)**:付费行厂商归属失败**不再硬错**,标记 `ocParsed.Unmapped`,
+  由 `FetchOpenCode` **跳过该行并计入报告 `unmappedSkipped`**(非静默),其余行照常落库;新厂商只需补
+  `ccVendorPrefixes` 一行,不影响其余模型的官方价抓取。
 - **分档合并**:同 slug 多行(如 `Claude Sonnet 4.5 (≤ 200K tokens)` / `(> 200K tokens)`)合并为一行,
   `billing_shape=tiered`,标量取**基准档**(阈值最小档),明细写 `detail_json["ocTiers"]` +
   `detail_json["tierBands"]` —— **绝不写 `detail_json["tiers"]`**(该键在旧库已坏,`window.go` 明令禁读)。
@@ -379,8 +387,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 缓存写列缺失(`-`/`—`)→ `cache_write_price=0`(= 无依据,计费回落输入价,见 §5.7)。
 - 厂商前缀表复用 CC 的 `ccVendorPrefixes`,追加 `Mistral`(`opencode` 页有付费行 `Mistral Large 4`);
   CC 页无 Mistral 显示名 → **CC 输出逐位不变**。厂商枚举据此从 20 家扩到 **21 家**。
-- 入口 `FetchOpenCode`;与 CC 同护栏:**三道闸**(结构硬失败 / 免费行 `validate()` 前剔除 / 行数地板
-  40 + 上次 80%)。对账按 `source_url` 作用域(`ReconcileOfficialPricesFromSource`),**不触碰** CC 与手工行。
+- 入口 `FetchOpenCode`;与 CC 同护栏:**四道闸**(结构硬失败 / 免费行 `validate()` 前剔除 / 可落库行 0 即硬失败 /
+  行数地板 40 + 上次 80%)。对账按 `source_url` 作用域(`ReconcileOfficialPricesFromSource`),**不触碰** CC 与手工行。
 - 端点 `POST /official-prices/fetch-opencode`;批量刷新 `POST /official-prices/refresh` 在 CC 之后跑
   opencode 第二块,各自独立成败(一方失败不影响另一方,累加 `totalUpserted/totalRemoved`)。
 
@@ -463,8 +471,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `GET /official-prices?provider=` · `GET /channels/{id}/official-prices` | 官方参考价(全量 / 按渠道 provider)+ 与现有 offer 的比对 |
 | `GET /official-prices/vendors` | 厂商登记表(`{provider, sourceUrl, manualOnly, manualCurrency}`);驱动抓取/手工录入入口与门禁 |
 | `POST /official-prices/fetch` `{provider}` · `POST /official-prices/manual` | 按厂商抓取(逐厂商路径,当前全部 ManualOnly)/ 手工录入(来源 URL 必填,缺省币种按厂商落地) |
-| `POST /official-prices/fetch-commandcode` | **官方价主来源**(issue #27):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped}` |
-| `POST /official-prices/fetch-opencode` | **官方价第二来源**:抓 opencode zen 定价页并落库(`source=opencode`,与 CC 并存)+ 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, tieredSlugs, discountSlugs}` |
+| `POST /official-prices/fetch-commandcode` | **官方价主来源**(issue #27):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, unmappedSkipped}`(`unmappedSkipped` = 付费但未登记厂商、被跳过的行) |
+| `POST /official-prices/fetch-opencode` | **官方价第二来源**:抓 opencode zen 定价页并落库(`source=opencode`,与 CC 并存)+ 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, unmappedSkipped, tieredSlugs, discountSlugs}` |
 | `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点、再抓 opencode 锚点(均**破坏性**对账,各自独立成败),再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, openCode, openCodeError, totalUpserted, totalRemoved}`。超时 120s |
 | `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写四价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
 | `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |

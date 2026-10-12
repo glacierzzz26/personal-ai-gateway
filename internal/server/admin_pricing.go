@@ -102,10 +102,11 @@ func (s *Server) fetchCommandCode(ctx context.Context) (domain.CommandCodeFetchR
 	}
 
 	resp = domain.CommandCodeFetchResult{
-		SourceURL:   rep.SourceURL,
-		ContentSHA:  rep.ContentSHA,
-		TotalRows:   rep.TotalRows,
-		FreeSkipped: rep.FreeSkipped,
+		SourceURL:       rep.SourceURL,
+		ContentSHA:      rep.ContentSHA,
+		TotalRows:       rep.TotalRows,
+		FreeSkipped:     rep.FreeSkipped,
+		UnmappedSkipped: rep.UnmappedSkipped,
 	}
 	keep := make([]store.OfficialPriceRef, 0, len(rows))
 	for _, row := range rows {
@@ -163,12 +164,13 @@ func (s *Server) fetchOpenCode(ctx context.Context) (domain.OpenCodeFetchResult,
 	}
 
 	resp = domain.OpenCodeFetchResult{
-		SourceURL:     rep.SourceURL,
-		ContentSHA:    rep.ContentSHA,
-		TotalRows:     rep.TotalRows,
-		FreeSkipped:   rep.FreeSkipped,
-		TieredSlugs:   rep.TieredSlugs,
-		DiscountSlugs: rep.DiscountSlugs,
+		SourceURL:       rep.SourceURL,
+		ContentSHA:      rep.ContentSHA,
+		TotalRows:       rep.TotalRows,
+		FreeSkipped:     rep.FreeSkipped,
+		UnmappedSkipped: rep.UnmappedSkipped,
+		TieredSlugs:     rep.TieredSlugs,
+		DiscountSlugs:   rep.DiscountSlugs,
 	}
 	keep := make([]store.OfficialPriceRef, 0, len(rows))
 	for _, row := range rows {

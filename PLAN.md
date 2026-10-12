@@ -14,7 +14,7 @@
 | 无用户级账户 | `admins` 无余额概念;无钱包、无充值、无账变流水 |
 | 币种 | 全站单一币种 `settings.displayCurrency`;`model_offers.*_price_usd` / `official_prices.*_price` 是**历史命名**,装的是「当前计价币种金额」;`costUsd()` 直接乘 token,**不做换算**(`gateway.go:632`) |
 | 对外暴露面 | `GET /api/v1/models` **登录即可**(`server.go:153`),对客户**全量**返回渠道名、每个供给源的上游真实名、官方价来源 URL、以及**全站** `todayRequests/successRate`(`reads.go:136-177`) |
-| 官方价覆盖 | **issue #27 起:官方价主锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。**增补:opencode zen 定价页为第二来源**(`internal/pricing/opencode.go`,与 CC 并存各存一行;`source=opencode` 渠道按其价派生成本),厂商枚举增至 21 家(Mistral)。`BuildManual` 已对全部厂商放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`) |
+| 官方价覆盖 | **issue #27 起:官方价主锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。**增补:opencode zen 定价页为第二来源**(`internal/pricing/opencode.go`,与 CC 并存各存一行;`source=opencode` 渠道按其价派生成本),厂商枚举增至 21 家(Mistral)。`BuildManual` 已对全部厂商放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`)。**容错:来源页出现未登记厂商前缀的新模型时,免费行豁免归属、付费行跳过该行并计入报告 `unmappedSkipped`(不再整批硬错拖垮全站官方价抓取)** |
 
 ## 2. 定价模型(定稿:就 3 个数)
 
