@@ -15,7 +15,7 @@ import { fmt } from '@/utils/format';
 import { buildOfficialIndex, modelBinding, officialFor } from '@/utils/official';
 import type {
   BillingShape, CommandCodeFetchResult, ModelCatalogItem, OfficialPriceView, OpenCodeFetchResult,
-  PriceSource, Provider, RefreshPricingResp,
+  PlanChannelType, PlanFetchResult, PlanSourceResult, PriceSource, Provider, RefreshPricingResp,
 } from '@/types';
 
 /** 计费形态标签。分时/阶梯/折扣必须显式标注 —— 计费按请求时刻选档,展示列的是「生效默认」档。 */
@@ -108,6 +108,66 @@ function SourceResult({ label, res, err }: {
   );
 }
 
+/** 订阅计划来源显示名(CC GOAT / opencode Go,均为 $10 档)。 */
+const PLAN_LABEL: Record<PlanChannelType, string> = {
+  commandcode: 'command code GOAT',
+  opencode: 'opencode Go',
+};
+
+/** 一个订阅计划来源的结果块。成功报「派生 N 条模型级系数 / 写入 M 渠道」,并列出跳过的免费/未映射模型。 */
+function PlanResult({ src }: { src: PlanSourceResult }) {
+  const label = PLAN_LABEL[src.channelType] ?? src.channelType;
+  if (src.error) {
+    return (
+      <div className="gw-note" role="alert" style={{ borderLeftColor: 'var(--gw-err)', marginBottom: 14 }}>
+        <b style={{ color: 'var(--gw-err)' }}>{label} 订阅计划抓取失败</b>
+        <span>{src.error}(未改动该来源渠道的模型级系数;旧值仍在)</span>
+      </div>
+    );
+  }
+  const chipRow = (title: string, items?: string[]) => (
+    (items?.length ?? 0) > 0 && (
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginBottom: 6 }}>{title}</div>
+        <Space size={[6, 6]} wrap>
+          {items!.map(s => <Tag key={s} style={{ marginInlineEnd: 0 }} className="gw-mono">{s}</Tag>)}
+        </Space>
+      </div>
+    )
+  );
+  return (
+    <>
+      <div className="gw-note" style={{ marginBottom: 14 }}>
+        <b>
+          已从 {label} 订阅计划页派生 {src.written} 条模型级系数
+          {src.channelsTouched > 0 ? `,写入 ${src.channelsTouched} 个渠道` : '(无匹配渠道类型,未写入)'}
+        </b>
+        <span>
+          订阅价 ${src.planPriceUsd}/月 ÷ 各模型月度额度 = 系数;额度表共 {src.totalRows} 行(可派生 {src.priced} 行)。
+          {' '}
+          <a href={src.sourceUrl} target="_blank" rel="noreferrer">来源 ↗</a>
+        </span>
+      </div>
+      {chipRow('免费/无限额度(无法派生系数,已跳过)', src.skippedFree)}
+      {chipRow('额度表未映射到官方 slug 的模型(已跳过)', src.skippedUnmapped)}
+    </>
+  );
+}
+
+/** 订阅计划块:逐来源列成败(CC GOAT / opencode Go 独立失败不互相淹没);整体失败时只报原因。 */
+function PlanBlock({ plans, err }: { plans?: PlanFetchResult; err?: string }) {
+  if (!plans) {
+    if (!err) return null;
+    return (
+      <div className="gw-note" role="alert" style={{ borderLeftColor: 'var(--gw-err)', marginBottom: 14 }}>
+        <b style={{ color: 'var(--gw-err)' }}>订阅计划抓取失败</b>
+        <span>{err}(未改动任何渠道的模型级系数;旧值仍在)</span>
+      </div>
+    );
+  }
+  return <>{plans.sources.map(s => <PlanResult key={s.channelType} src={s} />)}</>;
+}
+
 /**
  * 官方定价:集中管理厂商官网单价(抓取 / 手工录入 / 删除),并反查每行被哪些目录模型引用。
  * 官方价与供给源报价分表存放 —— 此处只维护「官方参考价」,不会改写任何渠道报价。
@@ -125,6 +185,9 @@ export default function OfficialPricing() {
   // 批量刷新结果(CC 锚点抓取 + 显式重试厂商的成败 + 本次新绑定的模型)。
   const [bulkRes, setBulkRes] = useState<RefreshPricingResp | null>(null);
   const [bulkRunning, setBulkRunning] = useState(false);
+  // 独立「从订阅计划抓取」的结果(与批量刷新的 plans 块同构,但单独入口单独展示)。
+  const [planRes, setPlanRes] = useState<PlanFetchResult | null>(null);
+  const [planRunning, setPlanRunning] = useState(false);
 
   const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['official-prices'],
@@ -204,11 +267,12 @@ export default function OfficialPricing() {
         <>
           从 commandcode 模型页与 opencode zen 定价页各抓一轮作为官方价锚点(同一模型两来源各存一行),并
           <b>删除该来源下已下架、页面上不再列出的模型行</b>。
+          同时从订阅计划页(CC GOAT / opencode Go)抓 Monthly credits,按模型派生成本系数写入对应渠道。
           抓完会自动把能唯一对上的模型绑定到官方价(成本与售价随之重算)。
           {!retry && (
             <div style={{ marginTop: 8, color: 'var(--gw-text-3)', fontSize: 12.5 }}>
               两个来源独立成败,一方失败不影响另一方;供给源成本按其渠道类型取对应来源的官方价。
-              费用倍率不在此处 —— 官方单价即锚点,「$10 买 $60」走渠道成本系数。
+              成本系数(模型级)由订阅计划页自动派生(系数 = 订阅价 ÷ 该模型额度),可在渠道页手工覆盖。
             </div>
           )}
         </>
@@ -226,6 +290,42 @@ export default function OfficialPricing() {
           message.error((e as Error)?.message || '重抓失败');
         } finally {
           setBulkRunning(false);
+        }
+      },
+    });
+  };
+
+  /**
+   * 从订阅计划页(CC GOAT / opencode Go,$10 档)抓 Monthly credits,按模型派生成本系数并写入各渠道。
+   * 与「抓取官方价」分离:官方价是锚点,本动作只写「渠道 × 模型」系数(不改官方价、不改报价)。
+   * 自动写入 source='plan',人工覆盖(source='manual')不受影响;两来源独立成败。
+   */
+  const runPlanFetch = () => {
+    modal.confirm({
+      title: '从订阅计划页抓取成本系数',
+      content: (
+        <>
+          从 command code GOAT 与 opencode Go 两个 $10 档订阅页各抓一轮,按
+          «订阅价 ÷ 各模型月度额度» 派生<b>模型级成本系数</b>,写入对应渠道类型的所有渠道。
+          <div style={{ marginTop: 8, color: 'var(--gw-text-3)', fontSize: 12.5 }}>
+            已有自动值会更新;人工覆盖(source=manual)不会被覆盖。两个来源独立成败,一方失败不影响另一方。
+            系数只影响成本口径,不改动任何渠道报价。
+          </div>
+        </>
+      ),
+      okText: '开始抓取',
+      cancelText: '取消',
+      onOk: async () => {
+        setPlanRunning(true);
+        try {
+          const r = await api.fetchPlans();
+          setPlanRes(r);
+          qc.invalidateQueries({ queryKey: ['channel-model-cost-ratios'] });
+          qc.invalidateQueries({ queryKey: ['models'] });
+        } catch (e) {
+          message.error((e as Error)?.message || '抓取失败');
+        } finally {
+          setPlanRunning(false);
         }
       },
     });
@@ -391,6 +491,11 @@ export default function OfficialPricing() {
         desc="官方参考价锚点来自 command code 与 opencode 两个来源(同一模型可两来源并存各存一行);抓取/手工录入只写官方价,不改动渠道报价"
         extra={
           <>
+            <Tooltip title="从 CC GOAT / opencode Go 两个 $10 订阅页抓 Monthly credits → 按模型派生成本系数(系数 = 订阅价 ÷ 该模型额度,写入对应渠道;人工覆盖不动)">
+              <Button loading={planRunning} onClick={runPlanFetch}>
+                从订阅计划抓取
+              </Button>
+            </Tooltip>
             <Button onClick={() => setManualOpen(true)}>手工录入</Button>
             <Tooltip title="从 command code 模型页与 opencode zen 定价页各抓一轮并回填模型绑定 —— 供给源成本按「官方价 × 渠道系数」随之重算">
               <Button type="primary" loading={bulkRunning} onClick={() => runBulkRefresh()}>
@@ -496,6 +601,14 @@ export default function OfficialPricing() {
             <SourceResult label="command code" res={bulkRes.commandCode} err={bulkRes.commandCodeError} />
             <SourceResult label="opencode" res={bulkRes.openCode} err={bulkRes.openCodeError} />
 
+            {/* —— 订阅计划页派生的模型级成本系数(CC GOAT / opencode Go,$10 档) —— */}
+            {(bulkRes.plans || bulkRes.plansError) && (
+              <div style={{ fontSize: 12.5, color: 'var(--gw-text-3)', margin: '4px 0 6px' }}>
+                订阅计划(模型级成本系数)
+              </div>
+            )}
+            <PlanBlock plans={bulkRes.plans} err={bulkRes.plansError} />
+
             {/* 显式重试的逐厂商结果(常规路径下为空) */}
             {bulkRes.results.length > 0 && (
               <div style={{ marginBottom: 4 }}>
@@ -550,6 +663,25 @@ export default function OfficialPricing() {
                 </Space>
               </div>
             )}
+          </>
+        )}
+      </Modal>
+
+      {/* 独立「从订阅计划抓取」的结果(与批量刷新里的 plans 块同构) */}
+      <Modal
+        title="订阅计划抓取结果"
+        open={!!planRes}
+        onCancel={() => setPlanRes(null)}
+        width={680}
+        footer={<Button onClick={() => setPlanRes(null)}>关闭</Button>}
+      >
+        {planRes && (
+          <>
+            <div style={{ marginBottom: 14, fontSize: 13, color: 'var(--gw-text-2)' }}>
+              已按「订阅价 ÷ 各模型月度额度」派生模型级成本系数,写入对应渠道类型的所有渠道。
+              可在各渠道「成本系数」里查看,或删除以退回厂商级兜底。
+            </div>
+            <PlanBlock plans={planRes} />
           </>
         )}
       </Modal>

@@ -131,6 +131,8 @@ export interface CostQuote {
   vendor?: Provider;
   /** 渠道成本系数;1.0 = 未设(带 warn 说明) */
   ratio?: number;
+  /** 系数来源层级:model(模型级) / vendor(厂商级兜底) / 缺省(未设,ratio=1.0) */
+  ratioScope?: 'model' | 'vendor';
   /** 该时刻是否落在高峰档(仅分时形态有值) */
   peak?: boolean;
   window?: 'peak' | 'offpeak';
@@ -249,8 +251,8 @@ export interface OfficialVendorInfo {
 /**
  * 一条「渠道 × 厂商」成本系数(GET/PUT /channels/{id}/cost-ratios)。
  *
- * 按 (渠道, 厂商) 而非按模型:credit 型套餐($10 买 $60 额度)对所有模型同倍率,
- * 按模型是 O(渠道×模型) 个格子,按厂商是 O(渠道×厂商)。缺行 = 1.0(不折扣)。
+ * 这是**兜底层**:计费三级口径为 模型级 > 厂商级 > 1.0。厂商级按 (渠道, 厂商) 配,
+ * 是模型级缺失时的兜底;缺行 = 1.0(不折扣)。模型级见 ModelCostRatioRow。
  */
 export interface CostRatioRow {
   channelId: number;
@@ -266,6 +268,57 @@ export interface CostRatioInput {
   vendor: Provider;
   ratio: number;
   note?: string;
+}
+
+/**
+ * 一条「渠道 × 模型」成本系数(计费三级口径的最高优先层)。
+ *
+ * 订阅计划页(CC GOAT / opencode Go)给每个模型一个不同的月度额度,故真实系数 = 订阅价 ÷
+ * 该模型额度(每模型一个值)。source 区分自动派生(plan)与人工覆盖(manual)。
+ */
+export interface ModelCostRatioRow {
+  channelId: number;
+  /** = official_prices.model_name(canonical slug) */
+  modelName: string;
+  /** 成本 = 官方价 × ratio */
+  ratio: number;
+  /** plan(订阅页自动派生) | manual(人工覆盖) */
+  source: 'plan' | 'manual';
+  note?: string;
+  updatedAt?: string;
+}
+
+/** PUT /channels/{id}/model-cost-ratios 的入参:全量替换该渠道的模型级系数行(source 由服务端定为 manual) */
+export interface ModelCostRatioInput {
+  modelName: string;
+  ratio: number;
+  note?: string;
+}
+
+/** 订阅计划来源(CC GOAT / opencode Go) */
+export type PlanChannelType = 'commandcode' | 'opencode';
+
+/** 单个订阅计划来源的抓取/写入结果 */
+export interface PlanSourceResult {
+  channelType: PlanChannelType;
+  sourceUrl: string;
+  contentSha256?: string;
+  planPriceUsd: number;
+  totalRows: number;
+  priced: number;
+  /** 实际写入/更新的系数行数(不含被人工行挡下的) */
+  written: number;
+  channelsTouched: number;
+  skippedFree?: string[];
+  skippedUnmapped?: string[];
+  error?: string;
+  /** 失败类别(fetch_failed/store_error) */
+  errorType?: string;
+}
+
+/** POST /official-prices/fetch-plans 返回 */
+export interface PlanFetchResult {
+  sources: PlanSourceResult[];
 }
 
 /** 批量刷新中单个厂商的结果。逐厂商独立成败:一个失败不影响其他。 */
@@ -303,6 +356,10 @@ export interface RefreshPricingResp {
   openCode?: OpenCodeFetchResult;
   /** opencode 抓取失败原因(不影响 results 与其他来源) */
   openCodeError?: string;
+  /** 订阅计划页(CC GOAT / opencode Go)派生成本系数的结果($10 档,自动写入) */
+  plans?: PlanFetchResult;
+  /** 订阅计划抓取失败原因(不影响其余来源) */
+  plansError?: string;
 }
 
 export interface GatewayToken {

@@ -88,10 +88,10 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 - `cmd/gateway` 入口(组装 config → 主密钥 → store → server;版本经 `-ldflags -X main.version` 注入,按 `tls` 配置叠加双口)
 - `internal/config` 只读 `listen/db_dsn/key_dir/web_dir/tls`(业务数据全部在 DB)
 - `internal/domain` v2 实体 DTO(兼 API body)
-- `internal/store` PostgreSQL(schema 版本化 + channels/models/offers/official_prices/channel_vendor_costs/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合);源码 SQL 沿写 `?`,驱动边界统一重绑为 `$n`
+- `internal/store` PostgreSQL(schema 版本化:单基线 DDL + v15 起增量步骤;channels/models/offers/official_prices/channel_vendor_costs/channel_model_cost_ratios/rules/tokens/admins/users/request_logs/settings 仓库 + 时区聚合);源码 SQL 沿写 `?`,驱动边界统一重绑为 `$n`
 - `internal/secret` AES-GCM 渠道密钥(主密钥 `GW_MASTER_KEY` 或 `key_dir` 下 `gateway.master.key` 0600)
 - `internal/engine` 选路决策:候选(启用供给源 ∩ 未熔断渠道 ∩ 命中规则)→ 策略排序 → 重试/兜底
-- `internal/pricing` 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 DESIGN §5.6)+ 厂商登记表 + 手工录入 + 分时选价;来源页新增未知厂商时容错(免费行豁免、付费行跳过并计入 `unmappedSkipped`,不整批硬错)
+- `internal/pricing` 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 DESIGN §5.6)+ **订阅计划页**(CC GOAT / opencode Go,按模型派生成本系数,见 DESIGN §5.6.1)+ 厂商登记表 + 手工录入 + 分时选价;来源页新增未知厂商时容错(免费行豁免、付费行跳过并计入 `unmappedSkipped`,不整批硬错)
 - `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
 - `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生;空闲 1h + 7 天绝对上限,滑动续期)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管

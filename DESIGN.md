@@ -47,18 +47,19 @@ cmd/gateway     组装 config → 主密钥(secret)→ store(迁移)→ server
 internal/config listen/db_dsn/key_dir/web_dir/tls;业务数据不进配置
 internal/domain v2 实体 DTO(JSON tag,兼 API body 与展示字段)
 internal/secret AES-GCM(渠道 api_key);主密钥 GW_MASTER_KEY 或 key_dir 下 gateway.master.key(0600)
-internal/store  PostgreSQL(单基线 DDL,schemaVersion=14;源码 SQL 写 `?`,驱动边界重绑为 `$n`);
-                channels/models/model_offers/official_prices/channel_vendor_costs/rules/tokens/admins/users/
-                request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
+internal/store  PostgreSQL(单基线 DDL + v15 起增量步骤,schemaVersion=15;源码 SQL 写 `?`,驱动边界重绑为 `$n`);
+                channels/models/model_offers/official_prices/channel_vendor_costs/channel_model_cost_ratios/
+                rules/tokens/admins/users/request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
 internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
 internal/engine 把目录+offers+规则+渠道健康编译为一次转发决策(候选/策略/重试/兜底)
-internal/pricing 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 §5.6)+ 厂商登记表 + 手工录入 + 分时选价
+internal/pricing 官方价来源:commandcode 单页锚点 + opencode zen 定价页(双来源并存,见 §5.6)+ **订阅计划页**
+                (CC GOAT / opencode Go,派生按模型成本系数)+ 厂商登记表 + 手工录入 + 分时选价
 internal/proxy  relay 转发 + translate(anthropic↔openai 双向,流式状态机 + usage 权威计数)+ probe/ping
 internal/server 管理面 CRUD handler(会话)+ 模型面(令牌)+ 静态托管 web-v2/dist(SPA 回退)
 web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist 产物 gitignore
 ```
 
-## 3. 数据模型(PostgreSQL;单基线 DDL + schema_migrations 版本化)
+## 3. 数据模型(PostgreSQL;单基线 DDL + 版本化增量步骤,schema_migrations)
 
 - `admins(id, username UNIQUE, password_bcrypt, role TEXT DEFAULT 'admin', created_at)` — config 不再承载账号;
   role 分 `admin`(全权)/`user`(仅能管理自己的令牌)。
@@ -91,9 +92,14 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
    (厂商, 模型) 可两来源并存各存一行**(典型:Claude 系 slug 在 CC 与 opencode 完全相同);
    成本派生按 offer 所属渠道的 `channel_type` 选来源(`PriceSourceForChannelType`),非 opencode 一律取 CC。
    `detail_json` 装分时/阶梯/折扣明细(峰谷窗口、活动原价与到期、档位数;opencode 分档写 `ocTiers`)。
-- `channel_vendor_costs(channel_id FK, vendor, ratio, note, …, UNIQUE(channel_id, vendor))` — 成本系数。
+- `channel_vendor_costs(channel_id FK, vendor, ratio, note, …, UNIQUE(channel_id, vendor))` — **厂商级**成本系数。
   **成本 = 官方价 × ratio**,键是**厂商**(非渠道),(渠道,厂商)唯一。未配的厂商默认 1.0。
   为什么单列一张表而不并进 `channels`:渠道 PATCH 是整体覆盖语义,系数混进去会被「改个渠道名」误清空。
+- `channel_model_cost_ratios(channel_id FK, model_name, ratio, source, note, …, UNIQUE(channel_id, model_name))`
+  — **模型级**成本系数(v15 新增),计费三级口径的**最高优先层**。`model_name` 取 `official_prices.model_name`
+  (canonical slug),与计费的 `plan.OfficialModelName` 对齐;`source` 区分 `plan`(订阅计划页自动派生)与
+  `manual`(人工覆盖)。自动写入**不覆盖** `manual` 行(`ON CONFLICT … WHERE source <> 'manual'`)。
+  与厂商级的关系:**模型级 > 厂商级 > 1.0**(见 §5.6「订阅计划来源」)。
 - `settings(k PK, v)` — 网关参数 + `tz_offset_min`(默认 +480 Asia/Shanghai)+ `public_base_url`(生成配置用)。
 
 **时间口径**:`ts/*_at` UTC RFC3339Nano 落库;小时/天桶、today、日志展示全部按 `settings.tz_offset_min`
@@ -326,8 +332,9 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 **为什么是「锚点」而不是「厂商挂牌价」。** CC 页面单价是本站的**采购锚点**(CC 靠高缓存命中率把单价
 压得比厂商挂牌价低),不总是厂商官网挂牌价。⚠️ 将来若要对外展示厂商挂牌价,需另存一列区分 —— 本期不做。
 
-**费用倍率不写进官方价。** 「$10 买 $60 额度」是商业事实,走 `channel_vendor_costs.ratio`(成本 =
-官方价 × ratio),不改进 CC 单价。两者正交:官方价只回答「厂商口径是多少」,倍率只回答「本站实付多少」。
+**费用倍率不写进官方价。** 站主每月订阅($10)买到的额度是商业事实,走**成本系数**派生(成本 = 官方价 × 系数),
+不改进 CC 单价。两者正交:官方价只回答「厂商口径是多少」,系数只回答「本站实付多少」。系数**按模型**自动派生
+—— 见 §5.6.1「订阅计划来源」。
 
 实现要点(`internal/pricing/commandcode.go`,由 `internal/server/admin_pricing.go` 调用):
 
@@ -391,6 +398,44 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   行数地板 40 + 上次 80%)。对账按 `source_url` 作用域(`ReconcileOfficialPricesFromSource`),**不触碰** CC 与手工行。
 - 端点 `POST /official-prices/fetch-opencode`;批量刷新 `POST /official-prices/refresh` 在 CC 之后跑
   opencode 第二块,各自独立成败(一方失败不影响另一方,累加 `totalUpserted/totalRemoved`)。
+
+### 5.6.1 订阅计划来源:按模型自动派生成本系数
+
+**为什么。** 站主每月花 **$10** 订阅(CC GOAT / opencode Go),换到**每个模型一份不同的月度额度**
+(`Monthly credits` / `Monthly limit`)。因此该模型的**真实成本系数 = 订阅价 ÷ 该模型额度**,是**逐模型**的
+一个值 —— 旧的「一厂商同倍率」口径(`channel_vendor_costs`)只是兜底,不是事实。手工填系数会随订阅页
+改版而失真,故改为**从订阅计划页自动抓取**(保留人工覆盖)。
+
+**两个来源**(均 $10 档;`internal/pricing/plans.go`,由 `internal/server/admin_pricing.go` 调用):
+
+| channel_type | 页面 | 额度表 |
+|---|---|---|
+| `commandcode` | `https://commandcode.ai/docs/plans/goat` | `Model \| Input \| … \| Monthly credits`(分散在**三张表**,全部属 $10 GOAT,合并取用) |
+| `opencode` | `https://opencode.ai/docs/go/`(**英文页**;中文页表头失配,固定英文 URL) | `Model \| Input \| … \| Monthly limit`(取**第一张** = Go 档;$40 的 Go Plus 在其后) |
+
+实现要点:
+
+- **订阅价**:CC 从页面 meta 正则取(兜底常量 10);opencode 从计划表 `Plan | Price | Included usage` 里
+  第一列为 `Go` 的一行取 `$10/month`。`ratio = 订阅价 ÷ 该模型额度`。
+- **显示名 → slug**:CC 从估算表(`Model | Context | Intelligence`,`/models/<slug>` href + truncate span)
+  建映射;opencode 从 `Model | Model ID` 表建映射(显示名先剥括号后缀 `(Off-Peak)`/`(≤ 256K tokens)`)。
+  落库键 `model_name` = slug,与 `official_prices.model_name` / 计费的 `plan.OfficialModelName` 对齐。
+- **两源 slug 口径不同**:CC 用连字符(`deepseek-v4-1-flash`),opencode 用点号(`deepseek-v4.1-flash`)。
+  各渠道按**自身来源**的 slug 键控系数,不跨源混用。
+- **额度单元格取现价**(`planCreditsOfCell`):折扣行形如
+  `<button><s>$20</s><span>$40</span>…</button>`,`<s>` 是原值、裸值才是现额度;故按节点走并**跳过删除线**,
+  不复用 `ccParsePrice`(它刻意不递归进 `<button>`)。
+- **跳过并上报(非静默)**:免费/不限额/破折号 → `skippedFree`;显示名映射不到 slug → `skippedUnmapped`。
+- **护栏照搬官方价红线**:绝对行数地板(`< 10`)+ 相对地板(本次 < 上次落库行数的 80%)+ **可落库行为 0 即硬失败**;
+  结构异常(行列表数不符)硬失败。宁可抓不到,也不落可疑值。
+- **落库语义**:`UpsertPlanRatios` 批量写 `source='plan'`,**人工覆盖行 `source='manual'` 不被覆盖**
+  (`ON CONFLICT … WHERE source <> 'manual'`)—— 自动值只是默认,站主手改过的必须留住。
+- **逐来源独立成败**:单点网络抖动不该让两个来源的系数都白更;端点 `POST /official-prices/fetch-plans`,
+  批量刷新 `POST /official-prices/refresh` 在 CC/opencode 之后跑计划来源第三块(计划失败不淹没官方价抓取)。
+
+**计费三级口径**(`internal/proxy/billing.go` 的 `costRatio`,成本 = 官方价 × 系数):
+① **模型级** `channel_model_cost_ratios`(本小节自动派生 / 人工覆盖)> ② **厂商级** `channel_vendor_costs`(兜底)
+> ③ **1.0**(不折扣)。`CostQuote.ratioScope` 回标来源层级(`model`/`vendor`/空),供前端标注。
 
 ### 5.7 缓存写计费(cache_creation,m0013)
 
@@ -467,13 +512,15 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `POST /models/{id}/offers` · `PATCH/DELETE /offers/{oid}` | 加供给源 / 改价·启停 / 删;**启用且零价**(无官方价 + 兜底四价全 0)→ `400 zero_price`(见 §5.8) |
 | `PUT /models/{id}/offers/order` `{from,insertAt}` | 供给源拖拽重排 → priority 1..N |
 | `GET /models/{id}/usage?days=7` | `{daily:[MetricPoint], byChannel:[{channelName,requests,costUsd}]}` |
-| `GET /channels/{id}/cost-ratios` · `PUT` `{ratios:[{vendor,ratio,note}]}` · `DELETE ?vendor=` | 渠道 × 厂商成本系数(成本 = 官方价 × ratio);PUT 是**全量替换**(未回传的厂商即删除);DELETE 一条退回默认 1.0 |
+| `GET /channels/{id}/cost-ratios` · `PUT` `{ratios:[{vendor,ratio,note}]}` · `DELETE ?vendor=` | 渠道 × **厂商级**成本系数(成本 = 官方价 × ratio);PUT 是**全量替换**(未回传的厂商即删除);DELETE 一条退回默认 1.0 |
+| `GET /channels/{id}/model-cost-ratios` · `PUT` `{ratios:[{modelName,ratio,note}]}` · `DELETE ?model=` | 渠道 × **模型级**成本系数(计费三级口径最高层,见 §5.6.1);PUT 全量替换(写入行 `source=manual`);DELETE 一条退回厂商级兜底 |
 | `GET /official-prices?provider=` · `GET /channels/{id}/official-prices` | 官方参考价(全量 / 按渠道 provider)+ 与现有 offer 的比对 |
 | `GET /official-prices/vendors` | 厂商登记表(`{provider, sourceUrl, manualOnly, manualCurrency}`);驱动抓取/手工录入入口与门禁 |
 | `POST /official-prices/fetch` `{provider}` · `POST /official-prices/manual` | 按厂商抓取(逐厂商路径,当前全部 ManualOnly)/ 手工录入(来源 URL 必填,缺省币种按厂商落地) |
 | `POST /official-prices/fetch-commandcode` | **官方价主来源**(issue #27):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, unmappedSkipped}`(`unmappedSkipped` = 付费但未登记厂商、被跳过的行) |
 | `POST /official-prices/fetch-opencode` | **官方价第二来源**:抓 opencode zen 定价页并落库(`source=opencode`,与 CC 并存)+ 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, unmappedSkipped, tieredSlugs, discountSlugs}` |
-| `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点、再抓 opencode 锚点(均**破坏性**对账,各自独立成败),再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, openCode, openCodeError, totalUpserted, totalRemoved}`。超时 120s |
+| `POST /official-prices/fetch-plans` | **订阅计划来源**(见 §5.6.1):抓 CC GOAT / opencode Go 两个 $10 档订阅页,按模型派生成本系数写入匹配 `channel_type` 的渠道(`source=plan`,不覆盖 `manual`);回 `{sources:[{channelType, sourceUrl, contentSha256, planPriceUsd, totalRows, priced, written, channelsTouched, skippedFree, skippedUnmapped, error}]}`,逐来源独立成败 |
+| `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点、再抓 opencode 锚点(均**破坏性**对账,各自独立成败),再抓订阅计划页派生系数,再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, openCode, openCodeError, plans, plansError, totalUpserted, totalRemoved}`。超时 120s |
 | `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写四价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
 | `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |
 | `GET /tokens/{id}/claude-config` | 生成可直接粘的 `~/.claude/settings.json` 片段(含真实 key;旧 key 无密文回 409) |
@@ -573,12 +620,16 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 ## 9. 迁移与留档
 
 - **存储 = PostgreSQL(单一真源,无双驱动)**。SQLite 整体退役;表结构由一份**单基线 DDL**
-  (`internal/store/schema.go` 的 `baselinePG`)一次建出,`schemaVersion = 14`:首启建 `schema_migrations`
-  并播入版本 14,SQLite 时期的 14 步历史迁移(m0001..m0014)**不重放**。
+  (`internal/store/schema.go` 的 `baselinePG`)一次建出,`schemaVersion = 15`:首启建 `schema_migrations`
+  并播入版本 15,SQLite 时期的 14 步历史迁移(m0001..m0014)**不重放**。
 - 为什么是单基线而非把 14 步逐条 port 到 PG:生产/测试库都走**整库搬运**(见下),PG 侧没有历史要重放;
-  忠实重建 m0011 的 LIKE 回填、m0014 的表重建只是无谓 churn。故 `baselinePG` 直接建出「m0014 终态」的表。
+  忠实重建 m0011 的 LIKE 回填、m0014 的表重建只是无谓 churn。故 `baselinePG` 直接建出「当前终态」的表。
+- **两个迁移入口(基线 + 增量步骤)**:空库(`MAX(version)=0`)跑 `baselinePG`(直接建终态全表);**已存在的库**
+  (如生产在 v14)从 `MAX(version)+1` 起逐条跑 `schemaSteps`(v15 起,`CREATE TABLE/INDEX IF NOT EXISTS`,幂等)。
+  两条路都**单事务**;缺步骤(`schemaSteps[v]` 未登记)即**硬错**,不静默跳版。为什么加增量:直接 bump 版本会让
+  旧库重跑基线 → `CREATE TABLE admins` 冲突。**新库的终态表必须同时反映在 `baselinePG` 与对应 `schemaSteps[v]`。**
 - **版本号语义不变**:`SchemaVersion()`(`/healthz` 的 `schema` 字段)与 `upgrade.sh` 的降级护栏照旧用它;
-  后续 PG 迁移**从 15 起**追加(仍是追加式版本化,只是起点是 14)。
+  新迁移一律追加式(当前头 `schemaVersion = 15`,`deploy/scripts/lib-version.sh` 的 `gw_schema_head` 自动读出)。
 - **类型映射(刻意最小改动)**:时间戳/`ts` 仍 `text`(UTC RFC3339Nano,**不转 `timestamptz`**);
   布尔仍 `bigint` 0/1(**不转 `boolean`**);JSON 仍 `text`(**不转 `jsonb`**);金额 `REAL` → `double precision`
   (**不用 `numeric`** —— numeric 扫不进 `*float64`);所有整数列 `bigint`;自增主键 →

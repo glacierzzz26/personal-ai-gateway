@@ -14,7 +14,7 @@
 | 无用户级账户 | `admins` 无余额概念;无钱包、无充值、无账变流水 |
 | 币种 | 全站单一币种 `settings.displayCurrency`;`model_offers.*_price_usd` / `official_prices.*_price` 是**历史命名**,装的是「当前计价币种金额」;`costUsd()` 直接乘 token,**不做换算**(`gateway.go:632`) |
 | 对外暴露面 | `GET /api/v1/models` **登录即可**(`server.go:153`),对客户**全量**返回渠道名、每个供给源的上游真实名、官方价来源 URL、以及**全站** `todayRequests/successRate`(`reads.go:136-177`) |
-| 官方价覆盖 | **issue #27 起:官方价主锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。**增补:opencode zen 定价页为第二来源**(`internal/pricing/opencode.go`,与 CC 并存各存一行;`source=opencode` 渠道按其价派生成本),厂商枚举增至 21 家(Mistral)。`BuildManual` 已对全部厂商放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`)。**容错:来源页出现未登记厂商前缀的新模型时,免费行豁免归属、付费行跳过该行并计入报告 `unmappedSkipped`(不再整批硬错拖垮全站官方价抓取)** |
+| 官方价覆盖 | **issue #27 起:官方价主锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。**增补:opencode zen 定价页为第二来源**(`internal/pricing/opencode.go`,与 CC 并存各存一行;`source=opencode` 渠道按其价派生成本),厂商枚举增至 21 家(Mistral)。`BuildManual` 已对全部厂商放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`)。**容错:来源页出现未登记厂商前缀的新模型时,免费行豁免归属、付费行跳过该行并计入报告 `unmappedSkipped`(不再整批硬错拖垮全站官方价抓取)**。**成本系数来源:订阅计划页**(`internal/pricing/plans.go`:CC GOAT / opencode Go,$10 档)按模型自动派生,见下方「成本」行与 DESIGN §5.6.1 |
 
 ## 2. 定价模型(定稿:就 3 个数)
 
@@ -24,12 +24,17 @@
 |---|---|---|---|---|
 | **官方价** | 厂商官网挂牌(如 Anthropic `$3/$15`,**输入/输出,每百万 token**)。**实际锚点**按渠道取:opencode 渠道取 opencode zen 定价页,其余取 commandcode 单页单价(issue #27;CC 靠高缓存命中率可能低于挂牌价) | `official_prices`(已有) | USD 原币 | 用户(划线原价) |
 | **本站价** = 官方价 × 倍率 | 你卖给客户的价 | **现算**,不落库(改倍率即时生效) | ¥ | 用户 |
-| **成本** | 你实付上游(command code ai)的钱。**已落地为**(m0012):**成本 = 官方价 × `channel_vendor_costs.ratio`**(键是渠道 × 厂商),不再逐供给源手填 | `channel_vendor_costs`(已有) | ¥ | **仅 admin** |
+| **成本** | 你实付上游(command code ai)的钱。**计费三级口径(成本 = 官方价 × 系数)**:① **模型级** `channel_model_cost_ratios`(订阅计划页自动派生,系数 = 订阅价 ÷ 该模型额度;v15 新增)② **厂商级** `channel_vendor_costs`(m0012,兜底)③ **1.0**。不再逐供给源手填 | `channel_model_cost_ratios` / `channel_vendor_costs` | ¥ | **仅 admin** |
 
 > **实际锚点(issue #27)**:官方价来源已从「逐厂商官网抓取」换成 **commandcode 单页单价**(一页覆盖 20 家
 > 厂商),**并新增 opencode zen 定价页为第二来源**(双来源并存,同一 (厂商, 模型) 各存一行;opencode 渠道按
-> 其价、其余按 CC 价派生成本)。CC 单价是本站**采购锚点**,靠高缓存命中率可能低于厂商挂牌价;「$10 买 $60」这类
-> 折扣走上面的 `channel_vendor_costs.ratio`,**不**改进锚点单价。详见 DESIGN §5.6。
+> 其价、其余按 CC 价派生成本)。CC 单价是本站**采购锚点**,靠高缓存命中率可能低于厂商挂牌价。
+>
+> **成本系数(订阅计划页自动派生)**:站主每月 $10 订阅(CC GOAT / opencode Go),订阅页给**每个模型一份
+> 不同的月度额度**(CC `Monthly credits` / opencode `Monthly limit`)。故**模型级**成本系数 = 订阅价 ÷ 该模型额度,
+> 由 `POST /official-prices/fetch-plans`(批量刷新一并跑)自动写入 `channel_model_cost_ratios`(`source=plan`),
+> **人工覆盖行 `source=manual` 不被覆盖**。查不到模型级时可退回厂商级 `channel_vendor_costs.ratio`(手工兜底)。
+> 详见 DESIGN §5.6.1。
 
 - **倍率**:`settings.price_multiplier`(全局默认);`model_offers.rate_override`(可空,单模型覆盖)—— 仿现有 `override_price` 套路。本期只做全局,单模型字段留而不用。
 - **毛利** = 本站价 − 成本,**只在管理面**出现,绝不出现在用户面。

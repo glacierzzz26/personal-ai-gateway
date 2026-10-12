@@ -58,6 +58,8 @@ type billing struct {
 	IsPeak  bool              // 该时刻是否落在高峰档
 	Window  string            // "peak" | "offpeak" | ""
 	Warn    string            // 非致命提示(阶梯按首档计 / 系数未设 / 汇率缺失)—— 未落库,由调用方记日志
+	// RatioScope 成本系数来源层级:"model"/"vendor"/""(见 costRatio)。
+	RatioScope string
 }
 
 // resolveBilling 一次算清成本与售价。所有成功与失败路径共用此函数。
@@ -78,7 +80,8 @@ func (g *Gateway) resolveBilling(in *inboundReq, plan *engine.Plan, offer domain
 
 	// —— 成本:官方价 × 渠道系数,取不到则回落手填兜底价 ——
 	if hasOfficial {
-		ratio := g.costRatio(offer.ChannelID, plan.OfficialVendor)
+		ratio, scope := g.costRatio(offer.ChannelID, plan.OfficialVendor, plan.OfficialModelName)
+		b.RatioScope = scope
 		cin, cout, ccr, ccw, _, err := pricing.WholesalePriceAt(q, at, settings.TZOffsetMin,
 			settings.DisplayCurrency, settings.USDPerCNY, ratio)
 		if err == nil {
@@ -131,20 +134,33 @@ func (g *Gateway) resolveBilling(in *inboundReq, plan *engine.Plan, offer domain
 	return b
 }
 
-// costRatio 取该渠道对某厂商的成本系数(cost = 官方价 × ratio)。无配置 = 1.0(不折扣)。
+// costRatio 取该渠道对某模型的成本系数(cost = 官方价 × ratio),**三级口径**:
 //
-// 查找键是**厂商**(plan.OfficialVendor),不是渠道自身的 provider —— 聚合中转渠道的
-// provider 往往是 OpenAI/Anthropic 之类,而它实际消耗的是 DeepSeek/通义千问的官方价。
-// 用 channels.provider 当键会让系数永远查不到,成本静默变 1.0 倍。
-func (g *Gateway) costRatio(channelID int64, vendor domain.Provider) float64 {
-	if channelID <= 0 || vendor == "" {
-		return 1.0
+//	① 模型级 channel_model_cost_ratios(订阅计划页自动派生 / 人工覆盖)—— 命中即用;
+//	② 厂商级 channel_vendor_costs(旧口径)—— 兜底;
+//	③ 都无 → 1.0(不折扣)。
+//
+// modelName 取 plan.OfficialModelName(= official_prices.model_name canonical slug);
+// 厂商键取 plan.OfficialVendor,不是渠道自身的 provider —— 聚合中转渠道的 provider 往往是
+// OpenAI/Anthropic 之类,而它实际消耗的是 DeepSeek/通义千问的官方价,用 channels.provider
+// 当键会让系数永远查不到,成本静默变 1.0 倍。
+//
+// 返回 (ratio, scope):scope ∈ {"model","vendor",""}(ratio==1.0 时 scope 为 "")。
+func (g *Gateway) costRatio(channelID int64, vendor domain.Provider, modelName string) (float64, string) {
+	if channelID <= 0 {
+		return 1.0, ""
 	}
-	r, err := g.st.ChannelVendorRatio(channelID, vendor)
-	if err != nil || r <= 0 {
-		return 1.0
+	if modelName != "" {
+		if r, err := g.st.ChannelModelRatio(channelID, modelName); err == nil && r > 0 {
+			return r, "model"
+		}
 	}
-	return r
+	if vendor != "" {
+		if r, err := g.st.ChannelVendorRatio(channelID, vendor); err == nil && r > 0 {
+			return r, "vendor"
+		}
+	}
+	return 1.0, ""
 }
 
 // joinWarn 拼接非致命提示(避免两处提示互相覆盖)。
@@ -181,13 +197,13 @@ func (g *Gateway) CostQuote(m domain.ModelRow, offer domain.OfferRead, settings 
 		return c
 	}
 	if q != nil {
-		ratio := g.costRatio(offer.ChannelID, m.OfficialVendor)
+		ratio, scope := g.costRatio(offer.ChannelID, m.OfficialVendor, m.OfficialModelName)
 		cin, cout, ccr, ccw, peak, err := pricing.WholesalePriceAt(*q, at, settings.TZOffsetMin,
 			settings.DisplayCurrency, settings.USDPerCNY, ratio)
 		if err == nil {
 			c := domain.CostQuote{
 				In: cin, Out: cout, CacheRead: ccr, CacheWrite: ccw,
-				Source: domain.CostFromOfficial, Vendor: m.OfficialVendor, Ratio: ratio,
+				Source: domain.CostFromOfficial, Vendor: m.OfficialVendor, Ratio: ratio, RatioScope: scope,
 			}
 			if q.BillingShape == domain.ShapePeakOff {
 				c.Peak, c.Window = peak, windowName(peak)

@@ -207,6 +207,113 @@ func (s *Server) handleOfficialPricesFetchOpenCode(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// fetchPlans 抓订阅计划页(CC GOAT / opencode Go,$10 档)并**按模型**派生的成本系数写入各渠道。
+//
+// 与 fetchCommandCode/fetchOpenCode 并列,但抓的是**订阅计划页**而非官方定价页:每模型的
+// 「Monthly credits / Monthly limit」即站主订阅买到的额度,系数 = 订阅价 ÷ 该模型额度。
+// 逐来源独立成败(单点网络抖动不该让两个来源的系数都白更);ErrType="fetch_failed"。
+//
+// 落库走 store.UpsertPlanRatios(source='plan'):**人工覆盖行(source='manual')不被覆盖** ——
+// 自动派生只是默认值,站主手改过的必须留住。
+func (s *Server) fetchPlans(ctx context.Context) (domain.PlanFetchResult, int, string, error) {
+	out := domain.PlanFetchResult{Sources: []domain.PlanSourceResult{}}
+	settings, err := s.st.GetSettings()
+	if err != nil {
+		return out, 0, "", err
+	}
+	channels, err := s.st.ListChannels()
+	if err != nil {
+		return out, 0, "", err
+	}
+
+	var firstErr error
+	var firstStatus int
+	var firstType string
+	anyOK := false
+
+	for _, target := range pricing.PlanTargets() {
+		sr := domain.PlanSourceResult{ChannelType: target.ChannelType, SourceURL: target.URL}
+		var chans []domain.ChannelRow
+		for _, ch := range channels {
+			if ch.ChannelType == target.ChannelType {
+				chans = append(chans, ch)
+			}
+		}
+
+		// 行数护栏基准 = 该类型渠道下 source='plan' 的现有行数(取最大;首次为 0 → 跳过比例检查)。
+		prev := 0
+		for _, ch := range chans {
+			if n, err := s.st.CountChannelModelRatiosBySource(ch.ID, "plan"); err == nil && n > prev {
+				prev = n
+			}
+		}
+
+		base := s.rl.Client(settings, 0)
+		if s.pricingBaseForURL != nil {
+			base = s.pricingBaseForURL(target.URL, settings)
+		} else if s.pricingBase != nil {
+			base = s.pricingBase(domain.ProviderNone, settings)
+		}
+		client := pricing.AllowlistClient(*base, target.Hosts)
+
+		allows, rep, ferr := pricing.FetchPlanAllowances(ctx, client, target, prev)
+		sr.ContentSHA = rep.ContentSHA
+		sr.PlanPriceUSD = rep.PlanPriceUSD
+		sr.TotalRows = rep.TotalRows
+		sr.Priced = rep.Priced
+		sr.SkippedFree = rep.SkippedFree
+		sr.SkippedUnmapped = rep.SkippedUnmapped
+		if ferr != nil {
+			sr.Error, sr.ErrorType = ferr.Error(), "fetch_failed"
+			out.Sources = append(out.Sources, sr)
+			if firstErr == nil {
+				firstErr, firstStatus, firstType = ferr, http.StatusBadGateway, "fetch_failed"
+			}
+			continue
+		}
+
+		ratioMap := pricing.PlanAllowanceMap(allows)
+		for _, ch := range chans {
+			n, werr := s.st.UpsertPlanRatios(ch.ID, ratioMap)
+			if werr != nil {
+				sr.Error, sr.ErrorType = werr.Error(), "store_error"
+				if firstErr == nil {
+					firstErr = werr
+				}
+				break
+			}
+			sr.Written += n
+			sr.ChannelsTouched++
+		}
+		if sr.Error == "" {
+			anyOK = true
+		}
+		out.Sources = append(out.Sources, sr)
+	}
+
+	if !anyOK && firstErr != nil {
+		return out, firstStatus, firstType, firstErr
+	}
+	return out, http.StatusOK, "", nil
+}
+
+// handleOfficialPricesFetchPlans POST /official-prices/fetch-plans
+// 抓订阅计划页 → 按模型派生成本系数写入各渠道(source='plan',不覆盖人工行)。
+func (s *Server) handleOfficialPricesFetchPlans(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	resp, status, typ, err := s.fetchPlans(ctx)
+	if err != nil {
+		if status == 0 {
+			writeStoreErr(w, err)
+			return
+		}
+		apiErr(w, status, typ, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // handleOfficialPricesFetchCommandCode POST /official-prices/fetch-commandcode
 // 抓 commandcode 单页锚点价 → upsert official_prices(issue #27)。
 func (s *Server) handleOfficialPricesFetchCommandCode(w http.ResponseWriter, r *http.Request) {
