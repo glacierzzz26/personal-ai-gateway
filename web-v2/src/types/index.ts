@@ -586,6 +586,8 @@ export interface CommandCodeFetchResult {
   perVendor: ProviderCount[];
   /** 被跳过、未落库的免费模型("显示名(slug)") */
   freeSkipped?: string[];
+  /** 付费但未归属厂商、被跳过的模型("显示名(slug)") */
+  unmappedSkipped?: string[];
 }
 
 /** POST /official-prices/fetch-opencode 返回。与 CommandCodeFetchResult 同形,
@@ -600,6 +602,8 @@ export interface OpenCodeFetchResult {
   removed?: number;
   perVendor: ProviderCount[];
   freeSkipped?: string[];
+  /** 付费但未归属厂商、被跳过的模型("显示名(slug)") */
+  unmappedSkipped?: string[];
   /** 合并了多档的 slug */
   tieredSlugs?: string[];
   /** 含折扣(<del> 原价)的 slug */

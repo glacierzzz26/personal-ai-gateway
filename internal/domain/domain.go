@@ -738,13 +738,14 @@ type ProviderCount struct {
 // 与 FetchPricingResult 的区别:CC 单页覆盖**多厂商**,后者的单个 Provider 字段表达不了。
 // 免费行必须显式回报(它们被排除在落库之外,不报就是静默丢数据)。
 type CommandCodeFetchResult struct {
-	SourceURL   string          `json:"sourceUrl"`
-	ContentSHA  string          `json:"contentSha256,omitempty"`
-	TotalRows   int             `json:"totalRows"` // 表内数据行数(含免费行)
-	Upserted    int             `json:"upserted"`  // 落库行数(不含免费行)
-	Removed     int64           `json:"removed,omitempty"`
-	PerVendor   []ProviderCount `json:"perVendor"`
-	FreeSkipped []string        `json:"freeSkipped,omitempty"`
+	SourceURL       string          `json:"sourceUrl"`
+	ContentSHA      string          `json:"contentSha256,omitempty"`
+	TotalRows       int             `json:"totalRows"` // 表内数据行数(含免费行)
+	Upserted        int             `json:"upserted"`  // 落库行数(不含免费行与未归属行)
+	Removed         int64           `json:"removed,omitempty"`
+	PerVendor       []ProviderCount `json:"perVendor"`
+	FreeSkipped     []string        `json:"freeSkipped,omitempty"`
+	UnmappedSkipped []string        `json:"unmappedSkipped,omitempty"` // 付费但未归属厂商的行
 }
 
 // OpenCodeFetchResult POST /official-prices/fetch-opencode 返回。
@@ -752,15 +753,16 @@ type CommandCodeFetchResult struct {
 // 与 CommandCodeFetchResult 同形,另加 opencode 页特有的分档/折扣统计(它们被并进单行或
 // 记入 Detail,必须显式回报,否则是静默丢信息)。
 type OpenCodeFetchResult struct {
-	SourceURL     string          `json:"sourceUrl"`
-	ContentSHA    string          `json:"contentSha256,omitempty"`
-	TotalRows     int             `json:"totalRows"` // 定价表数据行数(含免费行与分档行)
-	Upserted      int             `json:"upserted"`  // 落库行数(免费行剔除、同 slug 分档合并后)
-	Removed       int64           `json:"removed,omitempty"`
-	PerVendor     []ProviderCount `json:"perVendor"`
-	FreeSkipped   []string        `json:"freeSkipped,omitempty"`
-	TieredSlugs   []string        `json:"tieredSlugs,omitempty"`   // 合并了多档的 slug
-	DiscountSlugs []string        `json:"discountSlugs,omitempty"` // 含折扣(<del> 原价)的 slug
+	SourceURL       string          `json:"sourceUrl"`
+	ContentSHA      string          `json:"contentSha256,omitempty"`
+	TotalRows       int             `json:"totalRows"` // 定价表数据行数(含免费行与分档行)
+	Upserted        int             `json:"upserted"`  // 落库行数(免费行剔除、同 slug 分档合并后)
+	Removed         int64           `json:"removed,omitempty"`
+	PerVendor       []ProviderCount `json:"perVendor"`
+	FreeSkipped     []string        `json:"freeSkipped,omitempty"`
+	UnmappedSkipped []string        `json:"unmappedSkipped,omitempty"` // 付费但未归属厂商的行
+	TieredSlugs     []string        `json:"tieredSlugs,omitempty"`     // 合并了多档的 slug
+	DiscountSlugs   []string        `json:"discountSlugs,omitempty"`   // 含折扣(<del> 原价)的 slug
 }
 
 // RefreshProviderResult 批量刷新中单个厂商的结果。

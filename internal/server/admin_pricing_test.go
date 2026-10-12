@@ -463,6 +463,57 @@ func TestFetchCommandCodeEndToEnd(t *testing.T) {
 	}
 }
 
+// TestFetchCommandCodeServerReportsUnmapped 端到端验证 admin 层透传 unmappedSkipped:
+// 假 CC 页含 40 个已知厂商付费行 + 1 免费未知厂商行 + 1 付费未知厂商行 →
+// 其余行正常落库(不过 40 行地板)、免费行计入 freeSkipped、付费未知厂商行计入 unmappedSkipped,
+// 且不因未知厂商整批失败(Glyph Cluster 回归的服务端侧)。
+func TestFetchCommandCodeServerReportsUnmapped(t *testing.T) {
+	page := ccSyntheticServerPage()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(page))
+	}))
+	t.Cleanup(upstream.Close)
+
+	srv, c, _, s := newTestServerS(t)
+	base := srv.URL
+	bootstrap(t, c, base)
+	s.pricingBaseForURL = func(_ string, _ domain.Settings) *http.Client {
+		return &http.Client{Transport: &redirectRT{target: upstream.URL}}
+	}
+
+	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch-commandcode", nil)
+	mustStatus(t, code, http.StatusOK, "cc fetch (synthetic)")
+	res := decode[domain.CommandCodeFetchResult](t, body)
+	if res.TotalRows != 42 {
+		t.Errorf("totalRows = %d, want 42", res.TotalRows)
+	}
+	if res.Upserted != 40 {
+		t.Errorf("upserted = %d, want 40(42 − 1 免费 − 1 未归属)", res.Upserted)
+	}
+	if len(res.FreeSkipped) != 1 || !strings.Contains(res.FreeSkipped[0], "Glyph Cluster") {
+		t.Errorf("freeSkipped = %v, want 1 条 Glyph Cluster", res.FreeSkipped)
+	}
+	if len(res.UnmappedSkipped) != 1 || !strings.Contains(res.UnmappedSkipped[0], "Zzz 1") {
+		t.Errorf("unmappedSkipped = %v, want 1 条 Zzz 1(未知厂商付费行不得使其整批失败)", res.UnmappedSkipped)
+	}
+}
+
+// ccSyntheticServerPage 生成 ≥40 行的 CC 表:40 已知厂商付费行 + 1 免费未知厂商行 + 1 付费未知厂商行。
+func ccSyntheticServerPage() string {
+	var b strings.Builder
+	b.WriteString("<!doctype html><html><body><table>\n" +
+		"<tr><th>Model</th><th>Context</th><th>Intelligence</th><th>Tok/s</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Caps</th></tr>\n")
+	for i := 0; i < 40; i++ {
+		n := strconv.Itoa(i)
+		b.WriteString(`<tr><td><a href="/models/deepseek-model-` + n + `"><span class="truncate">DeepSeek Model ` + n + `</span></a></td><td>1M</td><td>-</td><td>-</td><td><span>$1.00</span></td><td><span>$2.00</span></td><td><span>$0.10</span></td><td><span>$1.25</span></td><td></td></tr>` + "\n")
+	}
+	b.WriteString(`<tr><td><a href="/models/glyph-cluster-free"><span class="truncate">Glyph Cluster</span></a></td><td>1M</td><td>-</td><td>-</td><td><span>Free</span></td><td><span>Free</span></td><td><span>Free</span></td><td>—</td><td></td></tr>` + "\n")
+	b.WriteString(`<tr><td><a href="/models/zzz-1"><span class="truncate">Zzz 1</span></a></td><td>1M</td><td>-</td><td>-</td><td><span>$1.00</span></td><td><span>$2.00</span></td><td><span>$0.10</span></td><td><span>$1.25</span></td><td></td></tr>` + "\n")
+	b.WriteString("</table></body></html>")
+	return b.String()
+}
+
 // TestFetchOpenCodeEndToEnd opencode 单页锚点抓取的端到端(第二来源):
 // 假 opencode 页 + 出站改写 → 多厂商落库(source=opencode)、免费行/分档/折扣上报、
 // 幂等重抓、且**不触碰** CC 来源的行(对账按 source_url 作用域)。

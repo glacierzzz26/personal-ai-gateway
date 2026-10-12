@@ -77,7 +77,7 @@ function SourceResult({ label, res, err }: {
           {res.removed ? `,清理下架 ${res.removed} 行` : ''}
         </b>
         <span>
-          共 {res.totalRows} 行(含免费 {res.freeSkipped?.length ?? 0} 行,已跳过)。
+          共 {res.totalRows} 行(含免费 {res.freeSkipped?.length ?? 0} 行、未登记厂商 {res.unmappedSkipped?.length ?? 0} 行,已跳过)。
           {' '}
           <a href={res.sourceUrl} target="_blank" rel="noreferrer">来源 ↗</a>
         </span>
@@ -101,6 +101,7 @@ function SourceResult({ label, res, err }: {
       )}
 
       {chipRow('免费模型(无单价,未落库)', res.freeSkipped, true)}
+      {chipRow('未登记厂商(已跳过,请在 ccVendorPrefixes 补映射)', res.unmappedSkipped, true)}
       {chipRow('分档模型(多档已合并为一行,标量取基准档)', tieredSlugs, true)}
       {chipRow('折扣模型(<del> 划原价,取现价)', discountSlugs, true)}
     </>

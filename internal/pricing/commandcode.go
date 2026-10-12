@@ -47,12 +47,13 @@ func CommandCodeHosts() []string { return commandCodeHosts }
 // CommandCodeReport 一次 CC 抓取的统计。免费行/分档行必须显式上报 ——
 // 它们被排除在落库之外,若不报告就成了「静默丢数据」。
 type CommandCodeReport struct {
-	SourceURL   string                  `json:"sourceUrl"`
-	ContentSHA  string                  `json:"contentSha256"`
-	TotalRows   int                     `json:"totalRows"`   // 表内数据行数(含免费行)
-	Priced      int                     `json:"priced"`      // 落库行数(= TotalRows − 免费行)
-	PerVendor   map[domain.Provider]int `json:"perVendor"`   // 各厂商落库行数
-	FreeSkipped []string                `json:"freeSkipped"` // 免费行 "显示名(slug)"
+	SourceURL       string                  `json:"sourceUrl"`
+	ContentSHA      string                  `json:"contentSha256"`
+	TotalRows       int                     `json:"totalRows"`       // 表内数据行数(含免费行)
+	Priced          int                     `json:"priced"`          // 落库行数(= TotalRows − 免费行 − 未归属行)
+	PerVendor       map[domain.Provider]int `json:"perVendor"`       // 各厂商落库行数
+	FreeSkipped     []string                `json:"freeSkipped"`     // 免费行 "显示名(slug)"
+	UnmappedSkipped []string                `json:"unmappedSkipped"` // 付费但未归属厂商的行 "显示名(slug)"
 }
 
 // ccVendorPrefixes CC 显示名首词 → 真实厂商。顺序即优先级(长前缀在前)。
@@ -137,6 +138,7 @@ type ccRow struct {
 	CacheWrite    float64
 	CacheWriteOff bool // 缓存写列缺失(页面为 `—`)
 	Free          bool
+	Unmapped      bool // 付费行但显示名无登记厂商前缀(跳过落库,由调用方上报)
 	Deal          *ccDeal
 	NativeText    string
 	Detail        map[string]any
@@ -200,7 +202,6 @@ func parseCommandCode(body []byte) ([]ccRow, error) {
 		return nil, fmt.Errorf("模型表无数据行(页面结构可能已变更)")
 	}
 	var out []ccRow
-	var unmapped []string
 	for _, tr := range trs[1:] {
 		cells := ccCellNodes(tr)
 		if len(cells) != width {
@@ -211,16 +212,9 @@ func parseCommandCode(body []byte) ([]ccRow, error) {
 		if err != nil {
 			return nil, err
 		}
-		if r.Provider == "" {
-			unmapped = append(unmapped, r.Display)
-			continue
-		}
+		// 免费行(r.Free)与「付费未归属」行(r.Unmapped)都保留在此,由 FetchCommandCode
+		// 分流并上报 —— 不在此硬错:新模型(尤其匿名/免费)上线不应拖垮整页官方价抓取。
 		out = append(out, r)
-	}
-	if len(unmapped) > 0 {
-		// 不得静默落库:未登记的厂商前缀必须补映射表,而不是丢掉或猜一个。
-		return nil, fmt.Errorf("CC 出现未登记厂商前缀:%s(须补 ccVendorPrefixes,不得静默落库)",
-			strings.Join(unmapped, "、"))
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("模型表未解析出任何数据行(页面结构可能已变更)")
@@ -238,11 +232,6 @@ func ccParseRow(cells []*html.Node, iModel, iInput, iOutput, iCacheRead, iCacheW
 		return r, fmt.Errorf("模型行缺少 <a href=\"/models/<slug>\"> 或显示名(页面结构可能已变更)")
 	}
 	r.Slug, r.Display, r.Deal = slug, display, deal
-	if p, brand := ccVendorOf(display); p != "" {
-		r.Provider, r.Brand = p, brand
-	} else {
-		return r, nil // 由调用方汇总为「未归属」硬错
-	}
 
 	// --- 价格列 ---
 	inC := ccParsePrice(cells[iInput])
@@ -261,9 +250,20 @@ func ccParseRow(cells []*html.Node, iModel, iInput, iOutput, iCacheRead, iCacheW
 	if err != nil {
 		return r, fmt.Errorf("%s 输出价解析失败: %w", display, err)
 	}
+
+	// --- 厂商归属 ---
+	// 顺序红线(与 opencode 一致):免费判定先于归属,且**免费行豁免归属** —— 免费/匿名昵称
+	// 模型(如 CC 页的 Glyph Cluster,无厂商前缀)不得因「未登记厂商」而拖垮整页抓取。
+	// 付费行归属失败时不在此硬错,改置 Unmapped,由 FetchCommandCode 跳过并上报。
+	if p, brand := ccVendorOf(display); p != "" {
+		r.Provider, r.Brand = p, brand
+	} else if !(inFree || outFree) {
+		r.Unmapped = true
+	}
+
 	if inFree || outFree {
 		r.Free = true
-		return r, nil // 免费行:不落库,由调用方上报
+		return r, nil // 免费行:不落库,由调用方上报(不强制归属)
 	}
 	cr, _, err := ccMoney(crC.Current)
 	if err != nil {
@@ -760,17 +760,25 @@ func FetchCommandCode(ctx context.Context, client *http.Client, previousRows int
 			len(rows), previousRows, commandCodeFloorRatio*100)
 	}
 
-	// 免费行排除在落库之外,但必须上报(否则是静默丢数据)。
+	// 免费行与「付费未归属」行都排除在落库之外,但必须上报(否则是静默丢数据)。
 	// 排除还必须在 validate 之前:validate 会因 in/out 全 0 拒绝**整批**。
 	priced := make([]ccRow, 0, len(rows))
 	for _, r := range rows {
-		if r.Free {
+		switch {
+		case r.Free:
 			rep.FreeSkipped = append(rep.FreeSkipped, fmt.Sprintf("%s(%s)", r.Display, r.Slug))
-			continue
+		case r.Unmapped:
+			rep.UnmappedSkipped = append(rep.UnmappedSkipped, fmt.Sprintf("%s(%s)", r.Display, r.Slug))
+		default:
+			priced = append(priced, r)
 		}
-		priced = append(priced, r)
 	}
 	rep.Priced = len(priced)
+	if len(priced) == 0 {
+		// 全被跳过 → keep 集合为空 → 对账会删光既有 CC 价。宁可不动,不可误删。
+		return nil, rep, fmt.Errorf("commandcode 解析出 %d 行但无一可落库(免费 %d / 未归属 %d),拒绝落库与对账",
+			len(rows), len(rep.FreeSkipped), len(rep.UnmappedSkipped))
+	}
 
 	// 按 (厂商, 形态) 分组:同一个 CC 页里各厂商、各形态的合法性约束不同,
 	// 复用 validate 的区间/非空/非全零校验,但分组调用(Currency 恒为 USD)。
