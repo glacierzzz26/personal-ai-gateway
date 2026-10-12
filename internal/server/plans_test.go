@@ -22,10 +22,12 @@ func planFixtureServer(t *testing.T, failPaths map[string]bool) *httptest.Server
 	t.Helper()
 	dir := filepath.Join("..", "pricing", "testdata")
 	files := map[string]string{
-		"/models":          "commandcode_models.html",
-		"/docs/plans/goat": "commandcode_goat.html",
-		"/docs/go":         "opencode_go.html",
-		"/docs/go/":        "opencode_go.html",
+		"/models":              "commandcode_models.html",
+		"/docs/zen":            "opencode_zen.html",
+		"/docs/zen/":           "opencode_zen.html",
+		"/docs/plans/goat":     "commandcode_goat.html",
+		"/v2/docs/console/go":  "opencode_go.html",
+		"/v2/docs/console/go/": "opencode_go.html",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if failPaths[r.URL.Path] {
@@ -112,7 +114,7 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 	if cc.Priced != 53 || cc.Written != 52 {
 		t.Errorf("CC priced/written = %d/%d, want 53/52", cc.Priced, cc.Written)
 	}
-	// opencode:42 行 → 去重 30 个 slug,全写入。
+	// opencode:43 行 → 去重 30 个 slug,全写入。
 	if oc.Priced != 30 || oc.Written != 30 {
 		t.Errorf("opencode priced/written = %d/%d, want 30/30", oc.Priced, oc.Written)
 	}
@@ -145,7 +147,7 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 // TestFetchPlansSourceIndependence 一来源失败不影响另一来源(逐来源独立成败):
 // opencode Go 页 500 → CC 照常写入,响应里 opencode 源带 error、CC 源正常。
 func TestFetchPlansSourceIndependence(t *testing.T) {
-	srvUp := planFixtureServer(t, map[string]bool{"/docs/go": true, "/docs/go/": true})
+	srvUp := planFixtureServer(t, map[string]bool{"/v2/docs/console/go": true, "/v2/docs/console/go/": true})
 
 	srv, c, st, s := newTestServerS(t)
 	base := srv.URL
@@ -181,8 +183,8 @@ func TestFetchPlansSourceIndependence(t *testing.T) {
 // TestRefreshPlansBlockIndependent 批量刷新的三块独立:订阅计划全部失败 → PlansError 置位、
 // Plans 为空,但 CC 官方价抓取照常成功(计划页失败不淹没官方价)。
 func TestRefreshPlansBlockIndependent(t *testing.T) {
-	// 计划页两条路径 500;模型定价页正常。
-	srvUp := planFixtureServer(t, map[string]bool{"/docs/plans/goat": true, "/docs/go": true, "/docs/go/": true})
+	// 计划页两条路径 500;模型/zen 定价页正常。
+	srvUp := planFixtureServer(t, map[string]bool{"/docs/plans/goat": true, "/v2/docs/console/go": true, "/v2/docs/console/go/": true})
 
 	srv, c, st, s := newTestServerS(t)
 	base := srv.URL

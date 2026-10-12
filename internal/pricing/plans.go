@@ -30,9 +30,10 @@ import (
 //   - CC GOAT `commandcode.ai/docs/plans/goat`:估算表 `Model|Context|Intelligence|…` 提供
 //     `/models/<slug>` href + truncate span 显示名;另有三张 `Model|Input|Output|Cache Read|
 //     Cache Write|Monthly credits` 表(主力 22 行 + 高价值 2 行 + 新模型 29 行,同属 $10 GOAT)。
-//   - opencode Go `opencode.ai/docs/go/`(**英文页**:中文页表头是「模型/输入/每月限额」,
-//     表头定位会失配):计划表 `Plan|Price|Included usage` 取 Go → $10/month;`Model|Model ID|
-//     Endpoint` 表提供 slug;第一张 `Model|Input|Output|Cached Read|Cached Write|Monthly limit`
+//   - opencode Go `opencode.ai/v2/docs/console/go/`(**英文页**:中文页表头是「模型/输入/每月限额」,
+//     表头定位会失配。注:站点 2026-10 改版,旧址 `opencode.ai/docs/go/` 已 404,迁至 `/v2/docs/console/go/`):
+//     计划表 `Plan|Price|Included usage` 取 Go → $10/month;清单表 `Model|Model ID|Endpoint|…`
+//     提供 slug;第一张 `Model|Input|Output|Cached Read|Cached Write|Monthly limit`
 //     即 Go 档($40 Go Plus 在其后)。
 //
 // 容错红线(照搬 commandcode.go / opencode.go):免费/不限额行跳过并上报;显示名映射不到
@@ -42,7 +43,11 @@ import (
 const ccGoatURL = "https://commandcode.ai/docs/plans/goat"
 
 // ocGoURL opencode Go 订阅计划页(英文;$10 档)。
-const ocGoURL = "https://opencode.ai/docs/go/"
+//
+// 站点 2026-10 改版:docs 从 `/docs/*` 迁到 `/v2/docs/*`,本页由
+// `opencode.ai/docs/go/`(现 404)迁至 `opencode.ai/v2/docs/console/go/`;
+// 表格结构不变(Plan|Price|Included usage + 两张 Model|…|Monthly limit + 清单表)。
+const ocGoURL = "https://opencode.ai/v2/docs/console/go/"
 
 // planMinRows 绝对行数地板:低于此值判定页面改版,拒绝落库(宁缺勿假)。
 // 实测 CC GOAT 53 行 / OC Go 42 行;取 10 既留余量又挡「解析到半张表/抓错表」。

@@ -17,10 +17,11 @@ func bodyClient(t *testing.T, body []byte) *http.Client {
 	return &http.Client{Transport: bodyRT{body: string(body)}}
 }
 
-// 夹具:2026-10-12 从订阅计划页实存。
+// 夹具:2026-10-12 从订阅计划页实存(站点改版后重新取:opencode 旧址 docs/go/ 已 404)。
 //
 //	commandcode_goat.html —— CC GOAT($10 档)页(789626 字节):估算表 + 三张 Monthly credits 表(53 行)。
-//	opencode_go.html      —— opencode Go($10 档)英文页(105248 字节):计划表 + Go Monthly limit 表(42 行)。
+//	opencode_go.html      —— opencode Go($10 档)英文页(54552 字节,https://opencode.ai/v2/docs/console/go/):
+//	                         计划表 + 两张 Monthly limit 表(Go 43 行 / Go Plus 43 行)+ 清单表。
 const (
 	ccGoatFixture = "commandcode_goat.html"
 	ocGoFixture   = "opencode_go.html"
@@ -81,7 +82,7 @@ func TestParseCCGoat(t *testing.T) {
 	}
 }
 
-// opencode Go:第一张 Monthly limit(=Go 档)42 行,其中 10 个模型峰谷/分档各占两行(额度相同)
+// opencode Go:第一张 Monthly limit(=Go 档)43 行,其中若干模型峰谷/分档各占两行(额度相同)
 // → 去重后 30 个 slug;2 个 Free 行。订阅价 $10;DeepSeek V4.1 Flash $80 → ratio 0.125。
 //
 // 注意 opencode 的 Model ID 用点("deepseek-v4.1-flash"),与 CC 的连字符 slug("deepseek-v4-1-flash")
