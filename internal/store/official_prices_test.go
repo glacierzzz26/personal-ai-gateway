@@ -7,6 +7,10 @@ import (
 	"personal-ai-gateway/internal/domain"
 )
 
+// altSrc 一个「非 commandcode」来源样本值。store 的 source 列与消歧语义与具体来源无关,
+// 用中立值验证「多来源并存 / 偏好命中」机制 —— 生产现只从 commandcode 落行,但列与语义保留。
+const altSrc domain.PriceSource = "alt-source"
+
 func mkOfficialPrice(p domain.Provider, model, url string, in, out float64) domain.OfficialPriceRow {
 	return domain.OfficialPriceRow{
 		Provider: p, ModelName: model, SourceURL: url,
@@ -162,7 +166,7 @@ func TestReconcileOfficialPrices(t *testing.T) {
 	}
 }
 
-// TestOfficialPriceSourceUnique 双来源并存(CC 与 opencode 各存一行,仅 source 不同):
+// TestOfficialPriceSourceUnique 双来源并存(仅 source 不同):
 // 同来源 upsert 复用行、不同来源互不覆盖;多来源时按名查必须报歧义而非猜。
 func TestOfficialPriceSourceUnique(t *testing.T) {
 	st := newTestStore(t)
@@ -175,11 +179,11 @@ func TestOfficialPriceSourceUnique(t *testing.T) {
 	mustNoErr(t, err, "cc upsert")
 	oc, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
 		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
-		Source: domain.PriceSourceOpenCode, SourceURL: "https://opencode.ai/docs/zen/",
+		Source: altSrc, SourceURL: "https://example.com/alt",
 		FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
 		BillingShape: domain.ShapeFlat, InputPrice: 3, OutputPrice: 15,
 	})
-	mustNoErr(t, err, "oc upsert")
+	mustNoErr(t, err, "alt upsert")
 	if cc.ID == oc.ID {
 		t.Fatalf("双来源应各存一行,却共用 id %d", cc.ID)
 	}
@@ -195,10 +199,10 @@ func TestOfficialPriceSourceUnique(t *testing.T) {
 	if cc2.ID != cc.ID {
 		t.Errorf("同来源 upsert 应复用行: id %d vs %d", cc2.ID, cc.ID)
 	}
-	ocAgain, err := st.GetOfficialPriceBySource(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceOpenCode)
+	ocAgain, err := st.GetOfficialPriceBySource(domain.ProviderAnthropic, "claude-sonnet-5", altSrc)
 	mustNoErr(t, err, "read oc")
 	if ocAgain.InputPrice != 3 || ocAgain.OutputPrice != 15 {
-		t.Errorf("CC 重写不得影响 opencode 行: %+v", ocAgain)
+		t.Errorf("CC 重写不得影响另一来源行: %+v", ocAgain)
 	}
 	rows, err := st.ListOfficialPrices(domain.ProviderAnthropic)
 	mustNoErr(t, err, "list")
@@ -221,14 +225,14 @@ func TestFindOfficialPrice(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed single: %v", err)
 	}
-	got, err := st.FindOfficialPrice(domain.ProviderDeepSeek, "deepseek-v4-flash", domain.PriceSourceOpenCode)
+	got, err := st.FindOfficialPrice(domain.ProviderDeepSeek, "deepseek-v4-flash", altSrc)
 	mustNoErr(t, err, "single row with non-matching preferred")
 	if got.InputPrice != 1 {
 		t.Errorf("单行应回退返回: %+v", got)
 	}
 
 	// 双来源行:偏好精确命中各自来源。
-	for _, s := range []domain.PriceSource{domain.PriceSourceCommandCode, domain.PriceSourceOpenCode} {
+	for _, s := range []domain.PriceSource{domain.PriceSourceCommandCode, altSrc} {
 		if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
 			Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
 			Source: s, SourceURL: string(s), FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD,
@@ -237,9 +241,9 @@ func TestFindOfficialPrice(t *testing.T) {
 			t.Fatalf("seed %s: %v", s, err)
 		}
 	}
-	oc, err := st.FindOfficialPrice(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceOpenCode)
-	mustNoErr(t, err, "preferred opencode")
-	if oc.Source != domain.PriceSourceOpenCode {
+	oc, err := st.FindOfficialPrice(domain.ProviderAnthropic, "claude-sonnet-5", altSrc)
+	mustNoErr(t, err, "preferred alt")
+	if oc.Source != altSrc {
 		t.Errorf("偏好命中错行: %q", oc.Source)
 	}
 	cc, err := st.FindOfficialPrice(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceCommandCode)

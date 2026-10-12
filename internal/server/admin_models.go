@@ -105,11 +105,10 @@ func (s *Server) handleModelsUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		now := time.Now().UTC()
 		for _, of := range offers {
-			// 逐 offer 按渠道类型取对应来源的官方价(同 (厂商,模型) 双来源时勿错源),再判零价。
+			// 逐 offer 取官方价(单一来源 commandcode),再判零价。
 			var q *domain.OfficialPriceRow
 			if cur.OfficialVendor != "" && cur.OfficialModelName != "" {
-				src := domain.PriceSourceForChannelType(of.ChannelType)
-				if row, e := s.st.FindOfficialPrice(cur.OfficialVendor, cur.OfficialModelName, src); e == nil {
+				if row, e := s.st.FindOfficialPrice(cur.OfficialVendor, cur.OfficialModelName, domain.PriceSourceCommandCode); e == nil {
 					q = &row
 				}
 			}

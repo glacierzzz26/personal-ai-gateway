@@ -657,9 +657,8 @@ func costUsd(offer domain.OfferRead, tok translate.Usage) float64 {
 
 // officialFor 取该模型绑定的官方价一行;未绑定或查不到时 ok=false(调用方回落成本口径)。
 //
-// src 为该供给源所属渠道类型对应的官方价来源(见 domain.PriceSourceForChannelType):
-// 同一 (厂商,模型) 在 CC 与 opencode 各有价时,由它选定应当采信哪一条。src 永不为空,
-// 非 opencode 渠道一律为 commandcode —— 与加来源维度前逐位一致。
+// src 为官方价来源:2026-10 起收敛为单一来源 domain.PriceSourceCommandCode(zen 来源已删),
+// 保留参数以维持 FindOfficialPrice 的来源偏好语义。
 func (g *Gateway) officialFor(plan *engine.Plan, src domain.PriceSource) (domain.OfficialPriceRow, bool) {
 	if plan == nil || plan.OfficialVendor == "" || plan.OfficialModelName == "" {
 		return domain.OfficialPriceRow{}, false

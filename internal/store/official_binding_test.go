@@ -95,11 +95,11 @@ func TestModelUpdateKeepsBindingAndFields(t *testing.T) {
 	}
 }
 
-// TestBackfillDualSourceSameSlugNotAmbiguous 双来源同厂商同 slug(如 CC 与 opencode 的 Claude 系)
-// **不**构成回填歧义 —— 歧义判据是**厂商**,两行同 provider 只算一个键,故仍能唯一回填。
+// TestBackfillDualSourceSameSlugNotAmbiguous 双来源同厂商同 slug **不**构成回填歧义 ——
+// 歧义判据是**厂商**,两行同 provider 只算一个键,故仍能唯一回填。
 func TestBackfillDualSourceSameSlugNotAmbiguous(t *testing.T) {
 	st := newTestStore(t)
-	for _, s := range []domain.PriceSource{domain.PriceSourceCommandCode, domain.PriceSourceOpenCode} {
+	for _, s := range []domain.PriceSource{domain.PriceSourceCommandCode, altSrc} {
 		if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
 			Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
 			Source: s, SourceURL: string(s), FetchedAt: time.Now().UTC(),

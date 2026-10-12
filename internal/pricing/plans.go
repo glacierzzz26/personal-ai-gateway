@@ -387,6 +387,20 @@ func ocSlugByName(doc *html.Node) (map[string]string, error) {
 
 // ---------- 共享行解析 ----------
 
+// ocParenRe 显示名尾部的括号后缀(如 opencode 分档/峰谷名 "… (Off-Peak)")。
+//
+// 原在 opencode.go(zen 定价页抓取器);2026-10 删除 zen 来源后,仅本文件仍需要它
+// (planRowOf 剥括号后映射 slug),故随订阅计划解析保留于此。
+var ocParenRe = regexp.MustCompile(`^(.*?)\s*\(([^)]*)\)\s*$`)
+
+// ocSplitSuffix 拆出显示名主体与括号后缀。
+func ocSplitSuffix(display string) (base, label string) {
+	if m := ocParenRe.FindStringSubmatch(display); m != nil {
+		return strings.TrimSpace(m[1]), strings.TrimSpace(m[2])
+	}
+	return display, ""
+}
+
 // planRowOf 解析一行额度表。display 为空的行(占位)跳过(返回零值 planRow,Display=="")。
 // 显示名会剥括号后缀(opencode 的 "(Off-Peak)"/"(≤ 256K tokens)")再映射 slug。
 func planRowOf(cells []*html.Node, iModel, iCredits int, slugByName map[string]string) planRow {

@@ -101,7 +101,7 @@ func TestBaselineColumns(t *testing.T) {
 }
 
 // TestOfficialPriceSourceDualSource 基线唯一键带 source 维度:同 (厂商, 模型)
-// 允许 CC 与 opencode 双来源并存,且单行读回四价无损。
+// 允许双来源并存,且单行读回四价无损。
 func TestOfficialPriceSourceDualSource(t *testing.T) {
 	st := newTestStore(t)
 
@@ -114,13 +114,13 @@ func TestOfficialPriceSourceDualSource(t *testing.T) {
 	mustNoErr(t, err, "upsert commandcode row")
 	oc, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
 		Provider: domain.ProviderAnthropic, ModelName: "claude-sonnet-5",
-		Source: domain.PriceSourceOpenCode, SourceURL: "https://opencode.ai/docs/zen/",
+		Source: altSrc, SourceURL: "https://example.com/alt",
 		FetchedAt: time.Now().UTC(), Currency: domain.CurrencyUSD, BillingShape: domain.ShapeFlat,
 		InputPrice: 3, OutputPrice: 15,
 	})
-	mustNoErr(t, err, "upsert opencode row")
-	if oc.Source != domain.PriceSourceOpenCode {
-		t.Errorf("source = %q, want opencode", oc.Source)
+	mustNoErr(t, err, "upsert alt row")
+	if oc.Source != altSrc {
+		t.Errorf("source = %q, want alt-source", oc.Source)
 	}
 
 	got, err := st.GetOfficialPriceBySource(domain.ProviderAnthropic, "claude-sonnet-5", domain.PriceSourceCommandCode)

@@ -11,7 +11,7 @@ import type {
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   AnnouncementDraft, AnnouncementItem,
   ModelCatalogItem, ModelCostRatioInput, ModelCostRatioRow, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
-  OpenCodeFetchResult, PlanFetchResult,
+  PlanFetchResult,
   OverviewData, CustomerFocusData, Provider, RefreshPricingResp, RequestLogItem, RouteRule, RuleDraft, Settings,
   StatRangeQuery, SyncResult,
   TokenCreateResult,
@@ -291,18 +291,9 @@ export const api = {
       { timeoutMs: REFRESH_TIMEOUT_MS });
   },
   /**
-   * 只抓 opencode zen 定价页锚点(与 CC 并存,各存一行)。常规路径走 refreshOfficialPrices
-   * (它一次抓 CC + opencode);本方法给「只重抓 opencode」留一个独立入口(运维 / 排障)。
-   *
-   * ⚠️ 同样有破坏性:会清掉 opencode 来源下页面上不再列出的行;不触碰 CC / 手工等其他来源。
-   */
-  fetchOpenCode(): Promise<OpenCodeFetchResult> {
-    return http.post<OpenCodeFetchResult>('/official-prices/fetch-opencode');
-  },
-  /**
    * 抓订阅计划页(CC GOAT / opencode Go,$10 档)→ 按模型派生成本系数写入各渠道。
    * 逐来源独立成败;自动写入 source='plan',**不覆盖人工覆盖行(source='manual')**。
-   * 常规路径走 refreshOfficialPrices(它一次抓 CC + opencode + 订阅计划)。
+   * 常规路径走 refreshOfficialPrices(它一次抓 CC + 订阅计划)。
    */
   fetchPlans(): Promise<PlanFetchResult> {
     return http.post<PlanFetchResult>('/official-prices/fetch-plans');
