@@ -411,7 +411,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | channel_type | 页面 | 额度表 |
 |---|---|---|
 | `commandcode` | `https://commandcode.ai/docs/plans/goat` | `Model \| Input \| … \| Monthly credits`(分散在**三张表**,全部属 $10 GOAT,合并取用) |
-| `opencode` | `https://opencode.ai/docs/go/`(**英文页**;中文页表头失配,固定英文 URL) | `Model \| Input \| … \| Monthly limit`(取**第一张** = Go 档;$40 的 Go Plus 在其后) |
+| `opencode` | `https://opencode.ai/v2/docs/console/go/`(**英文页**;中文页表头失配,固定英文 URL;站点 2026-10 改版,旧址 `docs/go/` 已 404) | `Model \| Input \| … \| Monthly limit`(取**第一张** = Go 档;$40 的 Go Plus 在其后) |
 
 实现要点:
 
