@@ -562,6 +562,10 @@ type CostQuote struct {
 	// Vendor/Ratio 仅 Source == official 时有意义(Ratio 为 1.0 表示该渠道未设系数)。
 	Vendor Provider `json:"vendor,omitempty"`
 	Ratio  float64  `json:"ratio,omitempty"`
+	// RatioScope 系数来源层级:"model"(模型级,订阅计划页自动派生或手工覆盖) /
+	// "vendor"(厂商级兜底 channel_vendor_costs) / ""(未设,ratio=1.0)。
+	// 计费三级口径:模型级 > 厂商级 > 1.0(见 DESIGN §5.6)。
+	RatioScope string `json:"ratioScope,omitempty"`
 	// Peak/Window 该时刻所处的档位(仅分时形态有值)。
 	Peak   bool   `json:"peak,omitempty"`
 	Window string `json:"window,omitempty"`
@@ -682,6 +686,28 @@ type CostRatioInput struct {
 	Note   string   `json:"note,omitempty"`
 }
 
+// ModelCostRatioRow 一条「渠道 × 模型」成本系数(模型级,计费三级口径的最高优先层)。
+//
+// 为什么新增模型级:CC GOAT / opencode Go 订阅页给**每个模型一个不同的月度额度**
+// (如 CC DeepSeek V4.1 Flash $60、GPT-5.6 Sol $70),故真实成本系数 = 订阅价 ÷ 该模型额度,
+// 每模型一个值 —— 「一厂商同倍率」的旧口径(channel_vendor_costs)不再准确,仅作兜底。
+// Source 区分自动派生(订阅计划页写入)与人工覆盖。见迁移 v15 / DESIGN §5.6。
+type ModelCostRatioRow struct {
+	ChannelID int64   `json:"channelId"`
+	ModelName string  `json:"modelName"` // = official_prices.model_name(canonical slug)
+	Ratio     float64 `json:"ratio"`     // 成本 = 官方价 × ratio
+	Source    string  `json:"source"`    // plan(订阅页自动) | manual(人工覆盖)
+	Note      string  `json:"note,omitempty"`
+	UpdatedAt string  `json:"updatedAt,omitempty"`
+}
+
+// ModelCostRatioInput 写入一条模型级系数(PUT 全量替换该渠道的模型级系数行;source 由服务端定)。
+type ModelCostRatioInput struct {
+	ModelName string  `json:"modelName"`
+	Ratio     float64 `json:"ratio"`
+	Note      string  `json:"note,omitempty"`
+}
+
 // OfficialBindingFill 回填结果的一行(模型 → 官方价绑定)。
 type OfficialBindingFill struct {
 	ModelID      int64    `json:"modelId"`
@@ -799,6 +825,34 @@ type RefreshPricingResp struct {
 	// 失败时 OpenCodeError 记原因,不影响其余结果。
 	OpenCode      *OpenCodeFetchResult `json:"openCode,omitempty"`
 	OpenCodeError string               `json:"openCodeError,omitempty"`
+	// Plans 订阅计划页(CC GOAT / opencode Go)派生成本系数的结果($10 档,自动写入)。
+	// 失败时 PlansError 记原因,不影响其余结果。
+	Plans      *PlanFetchResult `json:"plans,omitempty"`
+	PlansError string           `json:"plansError,omitempty"`
+}
+
+// PlanFetchResult POST /official-prices/fetch-plans 返回(按来源分行)。
+type PlanFetchResult struct {
+	Sources []PlanSourceResult `json:"sources"`
+}
+
+// PlanSourceResult 单个订阅计划来源的抓取/写入结果。
+//
+// 逐来源独立成败:一个来源抓失败不影响另一个(单点网络抖动不该让两个来源的系数都白更)。
+// 免费/不限额行与显示名映射不到 slug 的行必须显式回报(否则是静默丢数据)。
+type PlanSourceResult struct {
+	ChannelType     ChannelType `json:"channelType"`
+	SourceURL       string      `json:"sourceUrl"`
+	ContentSHA      string      `json:"contentSha256,omitempty"`
+	PlanPriceUSD    float64     `json:"planPriceUsd"`
+	TotalRows       int         `json:"totalRows"` // 页面额度表行数(含免费行)
+	Priced          int         `json:"priced"`    // 可落库行数(去重后)
+	Written         int         `json:"written"`   // 实际写入/更新的系数行数(不含被人工行挡下的)
+	ChannelsTouched int         `json:"channelsTouched"`
+	SkippedFree     []string    `json:"skippedFree,omitempty"`
+	SkippedUnmapped []string    `json:"skippedUnmapped,omitempty"`
+	Error           string      `json:"error,omitempty"`
+	ErrorType       string      `json:"errorType,omitempty"` // fetch_failed/parse_failed/store_error
 }
 
 // ---------- 路由规则 ----------

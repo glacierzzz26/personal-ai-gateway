@@ -91,6 +91,81 @@ func (s *Server) handleChannelCostRatioDelete(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// ---------- 「渠道 × 模型」成本系数(订阅计划页自动派生 / 人工覆盖;计费三级口径最高层) ----------
+
+// handleChannelModelCostRatios 某渠道的全部模型级系数行(含来源 plan/manual)。
+func (s *Server) handleChannelModelCostRatios(w http.ResponseWriter, r *http.Request) {
+	id, ok := paramID(r, "id")
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "bad channel id")
+		return
+	}
+	if _, err := s.st.GetChannel(id); err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	rows, err := s.st.ListChannelModelCostRatios(id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// handleChannelModelCostRatiosReplace 全量替换某渠道的模型级系数行(PUT 语义)。
+// 写入行一律 source=manual(人工编辑);单事务先清后插。
+func (s *Server) handleChannelModelCostRatiosReplace(w http.ResponseWriter, r *http.Request) {
+	id, ok := paramID(r, "id")
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "bad channel id")
+		return
+	}
+	if _, err := s.st.GetChannel(id); err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	var req struct {
+		Ratios []domain.ModelCostRatioInput `json:"ratios"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.st.ReplaceChannelModelCostRatios(id, req.Ratios); err != nil {
+		if errors.Is(err, store.ErrInvalidRatio) {
+			// 系数 0 不是「免费」的合法表达:要表达免费必须删除该行(与厂商级同规矩)。
+			apiErr(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		writeStoreErr(w, err)
+		return
+	}
+	rows, err := s.st.ListChannelModelCostRatios(id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// handleChannelModelCostRatioDelete 删除一条模型级系数(退回厂商级兜底)。
+func (s *Server) handleChannelModelCostRatioDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := paramID(r, "id")
+	if !ok {
+		apiErr(w, http.StatusBadRequest, "validation", "bad channel id")
+		return
+	}
+	model := queryStr(r, "model")
+	if model == "" {
+		apiErr(w, http.StatusBadRequest, "validation", "model is required")
+		return
+	}
+	if err := s.st.DeleteChannelModelCostRatio(id, model); err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // refreshTimeout 批量刷新的总预算。
 //
 // 比单厂商的 45s 宽:逐厂商串行抓取,三个可抓厂商最坏情况会逼近上限。
@@ -148,6 +223,19 @@ func (s *Server) handleOfficialPricesRefresh(w http.ResponseWriter, r *http.Requ
 		resp.OpenCode = &oc
 		resp.TotalUpserted += oc.Upserted
 		resp.TotalRemoved += oc.Removed
+	}
+
+	// ①c 订阅计划页 → 按模型派生成本系数($10 档,自动写入 source='plan',不覆盖人工行)。
+	// 独立成败:不影响官方价抓取本身(系数只是成本的默认值)。
+	pl, plStatus, plTyp, plErr := s.fetchPlans(ctx)
+	switch {
+	case plErr != nil && plStatus != 0:
+		resp.PlansError = plErr.Error()
+		_ = plTyp
+	case plErr != nil:
+		resp.PlansError = plErr.Error()
+	default:
+		resp.Plans = &pl
 	}
 
 	// ② 显式指定的厂商走旧逐厂商路径(当前全部为 ManualOnly → 会返回 manual_only,属预期)。

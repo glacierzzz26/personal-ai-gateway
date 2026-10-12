@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Input, InputNumber, Modal, Select, Space, Table, Tag } from 'antd';
+import { Alert, App, Button, Input, InputNumber, Modal, Select, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, suggestedRatio } from '@/services/api';
-import type { Channel, Provider } from '@/types';
+import { api } from '@/services/api';
+import type { Channel, ModelCostRatioRow, Provider } from '@/types';
 
 interface Props {
   open: boolean;
@@ -12,23 +12,24 @@ interface Props {
   onClose: () => void;
 }
 
-/** 编辑中的一行(与 CostRatioRow 的区别:ratio 可为空 = 未填,落库前拦截) */
+/** 编辑中的一行(与 CostRatioInput 的区别:ratio 可为空 = 未填,落库前拦截) */
 interface Row {
   vendor: Provider;
   ratio: number | null;
   note: string;
-  /** 系数是按渠道类型预填的建议值,人还没核对过 —— 存前显式提醒 */
-  suggested?: boolean;
 }
 
 /**
- * 「渠道 × 厂商」成本系数编辑器。
+ * 成本系数编辑器(两段)。
  *
- * 成本 = 该厂商官方价 × 系数。这里配的是**站主实付上游的折扣率**,不是售价:
- * credit 型套餐($10 买 $60 额度)对所有模型同倍率,所以按厂商配而非按模型配。
+ * 成本 = 官方价 × 系数,计费**三级口径**:① 模型级(本表上段,订阅计划页自动派生 / 人工覆盖)
+ * > ② 厂商级(本表下段,兜底)> ③ 1.0(不折扣)。
  *
- * 缺行 = 1.0(不折扣)。1.0 是「不折扣」这个明确含义,不是编造的数字 ——
- * 但它会让毛利看起来偏低,所以计费侧对未设系数的渠道会带一条 warn 提示。
+ * 为什么加模型级:订阅计划页(CC GOAT / opencode Go)给**每个模型一个不同的月度额度**,
+ * 真实系数 = 订阅价 ÷ 该模型额度,每模型一个值 —— 「一厂商同倍率」的旧口径只是兜底。
+ *
+ * 上段为**只读**(系数由订阅页抓取自动写入,或在此删除以退回厂商级);
+ * 下段可编辑(手工维护厂商级兜底)。
  */
 export default function CostRatioModal({ open, channel, onClose }: Props) {
   const { message } = App.useApp();
@@ -43,6 +44,20 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
     retry: 0,
   });
 
+  // 模型级系数(订阅计划页自动派生 / 人工覆盖),只读展示 + 逐行删除。
+  const {
+    data: modelRows = [],
+    isLoading: modelLoading,
+    isError: modelError,
+    error: modelErr,
+    refetch: refetchModels,
+  } = useQuery({
+    queryKey: ['channel-model-cost-ratios', channel?.id],
+    queryFn: () => api.channelModelCostRatios(channel!.id),
+    enabled: open && !!channel,
+    retry: 0,
+  });
+
   // 厂商清单与「官方定价」页同源(可抓 + 仅手工录入都算,手工录的价同样要乘系数)。
   const { data: vendors = [] } = useQuery({
     queryKey: ['official-vendors'],
@@ -52,7 +67,6 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
   });
 
   // 打开时用服务端快照重置本地编辑态 —— 关掉再开不该看到上次未保存的残留。
-  // 只依赖 open:保存后 data 变化时弹窗已在关闭流程里,不会覆盖到人的输入。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open) setRows((data ?? []).map(r => ({ vendor: r.vendor, ratio: r.ratio, note: r.note ?? '' })));
@@ -60,19 +74,15 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
 
   const usedVendors = useMemo(() => new Set(rows.map(r => r.vendor)), [rows]);
   const addable = vendors.filter(v => !usedVendors.has(v.provider));
-  const hasSuggested = rows.some(r => r.suggested);
   const invalid = rows.some(r => r.ratio == null || r.ratio <= 0);
 
   function addVendor(vendor: Provider) {
-    // 建议值只预填、不静默落库:$10 买 $60 是商业事实,该由人确认后写。
-    const sug = suggestedRatio(channel?.channelType, vendor);
     // ratio 留空而非预填 1.0:1.0 是个有含义的数(不折扣),替人填上等于替人做了决定。
-    setRows(rs => [...rs, { vendor, ratio: sug?.ratio ?? null, note: sug?.note ?? '', suggested: !!sug }]);
+    setRows(rs => [...rs, { vendor, ratio: null, note: '' }]);
   }
 
   function patch(vendor: Provider, p: Partial<Row>) {
-    // 人一动手就不再算「未核对的建议值」。
-    setRows(rs => rs.map(r => (r.vendor === vendor ? { ...r, ...p, suggested: false } : r)));
+    setRows(rs => rs.map(r => (r.vendor === vendor ? { ...r, ...p } : r)));
   }
 
   async function handleSave() {
@@ -85,7 +95,7 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
     setSaving(true);
     try {
       await api.replaceChannelCostRatios(channel.id, payload);
-      message.success(payload.length ? `已保存 ${payload.length} 条成本系数` : '已清空成本系数(全部厂商按 1.0 计)');
+      message.success(payload.length ? `已保存 ${payload.length} 条厂商级系数` : '已清空厂商级系数(全部厂商按 1.0 计)');
       // 成本派生自系数,系数一改,模型毛利列/用户面报价都要重取。
       qc.invalidateQueries({ queryKey: ['channel-cost-ratios', channel.id] });
       qc.invalidateQueries({ queryKey: ['models'] });
@@ -98,16 +108,48 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
     }
   }
 
-  const columns: ColumnsType<Row> = [
+  async function handleDeleteModel(r: ModelCostRatioRow) {
+    if (!channel) return;
+    try {
+      await api.deleteChannelModelCostRatio(channel.id, r.modelName);
+      message.success(`已删除 ${r.modelName} 的模型级系数(退回厂商级兜底)`);
+      qc.invalidateQueries({ queryKey: ['channel-model-cost-ratios', channel.id] });
+      qc.invalidateQueries({ queryKey: ['models'] });
+      void refetchModels();
+    } catch (e) {
+      message.error(`删除失败:${(e as Error)?.message || '未知错误'}`);
+    }
+  }
+
+  const modelColumns: ColumnsType<ModelCostRatioRow> = [
+    { title: '模型', dataIndex: 'modelName', ellipsis: true },
     {
-      title: '厂商', dataIndex: 'vendor', width: 160,
-      render: (v: Provider, r) => (
-        <Space size={6}>
-          <span>{v}</span>
-          {r.suggested && <Tag color="orange" style={{ marginInlineEnd: 0 }}>建议值待确认</Tag>}
-        </Space>
+      title: '成本系数', dataIndex: 'ratio', width: 120,
+      render: (v: number) => Number(v).toFixed(4),
+    },
+    {
+      title: '来源', dataIndex: 'source', width: 88,
+      render: (s: string) =>
+        s === 'manual'
+          ? <Tag color="blue" style={{ marginInlineEnd: 0 }}>人工</Tag>
+          : <Tag color="green" style={{ marginInlineEnd: 0 }}>自动</Tag>,
+    },
+    { title: '备注', dataIndex: 'note', width: 180, ellipsis: true, render: (v?: string) => v || '—' },
+    {
+      title: '', key: 'op', width: 44, align: 'right',
+      render: (_, r) => (
+        <Button
+          type="text" size="small" danger
+          icon={<DeleteOutlined />}
+          aria-label={`删除 ${r.modelName} 的模型级系数`}
+          onClick={() => void handleDeleteModel(r)}
+        />
       ),
     },
+  ];
+
+  const columns: ColumnsType<Row> = [
+    { title: '厂商', dataIndex: 'vendor', width: 160 },
     {
       title: '成本系数', dataIndex: 'ratio', width: 150,
       render: (_, r) => (
@@ -152,45 +194,57 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
       onCancel={onClose}
       onOk={handleSave}
       confirmLoading={saving}
-      okText="保存"
+      okText="保存厂商级系数"
       cancelText="取消"
       okButtonProps={{ disabled: invalid }}
-      width={680}
+      width={760}
       destroyOnHidden
     >
       <Alert
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="成本 = 厂商官方价 × 本系数"
+        message="成本 = 官方价 × 系数(查找顺序:模型级 → 厂商级 → 1.0)"
         description={
           <span style={{ fontSize: 12.5 }}>
-            这里填的是<b>你实付上游的折扣率</b>,不是售价。官方价一变、系数一改,全渠道成本即时重算。
-            未配的厂商按 <b>1.0</b> 计(即成本 = 官方挂牌价),会明显高估成本,建议逐个配齐。
+            <b>模型级</b>由订阅计划页(CC GOAT / opencode Go)自动派生 —— 系数 = 订阅价 ÷ 该模型月度额度,
+            每模型一个值;可在下方逐行删除以退回厂商级。<b>厂商级</b>是兜底,官方价一变、系数一改即时重算。
           </span>
         }
       />
 
-      {hasSuggested && (
+      <div style={{ fontWeight: 600, margin: '4px 0 8px' }}>模型级(订阅计划自动派生)</div>
+      {modelError && (
         <Alert
-          type="warning"
+          type="error"
           showIcon
           style={{ marginBottom: 12 }}
-          message="有按渠道类型预填的建议系数,请核对后保存 —— 不会自动落库"
+          message="模型级系数加载失败"
+          description={(modelErr as Error)?.message}
+          action={<Button size="small" onClick={() => void refetchModels()}>重试</Button>}
         />
       )}
+      <Table
+        rowKey="modelName"
+        size="small"
+        columns={modelColumns}
+        dataSource={modelRows}
+        loading={modelLoading}
+        pagination={modelRows.length > 12 ? { pageSize: 12, size: 'small' } : false}
+        locale={{ emptyText: '尚无模型级系数 —— 点「官方定价」页的「从订阅计划抓取」自动派生' }}
+      />
 
+      <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>厂商级(兜底层)</div>
       {isError && (
         <Alert
           type="error"
           showIcon
           style={{ marginBottom: 12 }}
-          message="系数加载失败"
+          message="厂商级系数加载失败"
           description={(error as Error)?.message}
           action={<Button size="small" onClick={() => void refetch()}>重试</Button>}
         />
       )}
-
       <Table
         rowKey="vendor"
         size="small"
@@ -198,7 +252,7 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
         dataSource={rows}
         loading={isLoading}
         pagination={false}
-        locale={{ emptyText: '尚未配置 —— 该渠道全部厂商按 1.0 计(成本 = 官方挂牌价)' }}
+        locale={{ emptyText: '未配置厂商级兜底 —— 模型级缺行时按 1.0 计(成本 = 官方挂牌价)' }}
       />
 
       <div style={{ marginTop: 12 }}>

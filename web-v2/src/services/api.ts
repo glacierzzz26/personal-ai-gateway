@@ -10,8 +10,8 @@ import type {
   CostRatioInput, CostRatioRow,
   FetchPricingResult, GatewayToken, LogFilters, LogPage, ManualPriceDraft, MatchMode, MetricPoint,
   AnnouncementDraft, AnnouncementItem,
-  ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
-  OpenCodeFetchResult,
+  ModelCatalogItem, ModelCostRatioInput, ModelCostRatioRow, ModelDraft, ModelOffer, ModelUsageData, OfferDraft, OfficialPriceView, OfficialVendorInfo,
+  OpenCodeFetchResult, PlanFetchResult,
   OverviewData, CustomerFocusData, Provider, RefreshPricingResp, RequestLogItem, RouteRule, RuleDraft, Settings,
   StatRangeQuery, SyncResult,
   TokenCreateResult,
@@ -24,27 +24,6 @@ const frac = (pct: number): number => (pct == null ? 0 : pct / 100);
 
 /** 批量重抓的前端超时:后端逐厂商各 45s,留足余量(见 http.RequestOpts)。 */
 export const REFRESH_TIMEOUT_MS = 120_000;
-
-/**
- * 成本系数建议值:credit 型套餐的折扣率。
- *
- * 刻意只做「建议」不做「落库」—— $10 买 $60 是商业事实不是 schema 事实,
- * 各环境(测试库/生产库)渠道 id 不同,迁移 seed 业务数据是错的。改为新建系数行时
- * 预填 + 要人点确认。
- */
-export const SUGGESTED_RATIOS: { match: RegExp; vendor: Provider; ratio: number; note: string }[] = [
-  { match: /command\s*code/i, vendor: 'DeepSeek' as Provider, ratio: 1 / 6, note: '$10 买 $60 额度' },
-];
-
-/** 按渠道类型/名给出建议系数(命中才返回;空 = 无建议,不预填)。 */
-export function suggestedRatio(channelType: string | undefined, vendor: Provider):
-  { ratio: number; note: string } | null {
-  if (!channelType) return null;
-  for (const s of SUGGESTED_RATIOS) {
-    if (s.match.test(channelType) && s.vendor === vendor) return { ratio: s.ratio, note: s.note };
-  }
-  return null;
-}
 
 function ch(x: Channel): Channel { return { ...x, successRate: frac(x.successRate) }; }
 function offer(o: ModelOffer): ModelOffer { return { ...o, successRate: frac(o.successRate) }; }
@@ -155,6 +134,23 @@ export const api = {
   /** 删除一条系数(退回默认 1.0);该行不存在时后端 404 */
   deleteChannelCostRatio(id: number, vendor: Provider): Promise<unknown> {
     return http.del(`/channels/${id}/cost-ratios${qs({ vendor })}`);
+  },
+
+  /* —— 渠道 × 模型 成本系数(订阅计划页自动派生 / 人工覆盖;计费三级口径最高层) —— */
+  /**
+   * 本渠道的模型级系数行(由订阅计划页派生,或人工覆盖)。
+   * 计费查找顺序:模型级(本表)> 厂商级(cost-ratios)> 1.0。
+   */
+  channelModelCostRatios(id: number): Promise<ModelCostRatioRow[]> {
+    return http.get(`/channels/${id}/model-cost-ratios`);
+  },
+  /** 全量替换本渠道的模型级系数行(写入行 source=manual);未回传的模型即被删除(退回厂商级兜底) */
+  replaceChannelModelCostRatios(id: number, ratios: ModelCostRatioInput[]): Promise<ModelCostRatioRow[]> {
+    return http.put(`/channels/${id}/model-cost-ratios`, { ratios });
+  },
+  /** 删除一条模型级系数(退回厂商级兜底);该行不存在时后端 404 */
+  deleteChannelModelCostRatio(id: number, modelName: string): Promise<unknown> {
+    return http.del(`/channels/${id}/model-cost-ratios${qs({ model: modelName })}`);
   },
 
   /* —— 模型广场 —— */
@@ -302,6 +298,14 @@ export const api = {
    */
   fetchOpenCode(): Promise<OpenCodeFetchResult> {
     return http.post<OpenCodeFetchResult>('/official-prices/fetch-opencode');
+  },
+  /**
+   * 抓订阅计划页(CC GOAT / opencode Go,$10 档)→ 按模型派生成本系数写入各渠道。
+   * 逐来源独立成败;自动写入 source='plan',**不覆盖人工覆盖行(source='manual')**。
+   * 常规路径走 refreshOfficialPrices(它一次抓 CC + opencode + 订阅计划)。
+   */
+  fetchPlans(): Promise<PlanFetchResult> {
+    return http.post<PlanFetchResult>('/official-prices/fetch-plans');
   },
 
   /* —— 令牌 —— */

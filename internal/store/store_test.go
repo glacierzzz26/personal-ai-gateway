@@ -65,7 +65,7 @@ func TestOpenMigratesAndIdempotent(t *testing.T) {
 	mustEqual(t, sv2, schemaVersion, "SchemaVersion stable on reopen")
 
 	// 业务表应就绪(抽查几张三件套)。information_schema 限定当前 schema。
-	for _, table := range []string{"channels", "models", "model_offers", "rules", "tokens", "request_logs", "settings", "admins", "official_prices", "announcements", "announcement_dismissals", "balance_logs", "channel_vendor_costs"} {
+	for _, table := range []string{"channels", "models", "model_offers", "rules", "tokens", "request_logs", "settings", "admins", "official_prices", "announcements", "announcement_dismissals", "balance_logs", "channel_vendor_costs", "channel_model_cost_ratios"} {
 		var n int
 		mustNoErr(t, st2.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables
 			WHERE table_schema = current_schema() AND table_name = ?`, table).Scan(&n), "information_schema")

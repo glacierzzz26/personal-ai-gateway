@@ -176,6 +176,11 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("PUT /api/v1/channels/{id}/cost-ratios", adm(s.handleChannelCostRatiosReplace))
 	m.HandleFunc("DELETE /api/v1/channels/{id}/cost-ratios", adm(s.handleChannelCostRatioDelete))
 
+	// 「渠道 × 模型」成本系数(订阅计划页自动派生 / 人工覆盖;计费三级口径最高层)。见迁移 v15。
+	m.HandleFunc("GET /api/v1/channels/{id}/model-cost-ratios", adm(s.handleChannelModelCostRatios))
+	m.HandleFunc("PUT /api/v1/channels/{id}/model-cost-ratios", adm(s.handleChannelModelCostRatiosReplace))
+	m.HandleFunc("DELETE /api/v1/channels/{id}/model-cost-ratios", adm(s.handleChannelModelCostRatioDelete))
+
 	// 官方定价(厂商官网抓取;只采信官方域名,来源可追溯,失败即失败)
 	m.HandleFunc("POST /api/v1/channels/{id}/fetch-pricing", adm(s.handleFetchPricing))
 	m.HandleFunc("GET /api/v1/channels/{id}/official-prices", adm(s.handleChannelOfficialPrices))
@@ -183,6 +188,7 @@ func (s *Server) apiMux() *http.ServeMux {
 	m.HandleFunc("POST /api/v1/official-prices/fetch", adm(s.handleOfficialPricesFetch))
 	m.HandleFunc("POST /api/v1/official-prices/fetch-commandcode", adm(s.handleOfficialPricesFetchCommandCode))
 	m.HandleFunc("POST /api/v1/official-prices/fetch-opencode", adm(s.handleOfficialPricesFetchOpenCode))
+	m.HandleFunc("POST /api/v1/official-prices/fetch-plans", adm(s.handleOfficialPricesFetchPlans))
 	m.HandleFunc("POST /api/v1/official-prices/refresh", adm(s.handleOfficialPricesRefresh))
 	m.HandleFunc("GET /api/v1/official-prices/vendors", adm(s.handleOfficialVendors))
 	m.HandleFunc("POST /api/v1/official-prices/manual", adm(s.handleOfficialPriceManual))
