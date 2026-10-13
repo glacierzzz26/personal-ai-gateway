@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react';
-import { App, Button, Card, Form, Input } from 'antd';
-import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { useSession } from '@/stores/session';
 import { api } from '@/services/api';
 import { SkLines } from '@/components/States';
-import { TOKENS } from '@/styles/tokens';
+import { Btn, Field, Input, Note } from '@/ui/primitives';
+import { toast } from '@/ui/toast';
 
 type Mode = 'loading' | 'login' | 'bootstrap';
 
-/** 登录 / 首启创建管理员。App 在未登录态渲染本页。 */
+/** 登录 / 首启创建管理员。App 在未登录态渲染本页（对齐原型 showLogin）。 */
 export default function Login() {
-  const { message } = App.useApp();
   const setAdmin = useSession(s => s.setAdmin);
   const [mode, setMode] = useState<Mode>('loading');
   const [submitting, setSubmitting] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [err, setErr] = useState('');
   /** 探测登录状态失败：仍按登录页渲染，但必须告知用户，否则「没建过账号」会被误判成「连不上」 */
   const [probeFailed, setProbeFailed] = useState(false);
 
@@ -29,16 +30,23 @@ export default function Login() {
     return () => { live = false; };
   }, []);
 
-  const finish = async (values: { username: string; password: string }) => {
+  const submit = async () => {
+    const u = username.trim();
+    const isBootstrap = mode === 'bootstrap';
+    if (!u || !password || (isBootstrap && password.length < 8)) {
+      setErr(isBootstrap ? '请填写用户名与密码，密码至少 8 位' : '请填写用户名与密码');
+      return;
+    }
+    setErr('');
     setSubmitting(true);
     try {
-      const admin = mode === 'bootstrap'
-        ? await api.bootstrap(values.username, values.password)
-        : await api.login(values.username, values.password);
+      const admin = isBootstrap
+        ? await api.bootstrap(u, password)
+        : await api.login(u, password);
       setAdmin(admin);
-      message.success(mode === 'bootstrap' ? '管理员已创建并登录' : '欢迎回来');
+      toast.ok(isBootstrap ? '管理员已创建并登录' : '欢迎回来');
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '登录失败');
+      toast.err(e instanceof Error ? e.message : '登录失败');
     } finally {
       setSubmitting(false);
     }
@@ -47,70 +55,64 @@ export default function Login() {
   const isBootstrap = mode === 'bootstrap';
 
   return (
-    <div className="gw-auth">
-      <Card className="gw-auth-card">
-        {/* 判定首启还是登录前，不渲染表单，避免用户对着空表单输入 */}
+    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+      <div className="card" style={{ width: 400, padding: '28px 28px 22px' }}>
         {mode === 'loading' ? (
           <>
-            <div className="gw-auth-brand">
-              <span className="gw-brand-mark lg" aria-hidden="true">G</span>
-              <div style={{ width: 180, marginTop: 4 }}>
+            <div style={{ textAlign: 'center', marginBottom: 18 }}>
+              <div className="brand-mark" style={{ width: 38, height: 38, margin: '0 auto 10px', fontSize: 16, fontWeight: 600 }}>G</div>
+              <div style={{ width: 180, margin: '4px auto 0' }}>
                 <SkLines rows={['', 'w60']} />
               </div>
             </div>
-            <span className="gw-sr" role="status">正在读取登录状态</span>
+            <span role="status" style={{ position: 'absolute', left: -9999 }}>正在读取登录状态</span>
           </>
         ) : (
           <>
-            <div className="gw-auth-brand">
-              <span className="gw-brand-mark lg" aria-hidden="true">G</span>
-              <h1>{isBootstrap ? '创建管理员' : 'AI Gateway 管理台'}</h1>
-              <p>
-                {isBootstrap
-                  ? '首次运行：创建一个管理员账号'
-                  : '使用管理员账号登录，会话 Cookie 自动保持'}
-              </p>
+            <div style={{ textAlign: 'center', marginBottom: 18 }}>
+              <div className="brand-mark" style={{ width: 38, height: 38, margin: '0 auto 10px', fontSize: 16, fontWeight: 600 }}>G</div>
+              <h1 style={{ fontSize: 18, marginBottom: 5 }}>{isBootstrap ? '创建管理员' : 'AI Gateway 管理台'}</h1>
+              <div className="cell-sub" style={{ fontSize: 12 }}>
+                {isBootstrap ? '首次运行：创建一个管理员账号' : '使用管理员账号登录，会话 Cookie 自动保持'}
+              </div>
             </div>
 
             {probeFailed && (
-              <div className="gw-note" role="status" style={{ borderLeftColor: TOKENS.warn, background: 'var(--gw-card)', marginBottom: 4 }}>
-                <b style={{ color: TOKENS.warn }}>⚠ 无法确认登录状态</b>
-                <span style={{ flex: 1 }}>
-                  探测 /auth/state 失败，可能是网关管理面未启动。你仍然可以尝试登录。
-                </span>
+              <div style={{ marginBottom: 12 }}>
+                <Note tone="warn">
+                  <b style={{ color: 'var(--warn)' }}>⚠ 无法确认登录状态</b>　探测 /auth/state 失败，可能是网关管理面未启动。你仍然可以尝试登录。
+                </Note>
               </div>
             )}
 
-            <Form layout="vertical" onFinish={finish} requiredMark={false}>
-              <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
-                <Input prefix={<UserOutlined />} placeholder="admin" autoComplete="username" size="large" />
-              </Form.Item>
-              <Form.Item
-                name="password"
-                label="密码"
-                rules={[
-                  { required: true, message: '请输入密码' },
-                  ...(isBootstrap ? [{ min: 8, message: '至少 8 位' }] : []),
-                ]}
-              >
-                <Input.Password
-                  prefix={<LockOutlined />}
+            <form
+              onSubmit={e => { e.preventDefault(); void submit(); }}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } }}
+            >
+              <Field label="用户名" style={{ marginBottom: 12 }}>
+                <Input placeholder="admin" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} err={!!err && !username.trim()} />
+              </Field>
+              <Field label="密码" err={err || undefined}>
+                <Input
+                  type="password"
                   placeholder={isBootstrap ? '至少 8 位' : '••••••••'}
                   autoComplete={isBootstrap ? 'new-password' : 'current-password'}
-                  size="large"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  err={!!err && (!password || (isBootstrap && password.length < 8))}
                 />
-              </Form.Item>
-              <Button type="primary" htmlType="submit" block size="large" loading={submitting}>
+              </Field>
+              <Btn variant="primary" type="submit" loading={submitting} style={{ width: '100%', marginTop: 12, height: 36, fontSize: 14 }}>
                 {isBootstrap ? '创建并进入' : '登录'}
-              </Button>
-            </Form>
+              </Btn>
+            </form>
 
-            <div className="gw-auth-foot">
+            <div className="cell-sub" style={{ textAlign: 'center', marginTop: 14, fontSize: 11 }}>
               {isBootstrap ? '账号创建后即成为唯一管理员' : '忘记密码请联系管理员重置'}
             </div>
           </>
         )}
-      </Card>
+      </div>
     </div>
   );
 }
