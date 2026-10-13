@@ -9,6 +9,9 @@ import { setUnauthorizedHandler } from '@/services/http';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { useCurrency } from '@/stores/currency';
+import { useTheme } from '@/ui/theme';
+import { ToastRoot } from '@/ui/toast';
+import { OverlayHost } from '@/ui/overlay';
 import { queryClient } from '@/main';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -34,8 +37,8 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 
 /** 仅普通用户可达；管理员重定向到运行总览。 */
 function UserOnly({ children }: { children: React.ReactNode }) {
-  const admin = useSession(s => s.admin);
-  if (admin?.role === 'admin') return <Navigate to="/dashboard" replace />;
+  const role = useSession(s => s.admin?.role);
+  if (role === 'admin') return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
@@ -86,6 +89,17 @@ function CurrencySync() {
   return null;
 }
 
+/**
+ * 主题跟随角色：会话身份变化时，若用户未手动切过主题（localStorage 无 gw-theme），
+ * 按角色取默认 —— admin→暗色（核心场景）/ user→亮色。手动切换后不再跟随。
+ */
+function ThemeRoleSync() {
+  const role = useSession(s => s.admin?.role ?? null);
+  const syncRole = useTheme(s => s.syncRole);
+  useEffect(() => { syncRole(role); }, [role, syncRole]);
+  return null;
+}
+
 function Boot() {
   return (
     <div
@@ -96,10 +110,10 @@ function Boot() {
         gap: 14,
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'var(--gw-bg)',
+        background: 'var(--bg)',
       }}
     >
-      <span className="gw-brand-mark lg" aria-hidden="true">
+      <span className="brand-mark" style={{ width: 38, height: 38, fontSize: 16, fontWeight: 600 }} aria-hidden="true">
         G
       </span>
       <div style={{ width: 160 }}>
@@ -157,7 +171,10 @@ export default function App() {
 
   return (
     <>
+      <ThemeRoleSync />
       <CurrencySync />
+      <ToastRoot />
+      <OverlayHost />
       <Routes>
         <Route path="/" element={<AppLayout />}>
           <Route index element={<Home />} />

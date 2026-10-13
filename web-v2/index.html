@@ -1,22 +1,18 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI 网关管理台</title>
+    <title>AI Gateway 管理台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
     />
     <style>
-      /* 首屏底色，避免字体/样式加载前白闪（与 --gw-bg 一致） */
-      html,
-      body {
-        margin: 0;
-        background: #f8fafc;
-      }
+      /* 首屏底色：会话恢复前为暗色（核心场景），避免白闪；恢复后由 useTheme 按角色/手动选择接管 */
+      html, body { margin: 0; background: #0f1419; }
     </style>
   </head>
   <body>

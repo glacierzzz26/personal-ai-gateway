@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { visibleNav } from '@/layout/nav';
+import { Icon } from '@/ui/icons';
 import { useSession } from '@/stores/session';
 import { useUi } from '@/stores/ui';
 
 /**
- * Ctrl+K 快速跳转面板。
+ * Ctrl+K 快速跳转面板（原型 cmd 同款：分组列表 + 键盘导航）。
  * 只跳页面，不做资源检索 —— 保持「命令面板」语义单一。
  * 键盘：↑↓ 选择 · Enter 进入 · Esc 关闭（全站可达）。
  */
@@ -63,7 +65,6 @@ export default function CmdK() {
     if (open) {
       setQ('');
       setActive(0);
-      // 等面板挂载后再聚焦
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
@@ -74,35 +75,41 @@ export default function CmdK() {
     el?.scrollIntoView({ block: 'nearest' });
   }, [active, items]);
 
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <div
-      className="gw-cmdk-mask"
+      className="overlay"
+      style={{ alignItems: 'flex-start', paddingTop: '12vh' }}
       onMouseDown={e => {
         if (e.target === e.currentTarget) setOpen(false);
       }}
     >
-      <div className="gw-palette" role="dialog" aria-modal="true" aria-label="快速跳转">
-        <input
-          ref={inputRef}
-          value={q}
-          onChange={e => {
-            setQ(e.target.value);
-            setActive(0);
-          }}
-          placeholder="跳转到页面，或输入关键词…"
-          aria-label="搜索页面"
-        />
-        <div className="gw-p-list" ref={listRef} role="listbox">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="快速跳转" style={{ maxWidth: 480 }}>
+        <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon n="search" s={15} style={{ color: 'var(--t3)', flex: '0 0 15px' }} />
+          <input
+            ref={inputRef}
+            value={q}
+            onChange={e => {
+              setQ(e.target.value);
+              setActive(0);
+            }}
+            placeholder="跳转到页面，或输入关键词…"
+            aria-label="搜索页面"
+            className="input"
+            style={{ background: 'transparent', border: 'none', height: 30, padding: 0 }}
+          />
+          <span className="kbd">Esc</span>
+        </div>
+        <div className="cmd-list" ref={listRef} role="listbox">
           {items.length === 0 ? (
-            <div className="gw-p-empty">没有匹配「{q}」的页面</div>
+            <div className="cmd-item" style={{ cursor: 'default', color: 'var(--t3)' }}>没有匹配「{q}」的页面</div>
           ) : (
             items.map((it, i) => (
-              <button
+              <div
                 key={it.key}
-                type="button"
-                className="gw-p-item"
+                className={`cmd-item${i === active ? ' sel' : ''}`}
                 role="option"
                 aria-selected={i === active}
                 data-active={i === active ? '1' : '0'}
@@ -114,12 +121,13 @@ export default function CmdK() {
               >
                 {it.icon}
                 <span>{it.label}</span>
-                <span className="gw-p-g">{it.group}</span>
-              </button>
+                <span className="k">{it.group}</span>
+              </div>
             ))
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
