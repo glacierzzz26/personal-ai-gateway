@@ -1,14 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Card, Col, Empty, Row, Segmented, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
-import Chart from '@/components/Chart';
+import Chart, { ChartLegend } from '@/components/Chart';
 import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
-import { useChartColors } from '@/hooks/useChartColors';
+import { Card, CardBody, CardHead, Empty, Seg, SkLines, Table } from '@/ui/primitives';
+import type { Column } from '@/ui/primitives';
 import { api } from '@/services/api';
 import { fmt } from '@/utils/format';
-import { TOKENS } from '@/styles/tokens';
-import type { EChartsOption } from 'echarts';
 import type { UsageDim, UsageRow } from '@/types';
 
 const DIM_LABEL: Record<UsageDim, string> = { model: '按模型', channel: '按渠道', token: '按令牌' };
@@ -19,9 +16,9 @@ const dayLabel = (ts: string) => ts.slice(5);
 
 /** 用量维度钻取面板(原「用量统计」页核心):仅保留拆解部分,无独立页头/汇总卡,供 Dashboard 嵌入。 */
 export default function UsagePanel() {
-  const c = useChartColors();
   const [dim, setDim] = useState<UsageDim>('model');
   const [range, setRange] = useState(defaultRange);
+  const [sort, setSort] = useState<{ key: 'requests' | 'costUsd'; dir: 1 | -1 } | null>(null);
   const rq = useMemo(() => toQuery(range), [range]);
   const rl = rangeLabel(range);
 
@@ -32,98 +29,77 @@ export default function UsagePanel() {
   const rows = data?.rows ?? [];
   const series = data?.days ?? [];
 
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    return [...rows].sort((a, b) => (a[sort.key] - b[sort.key]) * sort.dir);
+  }, [rows, sort]);
+
+  const onSort = (key: string) => {
+    const k = key as 'requests' | 'costUsd';
+    setSort(s => (s && s.key === k ? { key: k, dir: s.dir === 1 ? -1 : 1 } : { key: k, dir: 1 }));
+  };
+
   // 后端按请求数倒序返回;Top-5 按花费另排。
   const costRows = useMemo(() => [...rows].sort((a, b) => b.costUsd - a.costUsd), [rows]);
 
   const totals = useMemo(() => {
-    let requests = 0, inTokens = 0, outTokens = 0, cost = 0, errReqs = 0;
+    let requests = 0,
+      cost = 0,
+      errReqs = 0;
     for (const r of rows) {
       requests += r.requests;
-      inTokens += r.inTokens;
-      outTokens += r.outTokens;
       cost += r.costUsd;
       errReqs += r.requests * r.errorRate;
     }
-    return { requests, inTokens, outTokens, cost, errRate: requests ? errReqs / requests : 0 };
+    return { cost, errRate: requests ? errReqs / requests : 0 };
   }, [rows]);
 
   const maxCost = Math.max(...rows.map(r => r.costUsd), 1);
 
-  const barOption: EChartsOption = {
-    grid: { left: 44, right: 44, top: 34, bottom: 26 },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder,
-      textStyle: { color: c.text, fontSize: 12 },
-    },
-    legend: {
-      data: ['请求数', '花费'], right: 0, top: 0,
-      itemWidth: 8, itemHeight: 8, textStyle: { color: c.text, fontSize: 12 },
-    },
-    xAxis: {
-      type: 'category', data: series.map(d => dayLabel(d.ts)),
-      axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
-      axisLabel: { color: c.text, fontSize: 11, interval: 'auto' },
-    },
-    yAxis: [
-      {
-        type: 'value', splitLine: { lineStyle: { color: c.line } },
-        axisLabel: { color: c.text, fontSize: 11 },
-      },
-      {
-        type: 'value', splitLine: { show: false },
-        axisLabel: { color: c.text, fontSize: 11 },
-      },
-    ],
-    series: [
-      {
-        name: '请求数', type: 'bar', data: series.map(d => d.requests),
-        itemStyle: { color: c.primary, borderRadius: 3 }, barWidth: '45%',
-      },
-      {
-        name: '花费', type: 'line', yAxisIndex: 1, data: series.map(d => Number(d.costUsd.toFixed(4))),
-        showSymbol: false, lineStyle: { width: 1.8, color: c.warn }, itemStyle: { color: c.warn },
-      },
-    ],
-  };
-
-  const columns: ColumnsType<UsageRow> = [
-    { title: COL_LABEL[dim], dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
+  const columns: Column<UsageRow>[] = [
+    { key: 'name', title: COL_LABEL[dim], render: r => <span className="mono">{r.name}</span> },
     {
-      title: '请求数', dataIndex: 'requests', align: 'right', sorter: (a, b) => a.requests - b.requests,
-      render: v => <span className="gw-num">{fmt.n(v)}</span>,
+      key: 'requests',
+      title: '请求数',
+      align: 'right',
+      sortable: true,
+      render: r => <span className="num">{fmt.n(r.requests)}</span>,
+    },
+    { key: 'inTokens', title: '输入 Token', align: 'right', render: r => <span className="num">{fmt.k(r.inTokens)}</span> },
+    { key: 'outTokens', title: '输出 Token', align: 'right', render: r => <span className="num">{fmt.k(r.outTokens)}</span> },
+    {
+      key: 'costUsd',
+      title: '花费',
+      align: 'right',
+      sortable: true,
+      render: r => <span className="num">{fmt.usd(r.costUsd)}</span>,
     },
     {
-      title: '输入 Token', dataIndex: 'inTokens', align: 'right',
-      render: v => <span className="gw-num">{fmt.k(v)}</span>,
-    },
-    {
-      title: '输出 Token', dataIndex: 'outTokens', align: 'right',
-      render: v => <span className="gw-num">{fmt.k(v)}</span>,
-    },
-    {
-      title: '花费', dataIndex: 'costUsd', align: 'right', sorter: (a, b) => a.costUsd - b.costUsd,
-      render: v => <span className="gw-num">{fmt.usd(v)}</span>,
-    },
-    {
-      title: '花费占比', key: 'share', width: 180,
-      render: (_, r) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div className="gw-bar" style={{ flex: 1 }} role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
-            <i style={{ width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)' }} />
+      key: 'share',
+      title: '花费占比',
+      width: 180,
+      render: r => (
+        <div className="hstack" style={{ gap: 8 }}>
+          <div className="bar" style={{ flex: 1, marginTop: 0 }} role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
+            <i style={{ width: `${(r.costUsd / maxCost) * 100}%` }} />
           </div>
-          <span className="gw-num" style={{ fontSize: 12, color: 'var(--gw-text-3)', width: 46 }}>
+          <span className="num cell-sub" style={{ width: 46 }}>
             {totals.cost ? ((r.costUsd / totals.cost) * 100).toFixed(1) : '0.0'}%
           </span>
         </div>
       ),
     },
     {
-      title: '错误率', dataIndex: 'errorRate', align: 'right',
+      key: 'errorRate',
+      title: '错误率',
+      align: 'right',
       /* 阈值与渠道/令牌侧统一：≥1% 视为需关注，≥0.5% 为观察区 */
-      render: v => (
-        <span className="gw-num" style={{ color: v > 0.01 ? TOKENS.err : v > 0.005 ? TOKENS.warn : undefined }}>
-          {fmt.pct(v)}
+      render: r => (
+        <span
+          className="num"
+          style={{ color: r.errorRate > 0.01 ? 'var(--err)' : r.errorRate > 0.005 ? 'var(--warn)' : undefined }}
+        >
+          {fmt.pct(r.errorRate)}
         </span>
       ),
     },
@@ -131,57 +107,90 @@ export default function UsagePanel() {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
+      <div className="sec-head" style={{ marginTop: 18 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
-          <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
+          <div className="sec-title">用量拆解</div>
+          <div className="cell-sub" style={{ marginTop: 4 }}>
             按 {COL_LABEL[dim]} × {rl} 聚合请求与成本
           </div>
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <RangePicker value={range} onChange={setRange} size="small" />
-          <Segmented
-            value={dim} onChange={v => setDim(v as UsageDim)}
+        <div className="hstack wrap" style={{ gap: 8 }}>
+          <RangePicker value={range} onChange={setRange} size="sm" />
+          <Seg
+            value={dim}
+            onChange={v => setDim(v)}
             options={(['model', 'channel', 'token'] as UsageDim[]).map(d => ({ value: d, label: DIM_LABEL[d] }))}
           />
         </div>
       </div>
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} xl={16}>
-          <Card title={`每日请求与花费(${rl})`}>
-            <Chart option={barOption} height={280} />
-          </Card>
-        </Col>
-        <Col xs={24} xl={8}>
-          <Card title="花费 Top 5">
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 14, margin: '14px 0' }}>
+        <Card>
+          <CardHead
+            title={`每日请求与花费（${rl}）`}
+            right={<ChartLegend items={[{ label: '请求数', color: 'var(--brand)' }, { label: '花费', color: 'var(--warn)' }]} />}
+          />
+          <CardBody>
+            <Chart
+              labels={series.map(d => dayLabel(d.ts))}
+              height={280}
+              leftFmt={fmt.k}
+              rightFmt={v => fmt.usd(v)}
+              series={[
+                { name: '请求数', data: series.map(d => d.requests), color: 'var(--brand)', kind: 'bar', fmt: v => fmt.n(v) },
+                {
+                  name: '花费',
+                  data: series.map(d => Number(d.costUsd.toFixed(4))),
+                  color: 'var(--warn)',
+                  kind: 'line',
+                  axis: 'right',
+                  fmt: v => fmt.usd(v, 4),
+                },
+              ]}
+            />
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHead title="花费 Top 5" />
+          <CardBody>
             {costRows.length === 0 ? (
-              <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '24px 0' }} />
+              <Empty title="暂无数据" />
             ) : (
               costRows.slice(0, 5).map(r => (
-                <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, fontSize: 13 }}>
-                  <span className="gw-mono" style={{ width: 150, color: 'var(--gw-text-2)' }}>{r.name}</span>
-                  <div className="gw-bar" style={{ flex: 1 }} role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
-                    <i style={{ width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)' }} />
+                <div key={r.name} className="li">
+                  <div className="r1">
+                    <span className="k mono">{r.name}</span>
+                    <span className="v">{fmt.usd(r.costUsd)}</span>
                   </div>
-                  <span className="gw-num" style={{ width: 70, textAlign: 'right' }}>{fmt.usd(r.costUsd)}</span>
+                  <div className="bar" role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
+                    <i style={{ width: `${(r.costUsd / maxCost) * 100}%` }} />
+                  </div>
                 </div>
               ))
             )}
-          </Card>
-        </Col>
-      </Row>
+          </CardBody>
+        </Card>
+      </div>
 
       <Card>
-        <Table<UsageRow>
-          rowKey="name"
-          size="middle"
-          loading={isFetching && rows.length === 0}
-          dataSource={rows}
-          columns={columns}
-          pagination={false}
-          locale={{ emptyText: <Empty description={`所选时间范围内暂无${COL_LABEL[dim]}级别的用量记录`} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-        />
+        <CardHead title="用量明细" count={rows.length} />
+        <CardBody style={{ padding: 0 }}>
+          {isFetching && rows.length === 0 ? (
+            <div style={{ padding: 14 }}>
+              <SkLines rows={['', 'w80', 'w60', 'w80', 'w60']} />
+            </div>
+          ) : rows.length === 0 ? (
+            <Empty icon="activity" title={`所选时间范围内暂无${COL_LABEL[dim]}级别的用量记录`} />
+          ) : (
+            <Table<UsageRow>
+              columns={columns}
+              rows={sortedRows}
+              rowKey={r => r.name}
+              sort={sort ?? undefined}
+              onSort={onSort}
+            />
+          )}
+        </CardBody>
       </Card>
     </>
   );

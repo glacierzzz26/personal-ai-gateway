@@ -1,6 +1,5 @@
-import { Button, Card } from 'antd';
 import type { ReactNode } from 'react';
-import { IconAlert, IconInbox, IconSearch } from '@/components/icons';
+import { Button, Card, CardBody, Empty, Sk } from '@/ui/primitives';
 
 /**
  * 五种状态积木：加载 / 空数据 / 空结果 / 错误 / 降级。
@@ -12,13 +11,15 @@ import { IconAlert, IconInbox, IconSearch } from '@/components/icons';
  */
 
 /* ---------- 加载 ---------- */
+const wOf = (w?: 'w40' | 'w60' | 'w80' | '') => (w === 'w40' ? '40%' : w === 'w60' ? '60%' : w === 'w80' ? '80%' : '100%');
+
 export function SkLine({ w }: { w?: 'w40' | 'w60' | 'w80' }) {
-  return <div className={`gw-sk-l${w ? ` ${w}` : ''}`} />;
+  return <Sk w={wOf(w)} h={12} />;
 }
 
 export function SkLines({ rows }: { rows: Array<'w40' | 'w60' | 'w80' | ''> }) {
   return (
-    <div className="gw-sk">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {rows.map((w, i) => (
         <SkLine key={i} w={w || undefined} />
       ))}
@@ -27,11 +28,17 @@ export function SkLines({ rows }: { rows: Array<'w40' | 'w60' | 'w80' | ''> }) {
 }
 
 export function SkBlock() {
-  return <div className="gw-sk-block" />;
+  return <Sk h={120} style={{ width: '100%' }} />;
 }
 
 export function SkMetric() {
-  return <div className="gw-sk-metric" />;
+  return (
+    <div className="card kpi">
+      <Sk w="50%" h={10} />
+      <Sk w="72%" h={24} style={{ marginTop: 8 }} />
+      <Sk w="40%" h={10} style={{ marginTop: 8 }} />
+    </div>
+  );
 }
 
 /* ---------- 空 / 错误 版式 ---------- */
@@ -39,34 +46,16 @@ interface EstateProps {
   title: string;
   desc?: string;
   action?: ReactNode;
-  /** 错误态用警示图标 */
-  isError?: boolean;
-  /** 空结果用放大镜图标；空数据用收件箱 */
-  isSearch?: boolean;
-}
-
-function Estate({ title, desc, action, isError, isSearch }: EstateProps) {
-  const Icon = isError ? IconAlert : isSearch ? IconSearch : IconInbox;
-  return (
-    <div className="gw-estate">
-      <span className={`ic${isError ? ' err' : ''}`}>
-        <Icon size={42} />
-      </span>
-      <div className="et">{title}</div>
-      {desc && <div className="ed">{desc}</div>}
-      {action && <div className="ea">{action}</div>}
-    </div>
-  );
 }
 
 /** 空数据：该区域尚无任何内容 */
-export function EmptyState({ title, desc, action }: Omit<EstateProps, 'isError' | 'isSearch'>) {
-  return <Estate title={title} desc={desc} action={action} />;
+export function EmptyState({ title, desc, action }: EstateProps) {
+  return <Empty icon="box" title={title} desc={desc} action={action} />;
 }
 
 /** 空结果：有数据但筛选没命中 */
-export function NoResultState({ title, desc, action }: Omit<EstateProps, 'isError' | 'isSearch'>) {
-  return <Estate title={title} desc={desc} action={action} isSearch />;
+export function NoResultState({ title, desc, action }: EstateProps) {
+  return <Empty icon="search" title={title} desc={desc} action={action} />;
 }
 
 /** 错误 + 重试（重试按钮由调用方传入，逻辑留在页面） */
@@ -75,19 +64,9 @@ export function ErrorState({
   desc,
   onRetry,
   retryText = '重试',
-}: {
-  title: string;
-  desc?: string;
-  onRetry?: () => void;
-  retryText?: string;
-}) {
+}: EstateProps & { onRetry?: () => void; retryText?: string }) {
   return (
-    <Estate
-      title={title}
-      desc={desc}
-      isError
-      action={onRetry ? <Button size="small" onClick={onRetry}>{retryText}</Button> : undefined}
-    />
+    <Empty icon="warn" title={title} desc={desc} action={onRetry ? <Button onClick={onRetry}>{retryText}</Button> : undefined} />
   );
 }
 
@@ -95,25 +74,21 @@ export function ErrorState({
 export function ErrorCard({ title, desc, onRetry }: { title: string; desc?: string; onRetry?: () => void }) {
   return (
     <Card>
-      <ErrorState title={title} desc={desc} onRetry={onRetry} />
+      <CardBody>
+        <ErrorState title={title} desc={desc} onRetry={onRetry} />
+      </CardBody>
     </Card>
   );
 }
 
 /** 降级横幅：功能可用但结果不完整/不新鲜时使用 */
-export function DegradedNote({
-  title,
-  children,
-  action,
-}: {
-  title: string;
-  children: ReactNode;
-  action?: ReactNode;
-}) {
+export function DegradedNote({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="gw-note" role="status" style={{ borderLeftColor: 'var(--gw-warn)', background: 'var(--gw-card)' }}>
-      <b style={{ color: 'var(--gw-warn)' }}>⚠ {title}</b>
-      <span style={{ flex: 1 }}>{children}</span>
+    <div className="strip tone-warn" role="status">
+      <span className="st-title">⚠ {title}</span>
+      <span className="st-desc" style={{ flex: 1 }}>
+        {children}
+      </span>
       {action}
     </div>
   );

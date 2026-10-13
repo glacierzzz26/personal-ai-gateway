@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Input, InputNumber, Modal, Select, Table, Tag } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Badge, Button, Empty, Input, Pager, Select, Table } from '@/ui/primitives';
+import type { Column } from '@/ui/primitives';
+import { Modal } from '@/ui/overlay';
+import { message } from '@/ui/toast';
 import { api } from '@/services/api';
 import type { Channel, ModelCostRatioRow, Provider } from '@/types';
 
@@ -19,6 +20,9 @@ interface Row {
   note: string;
 }
 
+/** 模型级系数分页每页条数 */
+const MODEL_PAGE = 12;
+
 /**
  * 成本系数编辑器(两段)。
  *
@@ -32,10 +36,10 @@ interface Row {
  * 下段可编辑(手工维护厂商级兜底)。
  */
 export default function CostRatioModal({ open, channel, onClose }: Props) {
-  const { message } = App.useApp();
   const qc = useQueryClient();
   const [rows, setRows] = useState<Row[]>([]);
   const [saving, setSaving] = useState(false);
+  const [modelPage, setModelPage] = useState(1);
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['channel-cost-ratios', channel?.id],
@@ -69,7 +73,10 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
   // 打开时用服务端快照重置本地编辑态 —— 关掉再开不该看到上次未保存的残留。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (open) setRows((data ?? []).map(r => ({ vendor: r.vendor, ratio: r.ratio, note: r.note ?? '' })));
+    if (open) {
+      setRows((data ?? []).map(r => ({ vendor: r.vendor, ratio: r.ratio, note: r.note ?? '' })));
+      setModelPage(1);
+    }
   }, [open]);
 
   const usedVendors = useMemo(() => new Set(rows.map(r => r.vendor)), [rows]);
@@ -121,26 +128,19 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
     }
   }
 
-  const modelColumns: ColumnsType<ModelCostRatioRow> = [
-    { title: '模型', dataIndex: 'modelName', ellipsis: true },
+  const modelColumns: Column<ModelCostRatioRow>[] = [
+    { key: 'modelName', title: '模型', render: r => <span className="mono">{r.modelName}</span> },
+    { key: 'ratio', title: '成本系数', width: 120, align: 'right', render: r => <span className="num">{Number(r.ratio).toFixed(4)}</span> },
     {
-      title: '成本系数', dataIndex: 'ratio', width: 120,
-      render: (v: number) => Number(v).toFixed(4),
+      key: 'source', title: '来源', width: 88,
+      render: r => (r.source === 'manual' ? <Badge tone="brand">人工</Badge> : <Badge tone="green">自动</Badge>),
     },
+    { key: 'note', title: '备注', width: 180, render: r => <span className="muted">{r.note || '—'}</span> },
     {
-      title: '来源', dataIndex: 'source', width: 88,
-      render: (s: string) =>
-        s === 'manual'
-          ? <Tag color="blue" style={{ marginInlineEnd: 0 }}>人工</Tag>
-          : <Tag color="green" style={{ marginInlineEnd: 0 }}>自动</Tag>,
-    },
-    { title: '备注', dataIndex: 'note', width: 180, ellipsis: true, render: (v?: string) => v || '—' },
-    {
-      title: '', key: 'op', width: 44, align: 'right',
-      render: (_, r) => (
+      key: 'op', title: '', width: 44, align: 'right',
+      render: r => (
         <Button
-          type="text" size="small" danger
-          icon={<DeleteOutlined />}
+          size="sm" variant="ghost" icon="trash"
           aria-label={`删除 ${r.modelName} 的模型级系数`}
           onClick={() => void handleDeleteModel(r)}
         />
@@ -148,25 +148,22 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
     },
   ];
 
-  const columns: ColumnsType<Row> = [
-    { title: '厂商', dataIndex: 'vendor', width: 160 },
+  const columns: Column<Row>[] = [
+    { key: 'vendor', title: '厂商', width: 160, render: r => <span className="mono">{r.vendor}</span> },
     {
-      title: '成本系数', dataIndex: 'ratio', width: 150,
-      render: (_, r) => (
-        <InputNumber
-          min={0.0001}
-          step={0.01}
-          precision={4}
-          style={{ width: 110 }}
-          value={r.ratio ?? undefined}
+      key: 'ratio', title: '成本系数', width: 150,
+      render: r => (
+        <Input
+          type="number" min={0.0001} step={0.01} style={{ width: 110 }}
+          value={r.ratio ?? ''}
           placeholder="必填"
-          onChange={v => patch(r.vendor, { ratio: v == null ? null : Number(v) })}
+          onChange={e => patch(r.vendor, { ratio: e.target.value === '' ? null : Number(e.target.value) })}
         />
       ),
     },
     {
-      title: '备注', dataIndex: 'note',
-      render: (_, r) => (
+      key: 'note', title: '备注',
+      render: r => (
         <Input
           value={r.note}
           placeholder="如:$10 买 $60 额度"
@@ -175,11 +172,10 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
       ),
     },
     {
-      title: '', key: 'op', width: 44, align: 'right',
-      render: (_, r) => (
+      key: 'op', title: '', width: 44, align: 'right',
+      render: r => (
         <Button
-          type="text" size="small" danger
-          icon={<DeleteOutlined />}
+          size="sm" variant="ghost" icon="trash"
           aria-label={`删除 ${r.vendor} 的系数`}
           onClick={() => setRows(rs => rs.filter(x => x.vendor !== r.vendor))}
         />
@@ -187,88 +183,98 @@ export default function CostRatioModal({ open, channel, onClose }: Props) {
     },
   ];
 
+  if (!open) return null;
+
+  const modelTotal = modelRows.length;
+  const pagedModels = modelTotal > MODEL_PAGE
+    ? modelRows.slice((modelPage - 1) * MODEL_PAGE, modelPage * MODEL_PAGE)
+    : modelRows;
+
   return (
-    <Modal
-      title={channel ? `成本系数 · ${channel.name}` : '成本系数'}
-      open={open}
-      onCancel={onClose}
-      onOk={handleSave}
-      confirmLoading={saving}
-      okText="保存厂商级系数"
-      cancelText="取消"
-      okButtonProps={{ disabled: invalid }}
-      width={760}
-      destroyOnHidden
-    >
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        message="成本 = 官方价 × 系数(查找顺序:模型级 → 厂商级 → 1.0)"
-        description={
-          <span style={{ fontSize: 12.5 }}>
-            <b>模型级</b>由订阅计划页(CC GOAT / opencode Go)自动派生 —— 系数 = 订阅价 ÷ 该模型月度额度,
-            每模型一个值;可在下方逐行删除以退回厂商级。<b>厂商级</b>是兜底,官方价一变、系数一改即时重算。
-          </span>
+    <div className="overlay" style={{ zIndex: 70 }}>
+      <Modal
+        title={channel ? `成本系数 · ${channel.name}` : '成本系数'}
+        onClose={onClose}
+        width={760}
+        footer={
+          <>
+            <Button onClick={onClose}>取消</Button>
+            <Button variant="primary" disabled={invalid} loading={saving} onClick={() => void handleSave()}>
+              保存厂商级系数
+            </Button>
+          </>
         }
-      />
+      >
+        <div className="note note-info" role="status" style={{ marginBottom: 12 }}>
+          <div>
+            <b>成本 = 官方价 × 系数(查找顺序:模型级 → 厂商级 → 1.0)</b>
+            <div style={{ fontSize: 12.5, marginTop: 2 }}>
+              <b>模型级</b>由订阅计划页(CC GOAT / opencode Go)自动派生 —— 系数 = 订阅价 ÷ 该模型月度额度,
+              每模型一个值;可在下方逐行删除以退回厂商级。<b>厂商级</b>是兜底,官方价一变、系数一改即时重算。
+            </div>
+          </div>
+        </div>
 
-      <div style={{ fontWeight: 600, margin: '4px 0 8px' }}>模型级(订阅计划自动派生)</div>
-      {modelError && (
-        <Alert
-          type="error"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="模型级系数加载失败"
-          description={(modelErr as Error)?.message}
-          action={<Button size="small" onClick={() => void refetchModels()}>重试</Button>}
-        />
-      )}
-      <Table
-        rowKey="modelName"
-        size="small"
-        columns={modelColumns}
-        dataSource={modelRows}
-        loading={modelLoading}
-        pagination={modelRows.length > 12 ? { pageSize: 12, size: 'small' } : false}
-        locale={{ emptyText: '尚无模型级系数 —— 点「官方定价」页的「从订阅计划抓取」自动派生' }}
-      />
+        <div className="strong" style={{ margin: '4px 0 8px' }}>模型级(订阅计划自动派生)</div>
+        {modelError && (
+          <div className="note note-warn" style={{ marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <b style={{ color: 'var(--err)' }}>模型级系数加载失败</b>
+              <div>{(modelErr as Error)?.message}</div>
+            </div>
+            <Button size="sm" onClick={() => void refetchModels()}>重试</Button>
+          </div>
+        )}
+        {modelLoading ? (
+          <div className="cell-sub">加载中…</div>
+        ) : modelTotal === 0 ? (
+          <Empty icon="box" title="尚无模型级系数" desc="点「官方定价」页的「从订阅计划抓取」自动派生" />
+        ) : (
+          <>
+            <Table<ModelCostRatioRow> columns={modelColumns} rows={pagedModels} rowKey={r => r.modelName} />
+            {modelTotal > MODEL_PAGE && (
+              <Pager total={modelTotal} page={modelPage} size={MODEL_PAGE} onChange={setModelPage} />
+            )}
+          </>
+        )}
 
-      <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>厂商级(兜底层)</div>
-      {isError && (
-        <Alert
-          type="error"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="厂商级系数加载失败"
-          description={(error as Error)?.message}
-          action={<Button size="small" onClick={() => void refetch()}>重试</Button>}
-        />
-      )}
-      <Table
-        rowKey="vendor"
-        size="small"
-        columns={columns}
-        dataSource={rows}
-        loading={isLoading}
-        pagination={false}
-        locale={{ emptyText: '未配置厂商级兜底 —— 模型级缺行时按 1.0 计(成本 = 官方挂牌价)' }}
-      />
+        <div className="strong" style={{ margin: '16px 0 8px' }}>厂商级(兜底层)</div>
+        {isError && (
+          <div className="note note-warn" style={{ marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <b style={{ color: 'var(--err)' }}>厂商级系数加载失败</b>
+              <div>{(error as Error)?.message}</div>
+            </div>
+            <Button size="sm" onClick={() => void refetch()}>重试</Button>
+          </div>
+        )}
+        {isLoading ? (
+          <div className="cell-sub">加载中…</div>
+        ) : rows.length === 0 ? (
+          <Empty icon="box" title="未配置厂商级兜底" desc="模型级缺行时按 1.0 计(成本 = 官方挂牌价)" />
+        ) : (
+          <Table<Row> columns={columns} rows={rows} rowKey={r => r.vendor} />
+        )}
 
-      <div style={{ marginTop: 12 }}>
-        <Select
-          style={{ width: 240 }}
-          placeholder="添加厂商"
-          value={null}
-          suffixIcon={<PlusOutlined />}
-          disabled={addable.length === 0}
-          options={addable.map(v => ({ value: v.provider, label: v.provider }))}
-          onSelect={(v: Provider | null) => v && addVendor(v)}
-        />
-        <span className="gw-note" style={{ marginLeft: 10, fontSize: 12.5 }}>
-          系数 0 不接受(要表达免费请删除该行)
-        </span>
-      </div>
-    </Modal>
+        <div style={{ marginTop: 12 }}>
+          <Select
+            style={{ width: 240 }}
+            value=""
+            disabled={addable.length === 0}
+            onChange={e => {
+              const v = e.target.value;
+              if (v) addVendor(v as Provider);
+            }}
+            options={[
+              { value: '', label: '添加厂商' },
+              ...addable.map(v => ({ value: v.provider, label: v.provider })),
+            ]}
+          />
+          <span className="muted" style={{ marginLeft: 10, fontSize: 12.5 }}>
+            系数 0 不接受(要表达免费请删除该行)
+          </span>
+        </div>
+      </Modal>
+    </div>
   );
 }

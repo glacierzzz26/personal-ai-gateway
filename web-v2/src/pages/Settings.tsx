@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { App, Button, Input, InputNumber, Select, Slider, Switch } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Block as BlockCard, Blocks } from '@/components/Block';
+import { Block as BlockCard, BlockBody, BlockHead, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import { DegradedNote, ErrorState, SkLines } from '@/components/States';
+import { Button, Input, Select, Switch } from '@/ui/primitives';
+import { confirm } from '@/ui/overlay';
+import { message } from '@/ui/toast';
 import { api } from '@/services/api';
 import type { PriceCurrency, Settings as SettingsModel } from '@/types';
 
@@ -19,6 +21,43 @@ const TZ_OPTIONS = [
   { value: 540, label: 'UTC+9 东京 / 首尔' },
   { value: 600, label: 'UTC+10 悉尼' },
 ];
+
+/** 纯数字输入 + 后缀单位（替代 antd InputNumber 的 addonAfter）。 */
+function Num({
+  value,
+  onChange,
+  width = 160,
+  min,
+  max,
+  step,
+  suffix,
+  placeholder,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  width?: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  suffix?: string;
+  placeholder?: string;
+}) {
+  return (
+    <span className="hstack" style={{ gap: 8 }}>
+      <Input
+        type="number"
+        style={{ width }}
+        min={min}
+        max={max}
+        step={step}
+        placeholder={placeholder}
+        value={value}
+        onChange={e => onChange(Number(e.target.value))}
+      />
+      {suffix && <span className="cell-sub">{suffix}</span>}
+    </span>
+  );
+}
 
 interface RowDef {
   key: string;
@@ -38,8 +77,29 @@ interface Group {
   rows: RowDef[];
 }
 
+/** 设置行：左侧「标题 + 说明」，右侧控件。 */
+function SettingRow({ title, desc, children }: { title: ReactNode; desc: ReactNode; children: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0,1fr) minmax(0,340px)',
+        gap: 20,
+        alignItems: 'start',
+        padding: '12px 0',
+        borderBottom: '1px solid var(--line-2)',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div className="strong" style={{ fontSize: 13 }}>{title}</div>
+        <div className="cell-sub" style={{ whiteSpace: 'normal', lineHeight: 1.55, marginTop: 3 }}>{desc}</div>
+      </div>
+      <div style={{ justifySelf: 'end', width: '100%' }}>{children}</div>
+    </div>
+  );
+}
+
 export default function Settings() {
-  const { message, modal } = App.useApp();
   const qc = useQueryClient();
 
   const { data: server, isLoading, error, refetch } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
@@ -71,25 +131,27 @@ export default function Settings() {
   };
 
   const clearLogs = () => {
-    modal.confirm({
+    void confirm({
       title: '清空全部请求日志?',
       content: '所有日志与用量统计将被删除,此操作不可恢复。',
-      okText: '清空', okButtonProps: { danger: true }, cancelText: '取消',
-      onOk: async () => {
-        setClearing(true);
-        try {
-          await api.clearLogs();
-          message.success('日志已清空');
-          await qc.invalidateQueries({ queryKey: ['logs'] });
-          await qc.invalidateQueries({ queryKey: ['recentLogs'] });
-          await qc.invalidateQueries({ queryKey: ['overview'] });
-          await qc.invalidateQueries({ queryKey: ['usage'] });
-        } catch (e) {
-          message.error(e instanceof Error ? e.message : '清空失败');
-        } finally {
-          setClearing(false);
-        }
-      },
+      okText: '清空',
+      cancelText: '取消',
+      danger: true,
+    }).then(async ok => {
+      if (!ok) return;
+      setClearing(true);
+      try {
+        await api.clearLogs();
+        message.success('日志已清空');
+        await qc.invalidateQueries({ queryKey: ['logs'] });
+        await qc.invalidateQueries({ queryKey: ['recentLogs'] });
+        await qc.invalidateQueries({ queryKey: ['overview'] });
+        await qc.invalidateQueries({ queryKey: ['usage'] });
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '清空失败');
+      } finally {
+        setClearing(false);
+      }
     });
   };
 
@@ -100,15 +162,16 @@ export default function Settings() {
         {
           key: 'timeout', t: '请求超时', d: '上游在该窗口内无响应即中断并尝试下一个供给源；应留出上游最慢一次生成的时间',
           render: (f, s) => (
-            <InputNumber style={{ width: 150 }} min={1000} step={1000} value={f.requestTimeoutMs}
-              addonAfter="ms" onChange={v => s('requestTimeoutMs', Number(v) || 90000)} />
+            <Num
+              value={f.requestTimeoutMs} width={150} min={1000} step={1000} suffix="ms"
+              onChange={v => s('requestTimeoutMs', v || 90000)}
+            />
           ),
         },
         {
           key: 'retries', t: '最大重试', d: '同一请求切换供给源的最大次数',
           render: (f, s) => (
-            <InputNumber style={{ width: 130 }} min={0} max={10} value={f.maxRetries}
-              addonAfter="次" onChange={v => s('maxRetries', Number(v) || 0)} />
+            <Num value={f.maxRetries} width={130} min={0} max={10} suffix="次" onChange={v => s('maxRetries', v || 0)} />
           ),
         },
         {
@@ -123,7 +186,7 @@ export default function Settings() {
         {
           key: 'proxy', t: 'HTTP 代理', d: '出站请求经代理转发,留空则直连',
           render: (f, s) => (
-            <Input style={{ width: 280 }} placeholder="http://127.0.0.1:7890"
+            <Input style={{ width: '100%' }} placeholder="http://127.0.0.1:7890"
               value={f.httpProxy ?? ''} onChange={e => s('httpProxy', e.target.value)} />
           ),
         },
@@ -140,7 +203,7 @@ export default function Settings() {
           key: 'retention', t: '保留天数', d: '超期日志自动清理,0 = 不清理',
           render: (f, s) => (
             <Select style={{ width: 170 }} value={f.logRetentionDays}
-              onChange={v => s('logRetentionDays', v)}
+              onChange={e => s('logRetentionDays', Number(e.target.value))}
               options={[{ value: 0, label: '不自动清理' }, { value: 7, label: '7 天' }, { value: 30, label: '30 天' }, { value: 90, label: '90 天' }]} />
           ),
         },
@@ -151,10 +214,13 @@ export default function Settings() {
         {
           key: 'sample', t: '采样率', d: '个人规模建议 100;高流量时可降低采样以省空间',
           render: (f, s) => (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Slider style={{ flex: 1 }} min={0} max={100} value={f.sampleRatePct}
-                onChange={v => s('sampleRatePct', v)} />
-              <span className="gw-num" style={{ width: 46, textAlign: 'right' }}>{f.sampleRatePct}%</span>
+            <div className="hstack" style={{ gap: 12 }}>
+              <input
+                type="range" min={0} max={100} value={f.sampleRatePct}
+                style={{ flex: 1, accentColor: 'var(--brand)' }}
+                onChange={e => s('sampleRatePct', Number(e.target.value))}
+              />
+              <span className="num" style={{ width: 46, textAlign: 'right' }}>{f.sampleRatePct}%</span>
             </div>
           ),
         },
@@ -166,13 +232,14 @@ export default function Settings() {
         {
           key: 'tz', t: '时区', d: '影响日志时间与统计分桶的本地口径',
           render: (f, s) => (
-            <Select style={{ width: 280 }} value={f.tzOffsetMin} onChange={v => s('tzOffsetMin', v)} options={TZ_OPTIONS} />
+            <Select style={{ width: 280 }} value={f.tzOffsetMin}
+              onChange={e => s('tzOffsetMin', Number(e.target.value))} options={TZ_OPTIONS} />
           ),
         },
         {
           key: 'publicBaseUrl', t: '对外基址', d: '生成 Claude 配置时的网关地址(如 https://ai-gateway.lan);留空则按访问地址推断',
           render: (f, s) => (
-            <Input style={{ width: 320 }} placeholder="留空 = 按访问地址推断"
+            <Input style={{ width: '100%' }} placeholder="留空 = 按访问地址推断"
               value={f.publicBaseUrl ?? ''} onChange={e => s('publicBaseUrl', e.target.value)} />
           ),
         },
@@ -180,8 +247,8 @@ export default function Settings() {
           key: 'displayCurrency', t: '计价币种',
           d: '全站价格(模型单价 / 用量花费 / 官方参考价)统一按此币种展示,也是「应用官方价」的目标币种',
           render: (f, s) => (
-            <Select<PriceCurrency> style={{ width: 200 }} value={f.displayCurrency ?? 'CNY'}
-              onChange={v => s('displayCurrency', v)}
+            <Select style={{ width: 200 }} value={f.displayCurrency ?? 'CNY'}
+              onChange={e => s('displayCurrency', e.target.value as PriceCurrency)}
               options={[{ value: 'CNY', label: '人民币 ¥' }, { value: 'USD', label: '美元 $' }]} />
           ),
         },
@@ -189,11 +256,9 @@ export default function Settings() {
           key: 'usdPerCny', t: 'USD/CNY 汇率',
           d: '仅当官方价原币种与计价币种不一致时用于折算(如官方为美元、计价为人民币)。手工维护:1 元人民币合多少美元就填多少(如 0.139);留 0 = 未设,此时拒绝折算,不臆造汇率',
           render: (f, s) => (
-            <InputNumber
-              style={{ width: 200 }} min={0} max={10} step={0.001} precision={4}
-              placeholder="0 = 未设"
-              value={f.usdPerCny ?? 0}
-              onChange={v => s('usdPerCny', Number(v) || 0)}
+            <Num
+              value={f.usdPerCny ?? 0} width={200} min={0} max={10} step={0.001}
+              placeholder="0 = 未设" onChange={v => s('usdPerCny', v || 0)}
             />
           ),
         },
@@ -201,11 +266,9 @@ export default function Settings() {
           key: 'priceMultiplier', t: '全局售价倍率',
           d: '本站价 = 官方价 × 倍率,是展示给用户的售价口径(成本仅管理员可见)。留空或 0 = 1.0 不加价;单个模型可在「模型广场」编辑页单独覆盖',
           render: (f, s) => (
-            <InputNumber
-              style={{ width: 200 }} min={0.01} max={1000} step={0.1} precision={2}
-              placeholder="1 = 不加价"
-              value={f.priceMultiplier ?? 1}
-              onChange={v => s('priceMultiplier', Number(v) || 1)}
+            <Num
+              value={f.priceMultiplier ?? 1} width={200} min={0.01} max={1000} step={0.1}
+              placeholder="1 = 不加价" onChange={v => s('priceMultiplier', v || 1)}
             />
           ),
         },
@@ -217,7 +280,7 @@ export default function Settings() {
       rows: [
         {
           key: 'db', t: '数据库', d: '日志、渠道、令牌与设置同库存放(gateway-v2.db,SQLite WAL)',
-          render: () => <span className="gw-mono" style={{ color: 'var(--gw-text-3)' }}>gateway-v2.db</span>,
+          render: () => <span className="mono muted">gateway-v2.db</span>,
         },
       ],
     },
@@ -232,13 +295,13 @@ export default function Settings() {
 
   if (!form) {
     return (
-      <div className="gw-page">
+      <>
         <PageHeader title="系统设置" desc="网关运行参数" />
         <Blocks>
           <BlockCard>
-            <div style={{ padding: '18px 20px' }}>
+            <BlockBody>
               {isLoading ? (
-                <SkLines rows={['w40', 'w80', 'w60', 'w80', 'w60']} />
+                <SkLines rows={['', 'w80', 'w60', 'w80', 'w60']} />
               ) : (
                 <ErrorState
                   title="设置加载失败"
@@ -246,20 +309,20 @@ export default function Settings() {
                   onRetry={() => void refetch()}
                 />
               )}
-            </div>
+            </BlockBody>
           </BlockCard>
         </Blocks>
-      </div>
+      </>
     );
   }
 
   return (
-    <div className="gw-page">
+    <>
       <PageHeader
         title="系统设置"
         desc="网关运行参数；改动保存后对后续请求即时生效"
         extra={
-          <Button type="primary" loading={saving} onClick={save}>
+          <Button variant="primary" loading={saving} onClick={save}>
             保存设置
           </Button>
         }
@@ -267,65 +330,65 @@ export default function Settings() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,168px) minmax(0,1fr)', gap: 24, alignItems: 'start' }}>
         <nav
-          className="gw-anchor"
           aria-label="设置分组"
-          style={{ position: 'sticky', top: 86 }}
+          style={{ position: 'sticky', top: 12, display: 'flex', flexDirection: 'column', gap: 2 }}
         >
-          {groups.map(g => (
-            <button
-              key={g.id}
-              type="button"
-              aria-current={active === g.id}
-              onClick={() => goTo(g.id)}
-            >
-              {g.title}
-            </button>
-          ))}
+          {groups.map(g => {
+            const on = active === g.id;
+            return (
+              <button
+                key={g.id}
+                type="button"
+                aria-current={on}
+                onClick={() => goTo(g.id)}
+                style={{
+                  textAlign: 'left', padding: '6px 10px', borderRadius: 4, fontSize: 12.5,
+                  border: 'none', cursor: 'pointer',
+                  background: on ? 'var(--brand-soft)' : 'transparent',
+                  color: on ? 'var(--t1)' : 'var(--t2)',
+                  fontWeight: on ? 600 : 400,
+                }}
+              >
+                {g.title}
+              </button>
+            );
+          })}
         </nav>
 
         <Blocks>
           {groups.map(g => (
             <BlockCard key={g.id} id={g.id}>
-              <div
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 11,
-                  padding: '16px 20px', borderBottom: '1px solid var(--gw-border)',
-                }}
-              >
-                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 500, color: 'var(--gw-text)' }}>{g.title}</h3>
-                {g.note && <span style={{ fontSize: 13.5, color: 'var(--gw-text-3)' }}>{g.note}</span>}
-                {g.danger && (
-                  <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 11 }}>
-                    <span style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>{g.danger.text}</span>
-                    <Button size="small" danger loading={g.danger.loading} onClick={g.danger.run}>
-                      {g.danger.label}
-                    </Button>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ padding: '4px 20px 8px' }}>
-                {g.rows.map(r => (
-                  <div className="gw-settings-row" key={r.key}>
-                    <div>
-                      <div className="sl">{r.t}</div>
-                      <div className="sd">{r.d}</div>
+              <BlockHead
+                title={g.title}
+                sub={g.note}
+                right={
+                  g.danger && (
+                    <div className="hstack" style={{ gap: 11 }}>
+                      <span className="small muted">{g.danger.text}</span>
+                      <Button size="sm" variant="danger" loading={g.danger.loading} onClick={g.danger.run}>
+                        {g.danger.label}
+                      </Button>
                     </div>
-                    <div style={{ justifySelf: 'end', width: '100%', maxWidth: 340 }}>{r.render(form, set)}</div>
-                  </div>
+                  )
+                }
+              />
+              <BlockBody>
+                {g.rows.map(r => (
+                  <SettingRow key={r.key} title={r.t} desc={r.d}>
+                    {r.render(form, set)}
+                  </SettingRow>
                 ))}
-              </div>
-
+              </BlockBody>
               {g.persisted && (
-                <div
+                <BlockBody
                   style={{
-                    padding: '12px 20px', borderTop: '1px solid var(--gw-border)',
+                    borderTop: '1px solid var(--line)',
                     display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12,
                   }}
                 >
-                  <span style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>保存后对后续请求即时生效</span>
-                  <Button size="small" type="primary" loading={saving} onClick={save}>保存</Button>
-                </div>
+                  <span className="small muted">保存后对后续请求即时生效</span>
+                  <Button size="sm" variant="primary" loading={saving} onClick={save}>保存</Button>
+                </BlockBody>
               )}
             </BlockCard>
           ))}
@@ -336,6 +399,6 @@ export default function Settings() {
           </DegradedNote>
         </Blocks>
       </div>
-    </div>
+    </>
   );
 }

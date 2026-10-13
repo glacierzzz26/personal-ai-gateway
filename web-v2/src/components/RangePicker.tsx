@@ -1,12 +1,14 @@
 import dayjs, { type Dayjs } from 'dayjs';
-import { DatePicker, Segmented } from 'antd';
+import { useState } from 'react';
+import { Seg } from '@/ui/primitives';
+import { toast } from '@/ui/toast';
 import type { StatRangeQuery } from '@/types';
 import { STAT_MAX_DAYS } from '@/types';
 
 /* 预设与自定义共用一套「本地自然日」口径:
    预设 N 天 = 最近 N 个自然日(含今天) -> 提交 { days: N };
    手选区间     = [起, 止] 含首尾 -> 提交 { from, to }。
-   为让 chip 选中态直观,若手选区间的起止正好等于某个预设窗口,就回退成预设。 */
+   为让选中态直观,若手选区间的起止正好等于某个预设窗口,就回退成预设。 */
 
 export const PRESETS = [1, 7, 30] as const;
 export type PresetDays = (typeof PRESETS)[number];
@@ -76,56 +78,97 @@ export function previousWindow(r: SelectedRange): StatRangeQuery {
 /**
  * 统计窗口选择器:1天/7天/30天 预设 + 自定义日期区间(≤90 天,日志保留上限)。
  * 受控组件 —— 选中态与提交态都由父级持有,便于图表副标题同步。
+ * UI 对齐原型 .seg；自定义区间用两个原生 date 输入(不引 antd DatePicker)。
  */
 export default function RangePicker({
   value,
   onChange,
-  size = 'middle',
+  size,
 }: {
   value: SelectedRange;
   onChange: (r: SelectedRange) => void;
-  size?: 'small' | 'middle' | 'large';
+  size?: 'sm';
 }) {
   const active: PresetDays | 'custom' = value.days ?? 'custom';
+  const [customOpen, setCustomOpen] = useState(false);
+  const [cf, setCf] = useState(() => (value.from ? value.from.format('YYYY-MM-DD') : presetBounds(1)[0].format('YYYY-MM-DD')));
+  const [ct, setCt] = useState(() => (value.to ? value.to.format('YYYY-MM-DD') : presetBounds(1)[1].format('YYYY-MM-DD')));
 
   const pickPreset = (n: number) => {
     const [from, to] = presetBounds(n);
+    setCustomOpen(false);
     onChange({ days: n as PresetDays, from, to });
   };
 
-  const pickCustom = (vals: [Dayjs | null, Dayjs | null] | null) => {
-    if (!vals || !vals[0] || !vals[1]) return;
-    const [from, to] = vals;
+  const applyCustom = (fromStr: string, toStr: string) => {
+    if (!fromStr || !toStr) return;
+    const from = dayjs(fromStr).startOf('day');
+    const to = dayjs(toStr).startOf('day');
+    if (from.isAfter(to)) {
+      toast('起始日期不能晚于结束日期', 'err');
+      return;
+    }
+    if (to.isAfter(dayjs(), 'day')) {
+      toast('结束日期不能晚于今天', 'err');
+      return;
+    }
+    if (to.diff(from, 'day') + 1 > STAT_MAX_DAYS) {
+      toast(`自定义区间最长 ${STAT_MAX_DAYS} 天`, 'err');
+      return;
+    }
     const hit = snapPreset(from, to);
     if (hit) {
       pickPreset(hit);
       return;
     }
-    onChange({ days: null, from: from.startOf('day'), to: to.startOf('day') });
+    onChange({ days: null, from, to });
   };
 
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-      <Segmented
+    <div className="hstack wrap" style={{ gap: 8 }}>
+      <Seg
         size={size}
         value={active}
-        onChange={v => { if (v !== 'custom') pickPreset(Number(v)); }}
+        onChange={(v) => {
+          if (v === 'custom') {
+            setCustomOpen(true);
+            applyCustom(cf, ct);
+          } else {
+            pickPreset(Number(v));
+          }
+        }}
         options={[
-          ...PRESETS.map(d => ({ value: d, label: `近 ${d} 天` })),
-          { value: 'custom', label: '自定义' },
+          ...PRESETS.map((d) => ({ value: d, label: `近 ${d} 天` })),
+          { value: 'custom' as const, label: '自定义' },
         ]}
       />
-      <DatePicker.RangePicker
-        size={size}
-        allowClear={false}
-        value={value.from && value.to ? [value.from, value.to] : null}
-        onChange={v => pickCustom(v)}
-        disabledDate={d => !!d && (d.isAfter(dayjs(), 'day') || d.isBefore(dayjs().subtract(STAT_MAX_DAYS - 1, 'day').startOf('day'), 'day'))}
-        presets={PRESETS.map(d => {
-          const [from, to] = presetBounds(d);
-          return { label: `近 ${d} 天`, value: [from, to] as [Dayjs, Dayjs] };
-        })}
-      />
+      {customOpen && (
+        <div className="hstack" style={{ gap: 5 }}>
+          <input
+            type="date"
+            className="input"
+            style={{ width: 150 }}
+            value={cf}
+            max={ct}
+            onChange={(e) => {
+              setCf(e.target.value);
+              applyCustom(e.target.value, ct);
+            }}
+          />
+          <span className="muted small">~</span>
+          <input
+            type="date"
+            className="input"
+            style={{ width: 150 }}
+            value={ct}
+            min={cf}
+            onChange={(e) => {
+              setCt(e.target.value);
+              applyCustom(cf, e.target.value);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

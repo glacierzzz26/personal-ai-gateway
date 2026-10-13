@@ -1,4 +1,3 @@
-import { TOKENS } from '@/styles/tokens';
 import { currentCurrency } from '@/stores/currency';
 import type { PriceCurrency } from '@/types';
 
@@ -49,10 +48,10 @@ export const CAP_LABEL: Record<string, string> = {
 export type Tone = 'ok' | 'warn' | 'err' | 'aux';
 
 export const TONE_COLOR: Record<Tone, string> = {
-  ok: TOKENS.ok,
-  warn: TOKENS.warn,
-  err: TOKENS.err,
-  aux: TOKENS.aux,
+  ok: 'var(--ok)',
+  warn: 'var(--warn)',
+  err: 'var(--err)',
+  aux: 'var(--brand)',
 };
 
 /** 渠道 / 令牌状态 → 文字 + 语义色 */
