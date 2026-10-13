@@ -1,20 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  App, Button, Card, Checkbox, Col, Drawer, Dropdown, Empty, Form, Input, InputNumber,
+  Modal, Row, Select, Space, Switch, Table, Tabs, Tooltip,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
+import { MoreOutlined, PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import Chart, { ChartLegend } from '@/components/Chart';
+import Chart from '@/components/Chart';
 import ProviderMark from '@/components/ProviderMark';
 import StatusDot from '@/components/StatusDot';
 import OfficialPricePanel from '@/components/models/OfficialPricePanel';
 import { useSortableRows } from '@/hooks/useSortableRows';
+import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { capabilities as ALL_CAPS } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
 import { channelLabel, channelMark } from '@/utils/channel';
-import {
-  Button, Card, CardBody, CardHead, Checkbox, Empty, Field, Input, Kpi, Note, Seg, Select, Switch, Table, Textarea,
-} from '@/ui/primitives';
-import type { Column } from '@/ui/primitives';
-import { Drawer, Dropdown, Modal, confirm } from '@/ui/overlay';
-import { message } from '@/ui/toast';
+import type { EChartsOption } from 'echarts';
 import type { Capability, Channel, ModelCatalogItem, ModelDraft, ModelOffer, ModelUsageData, OfferDraft } from '@/types';
 
 /* —— 成本 / 本站价 / 毛利 三列 ——
@@ -33,28 +36,35 @@ function CostCell({ r }: { r: ModelOffer }) {
   const c = r.cost;
   if (!c || c.source === 'unknown') {
     return (
-      <span style={{ color: 'var(--t3)', fontSize: 12.5 }} title="未绑定官方价,且该供给源四价为空 —— 没有成本依据。到「官方定价」页把模型绑定到官方价,或手工填兜底价。">
-        未知
-      </span>
+      <Tooltip title="未绑定官方价,且该供给源四价为空 —— 没有成本依据。到「官方定价」页把模型绑定到官方价,或手工填兜底价。">
+        <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>未知</span>
+      </Tooltip>
     );
   }
   const derived = c.source === 'official';
-  const title = [
-    `输入 ${fmt.price(c.in)} · 输出 ${fmt.price(c.out)}`,
-    c.cacheRead ? `缓存读 ${fmt.price(c.cacheRead)}` : '',
-    c.cacheWrite ? `缓存写 ${fmt.price(c.cacheWrite)}` : '',
-    derived
-      ? `官方价 × ${c.ratio}${c.ratio === 1 ? '(未设系数,按 1.0 计 —— 会高估成本)' : `(${c.vendor} 渠道系数)`}`
-      : '手填兜底价(未绑定官方价)',
-    c.warn ?? '',
-  ].filter(Boolean).join('\n');
   return (
-    <span className="num" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end' }} title={title}>
-      <span>{fmt.price(c.in)}</span>
-      <span style={{ fontSize: 11, color: derived && c.ratio === 1 ? 'var(--warn)' : 'var(--t3)' }}>
-        {derived ? (c.ratio === 1 ? '系数未设' : `官方×${c.ratio}`) : '手填'}
+    <Tooltip
+      title={
+        <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+          <div>
+            输入 {fmt.price(c.in)} · 输出 {fmt.price(c.out)}
+            {c.cacheRead ? ` · 缓存读 ${fmt.price(c.cacheRead)}` : ''}
+            {c.cacheWrite ? ` · 缓存写 ${fmt.price(c.cacheWrite)}` : ''}
+          </div>
+          {derived
+            ? <div>官方价 × {c.ratio}{c.ratio === 1 ? '(未设系数,按 1.0 计 —— 会高估成本)' : `(${c.vendor} 渠道系数)`}</div>
+            : <div>手填兜底价(未绑定官方价)</div>}
+          {c.warn && <div style={{ color: 'var(--gw-warn)' }}>{c.warn}</div>}
+        </div>
+      }
+    >
+      <span className="gw-num" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+        <span>{fmt.price(c.in)}</span>
+        <span style={{ fontSize: 11, color: derived && c.ratio === 1 ? 'var(--gw-warn)' : 'var(--gw-text-3)' }}>
+          {derived ? (c.ratio === 1 ? '系数未设' : `官方×${c.ratio}`) : '手填'}
+        </span>
       </span>
-    </span>
+    </Tooltip>
   );
 }
 
@@ -63,9 +73,9 @@ function RetailCell({ r, rate }: { r: ModelOffer; rate: number }) {
   const c = r.cost;
   if (!c || c.source === 'unknown') {
     return (
-      <span className="num" style={{ color: 'var(--t3)' }} title="无成本依据,本站价无从对照。左列四价是该供给源手填值。">
-        {fmt.price(r.inputPriceUsd)}
-      </span>
+      <Tooltip title="无成本依据,本站价无从对照。左列四价是该供给源手填值。">
+        <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{fmt.price(r.inputPriceUsd)}</span>
+      </Tooltip>
     );
   }
   // 派生:售价 = 官方价 × rate = 成本 ÷ ratio × rate。
@@ -74,11 +84,11 @@ function RetailCell({ r, rate }: { r: ModelOffer; rate: number }) {
     ? c.in * (rate / (c.ratio || 1))
     : c.in * rate;
   return (
-    <span className="num" title={c.source === 'official'
+    <Tooltip title={c.source === 'official'
       ? `官方价 × 倍率 ${rate}`
       : `手填成本 × 倍率 ${rate}(未绑定官方价,计费走成本×倍率)`}>
-      {fmt.price(retail)}
-    </span>
+      <span className="gw-num">{fmt.price(retail)}</span>
+    </Tooltip>
   );
 }
 
@@ -87,18 +97,20 @@ function MarginCell({ r, rate }: { r: ModelOffer; rate: number }) {
   const c = r.cost;
   if (!c || c.source === 'unknown') {
     return (
-      <span style={{ color: 'var(--t3)', fontSize: 12.5 }} title="没有成本依据,算不出毛利。显示 0 或 100% 都是假的。">—</span>
+      <Tooltip title="没有成本依据,算不出毛利。显示 0 或 100% 都是假的。">
+        <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>—</span>
+      </Tooltip>
     );
   }
   const ratio = c.source === 'official' ? (c.ratio || 1) : 1;
   // 官方价在 1 − 成本/售价 里约掉了,于是只剩系数与倍率;兜底口径的等价形式是 1 − 1/rate。
   const m = 1 - ratio / (rate || 1);
   return (
-    <span className="num" style={{ color: m < 0 ? 'var(--err)' : undefined }} title={c.source === 'official'
+    <Tooltip title={c.source === 'official'
       ? `毛利 = 1 − 系数/倍率 = 1 − ${ratio}/${rate}`
       : `毛利 = 1 − 1/倍率 = 1 − 1/${rate}(成本为手填值,精确度取决于手填价)`}>
-      {fmt.pct(m, 1)}
-    </span>
+      <span className="gw-num" style={{ color: m < 0 ? 'var(--gw-err)' : undefined }}>{fmt.pct(m, 1)}</span>
+    </Tooltip>
   );
 }
 
@@ -109,33 +121,29 @@ interface Props {
   onDeleteModel: () => void;
 }
 
-/* —— 供给源 添加/编辑 弹窗 —— */
-
-interface OfferFormState {
-  channelId: string;
-  inputPriceUsd: string;
-  outputPriceUsd: string;
-  cacheReadPriceUsd: string;
-  cacheWritePriceUsd: string;
-  overridePrice: boolean;
-  rateLimitRpm: string;
-  enabled: boolean;
-  note: string;
-  upstreamModel: string;
+interface BasicFormValues {
+  name: string;
+  displayName?: string;
+  contextWindow: number;
+  capabilities: Capability[];
+  /** 售价倍率;undefined/空 = 跟随全局 settings.priceMultiplier */
+  rateOverride?: number | null;
 }
 
-const EMPTY_OFFER: OfferFormState = {
-  channelId: '',
-  inputPriceUsd: '0',
-  outputPriceUsd: '0',
-  cacheReadPriceUsd: '0',
-  cacheWritePriceUsd: '0',
-  overridePrice: false,
-  rateLimitRpm: '60',
-  enabled: true,
-  note: '',
-  upstreamModel: '',
-};
+/* —— 供给源 添加/编辑 弹窗 —— */
+
+interface OfferFormValues {
+  channelId?: number;
+  inputPriceUsd?: number;
+  outputPriceUsd?: number;
+  cacheReadPriceUsd?: number;
+  cacheWritePriceUsd?: number;
+  overridePrice?: boolean;
+  rateLimitRpm?: number;
+  enabled?: boolean;
+  note?: string;
+  upstreamModel?: string;
+}
 
 function OfferFormModal({ open, modelId, modelName, editing, channels, usedChannelIds, onClose }: {
   open: boolean;
@@ -147,31 +155,29 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
   usedChannelIds: number[];
   onClose: () => void;
 }) {
+  const { message } = App.useApp();
   const qc = useQueryClient();
+  const [form] = Form.useForm<OfferFormValues>();
   const isEdit = !!editing;
-  const [form, setForm] = useState<OfferFormState>(EMPTY_OFFER);
-  const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!open) return;
     if (editing) {
-      setForm({
-        channelId: String(editing.channelId),
-        inputPriceUsd: String(editing.inputPriceUsd),
-        outputPriceUsd: String(editing.outputPriceUsd),
-        cacheReadPriceUsd: String(editing.cacheReadPriceUsd ?? 0),
-        cacheWritePriceUsd: String(editing.cacheWritePriceUsd ?? 0),
+      form.setFieldsValue({
+        inputPriceUsd: editing.inputPriceUsd,
+        outputPriceUsd: editing.outputPriceUsd,
+        cacheReadPriceUsd: editing.cacheReadPriceUsd ?? 0,
+        cacheWritePriceUsd: editing.cacheWritePriceUsd ?? 0,
         overridePrice: editing.overridePrice,
-        rateLimitRpm: String(editing.rateLimitRpm),
+        rateLimitRpm: editing.rateLimitRpm,
         enabled: editing.enabled,
-        note: editing.note ?? '',
+        note: editing.note,
         upstreamModel: editing.upstreamModel ?? '',
       });
     } else {
-      setForm(EMPTY_OFFER);
+      form.resetFields();
     }
-    setErr('');
-  }, [open, editing]);
+  }, [open, editing, form]);
 
   // 后端 (model_id, channel_id) 唯一：新建时排除已挂渠道；编辑时渠道不可更换（更新接口不支持改 channel）
   const candidateChannels = useMemo(() => {
@@ -179,27 +185,24 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
     return channels.filter(c => !usedChannelIds.includes(c.id));
   }, [channels, editing, usedChannelIds]);
 
-  const set = <K extends keyof OfferFormState>(k: K, v: OfferFormState[K]) =>
-    setForm(f => ({ ...f, [k]: v }));
-
   const mutate = useMutation({
-    mutationFn: (values: OfferFormState) => {
+    mutationFn: (values: OfferFormValues) => {
       const draft: OfferDraft = {
-        channelId: editing ? editing.channelId : Number(values.channelId),
+        channelId: editing ? editing.channelId : (values.channelId ?? 0),
         inputPriceUsd: Number(values.inputPriceUsd) || 0,
         outputPriceUsd: Number(values.outputPriceUsd) || 0,
         cacheReadPriceUsd: Number(values.cacheReadPriceUsd) || 0,
         cacheWritePriceUsd: Number(values.cacheWritePriceUsd) || 0,
-        overridePrice: values.overridePrice,
-        rateLimitRpm: Number(values.rateLimitRpm) || 60,
-        enabled: values.enabled,
-        note: values.note,
+        overridePrice: values.overridePrice ?? false,
+        rateLimitRpm: values.rateLimitRpm || 60,
+        enabled: values.enabled ?? true,
+        note: values.note ?? '',
         // 编辑时原样回传来源留证(PATCH 全量替换,漏传会清空官方价来源)
         priceSourceUrl: editing?.priceSourceUrl,
         priceFetchedAt: editing?.priceFetchedAt,
         priceCurrency: editing?.priceCurrency,
         priceNativeText: editing?.priceNativeText,
-        upstreamModel: values.upstreamModel.trim(),
+        upstreamModel: (values.upstreamModel ?? '').trim(),
       };
       return editing ? api.updateOffer(editing.id, draft) : api.createOffer(modelId, draft);
     },
@@ -212,108 +215,157 @@ function OfferFormModal({ open, modelId, modelName, editing, channels, usedChann
     onError: (e) => message.error((e as Error)?.message || (isEdit ? '更新失败' : '添加失败')),
   });
 
-  const submit = () => {
-    if (!isEdit && !form.channelId) {
-      setErr('请选择渠道');
-      return;
-    }
-    setErr('');
-    mutate.mutate(form);
+  const submit = async () => {
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
+    mutate.mutate(values);
   };
 
   return (
-    <div className="overlay" style={{ zIndex: 80 }}>
-      <Modal
-        title={isEdit ? '编辑供给源' : '添加供给源'}
-        width={580}
-        onClose={onClose}
-        footer={
-          <>
-            <Button onClick={onClose}>取消</Button>
-            <Button variant="primary" loading={mutate.isPending} onClick={submit}>{isEdit ? '保存' : '添加'}</Button>
-          </>
-        }
+    <Modal
+      title={isEdit ? '编辑供给源' : '添加供给源'}
+      open={open}
+      onCancel={onClose}
+      onOk={submit}
+      confirmLoading={mutate.isPending}
+      okText={isEdit ? '保存' : '添加'}
+      cancelText="取消"
+      destroyOnHidden
+      width={580}
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          inputPriceUsd: 0,
+          outputPriceUsd: 0,
+          cacheReadPriceUsd: 0,
+          cacheWritePriceUsd: 0,
+          overridePrice: false,
+          rateLimitRpm: 60,
+          enabled: true,
+        }}
       >
         {isEdit ? (
-          <div style={{ marginBottom: 16 }}>
-            <Note>
-              渠道：<b>{editing.channelName}</b>（挂载后不可更换，如需换渠道请删除后重建）
-            </Note>
+          <div
+            style={{
+              border: '1px solid var(--gw-border)', borderLeft: '2px solid var(--gw-primary)',
+              borderRadius: 'var(--gw-r-card)', padding: '8px 10px', fontSize: 13, marginBottom: 16,
+              color: 'var(--gw-text-2)', background: 'var(--gw-bg)',
+            }}
+          >
+            渠道：<b>{editing.channelName}</b>（挂载后不可更换，如需换渠道请删除后重建）
           </div>
         ) : (
-          <Field
+          <Form.Item
+            name="channelId"
             label="渠道"
-            error={err}
-            hint="已为该模型提供过供给源的渠道不会出现在候选中"
+            rules={[{ required: true, message: '请选择渠道' }]}
+            extra="已为该模型提供过供给源的渠道不会出现在候选中"
           >
             <Select
-              value={form.channelId}
-              onChange={e => set('channelId', e.target.value)}
-              options={[
-                { value: '', label: candidateChannels.length ? '选择渠道' : '该模型可挂载的渠道都已存在供给源' },
-                ...candidateChannels.map(c => ({
-                  value: String(c.id),
-                  label: `${c.name} · ${channelLabel(c)}${c.enabled ? '' : '（渠道已停用）'}`,
-                })),
-              ]}
+              placeholder="选择渠道"
+              options={candidateChannels.map(c => ({
+                value: c.id,
+                label: `${c.name} · ${channelLabel(c)}${c.enabled ? '' : '（渠道已停用）'}`,
+              }))}
+              showSearch
+              optionFilterProp="label"
+              notFoundContent="该模型可挂载的渠道都已存在供给源"
             />
-          </Field>
+          </Form.Item>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Field label="输入价（$/1M tokens）">
-            <Input type="number" min={0} step={0.01} value={form.inputPriceUsd} placeholder="0.0000" onChange={e => set('inputPriceUsd', e.target.value)} />
-          </Field>
-          <Field label="输出价（$/1M tokens）">
-            <Input type="number" min={0} step={0.01} value={form.outputPriceUsd} placeholder="0.0000" onChange={e => set('outputPriceUsd', e.target.value)} />
-          </Field>
-          <Field label="缓存命中读价（$/1M tokens）" hint="留 0 = 无依据">
-            <Input type="number" min={0} step={0.01} value={form.cacheReadPriceUsd} placeholder="0.0000" onChange={e => set('cacheReadPriceUsd', e.target.value)} />
-          </Field>
-          <Field label="缓存写入价（$/1M tokens）" hint="留 0 = 无依据（按输入价计）">
-            <Input type="number" min={0} step={0.01} value={form.cacheWritePriceUsd} placeholder="0.0000" onChange={e => set('cacheWritePriceUsd', e.target.value)} />
-          </Field>
-          <Field label="限流（RPM）">
-            <Input type="number" min={1} max={100000} step={10} value={form.rateLimitRpm} onChange={e => set('rateLimitRpm', e.target.value)} />
-          </Field>
-        </div>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item
+              name="inputPriceUsd"
+              label="输入价（$/1M tokens）"
+              rules={[{ required: true, message: '请输入输入价' }]}
+            >
+              <InputNumber min={0} precision={4} step={0.01} style={{ width: '100%' }} placeholder="0.0000" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="outputPriceUsd"
+              label="输出价（$/1M tokens）"
+              rules={[{ required: true, message: '请输入输出价' }]}
+            >
+              <InputNumber min={0} precision={4} step={0.01} style={{ width: '100%' }} placeholder="0.0000" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item
+              name="cacheReadPriceUsd"
+              label="缓存命中读价（$/1M tokens）"
+              extra="留 0 = 无依据"
+            >
+              <InputNumber min={0} precision={4} step={0.01} style={{ width: '100%' }} placeholder="0.0000" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              name="cacheWritePriceUsd"
+              label="缓存写入价（$/1M tokens）"
+              extra="留 0 = 无依据（按输入价计）"
+            >
+              <InputNumber min={0} precision={4} step={0.01} style={{ width: '100%' }} placeholder="0.0000" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="rateLimitRpm" label="限流（RPM）">
+              <InputNumber min={1} max={100000} step={10} style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+        </Row>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Field label="覆盖渠道价">
-            <Switch checked={form.overridePrice} onChange={v => set('overridePrice', v)} label={form.overridePrice ? '覆盖' : '默认'} />
-          </Field>
-          <Field label="启用">
-            <Switch checked={form.enabled} onChange={v => set('enabled', v)} label={form.enabled ? '启用' : '停用'} />
-          </Field>
-        </div>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item
+              name="overridePrice"
+              label="覆盖渠道价"
+              valuePropName="checked"
+              tooltip="标记该供给源按本处填写的报价计费，而不是参考渠道侧的默认价"
+            >
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="enabled" label="启用" valuePropName="checked">
+              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            </Form.Item>
+          </Col>
+        </Row>
 
-        <Field label="上游模型名" hint={`留空 = 用模型名「${modelName}」。多渠道供同一对外名、但上游真实名不同时,在此填该渠道的真实名。`}>
-          <Input className="mono" value={form.upstreamModel} placeholder={modelName || '如 deepseek/deepseek-v4.1-flash'} onChange={e => set('upstreamModel', e.target.value)} />
-        </Field>
+        <Form.Item
+          name="upstreamModel"
+          label="上游模型名"
+          extra={`留空 = 用模型名「${modelName}」。多渠道供同一对外名、但上游真实名不同时,在此填该渠道的真实名。`}
+        >
+          <Input className="gw-mono" placeholder={modelName || '如 deepseek/deepseek-v4.1-flash'} />
+        </Form.Item>
 
-        <Field label="备注">
-          <Textarea rows={2} value={form.note} placeholder="可选，如定价依据、上游备注等" onChange={e => set('note', e.target.value)} />
-        </Field>
-      </Modal>
-    </div>
+        <Form.Item name="note" label="备注">
+          <Input.TextArea rows={2} placeholder="可选，如定价依据、上游备注等" />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }
 
 /* —— 模型抽屉 —— */
 
-interface BasicFormState {
-  name: string;
-  displayName: string;
-  contextWindow: string;
-  capabilities: Capability[];
-  /** 售价倍率;空 = 跟随全局 settings.priceMultiplier */
-  rateOverride: string;
-}
-
 export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
+  const { message, modal } = App.useApp();
+  const c = useChartColors();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<'overview' | 'offers' | 'price' | 'usage'>('overview');
-  const [basic, setBasic] = useState<BasicFormState>({ name: '', displayName: '', contextWindow: '0', capabilities: [], rateOverride: '' });
+  const [tab, setTab] = useState('overview');
+  const [form] = Form.useForm<BasicFormValues>();
   const prevModelId = useRef<number | null>(null);
   const [offerModal, setOfferModal] = useState<{ open: boolean; editing: ModelOffer | null }>({ open: false, editing: null });
   /** 「原始模型名(渠道侧)」在供给源已各自指定上游名时默认折叠,可展开编辑 */
@@ -346,18 +398,17 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     if (id !== prevModelId.current) {
       prevModelId.current = id;
       setShowRawName(false);
-      setTab('overview');
       if (model) {
-        setBasic({
+        form.setFieldsValue({
           name: model.originalName,
           displayName: model.displayName ?? '',
-          contextWindow: String(model.contextWindow),
+          contextWindow: model.contextWindow,
           capabilities: model.capabilities,
-          rateOverride: model.rateOverride != null ? String(model.rateOverride) : '',
+          rateOverride: model.rateOverride ?? null,
         });
       }
     }
-  }, [model]);
+  }, [model, form]);
 
   const offers = model?.offers ?? [];
   /** 每个供给源都单独指定了上游真实名 → 模型级名称只剩同步去重用途,可折叠 */
@@ -413,22 +464,20 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     onError: (e) => message.error((e as Error)?.message || '保存失败'),
   });
 
-  const onSaveBasic = () => {
+  const onSaveBasic = async () => {
     if (!model) return;
-    if (!basic.name.trim()) {
-      message.error('请输入模型名称');
-      return;
-    }
+    const v = await form.validateFields().catch(() => null);
+    if (!v) return;
     saveModel.mutate({
       id: model.id,
       draft: {
-        name: basic.name.trim(),
-        displayName: basic.displayName.trim(),
-        contextWindow: Number(basic.contextWindow) || model.contextWindow,
-        capabilities: basic.capabilities as Capability[],
+        name: (v.name ?? model.originalName).trim(),
+        displayName: (v.displayName ?? '').trim(),
+        contextWindow: v.contextWindow ?? model.contextWindow,
+        capabilities: (v.capabilities ?? model.capabilities) as Capability[],
         enabled: model.enabled,
         // 空 = 清空覆盖(回落全局);null 显式传回让后端区分「清空」与「未传」。
-        rateOverride: basic.rateOverride.trim() === '' ? null : Number(basic.rateOverride),
+        rateOverride: v.rateOverride == null ? null : Number(v.rateOverride),
       },
     });
   };
@@ -456,13 +505,13 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   });
 
   const confirmDeleteOffer = (o: ModelOffer) => {
-    void confirm({
+    modal.confirm({
       title: '移除供给源',
       content: `确定移除「${model?.name}」来自 ${o.channelName} 的供给源吗？`,
       okText: '移除',
-      danger: true,
-    }).then(ok => {
-      if (ok) deleteOffer.mutateAsync(o.id).catch(() => undefined);
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => deleteOffer.mutateAsync(o.id).catch(() => undefined),
     });
   };
 
@@ -475,117 +524,188 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     onError: () => message.error('设置失败'),
   });
 
+  const offerMenu = (o: ModelOffer): MenuProps => ({
+    items: [
+      { key: 'primary', label: '设为首选', disabled: o.priority <= 1 },
+      { key: 'edit', label: '编辑' },
+      { type: 'divider' },
+      { key: 'delete', label: '删除', danger: true },
+    ],
+    onClick: ({ key, domEvent }) => {
+      domEvent.stopPropagation();
+      if (!model) return;
+      if (key === 'primary') setPrimary.mutate({ modelId: model.id, offerId: o.id });
+      else if (key === 'edit') setOfferModal({ open: true, editing: o });
+      else if (key === 'delete') confirmDeleteOffer(o);
+    },
+  });
+
   const lowestIn = offers.filter(o => o.enabled).length
     ? Math.min(...offers.filter(o => o.enabled).map(o => o.inputPriceUsd))
     : null;
 
-  const offerCols: Column<ModelOffer>[] = [
+  const offerCols: ColumnsType<ModelOffer> = [
     {
-      key: 'drag', title: '', width: 32,
-      render: (_r, i) => <span {...handleProps(i)} aria-label="拖动调整优先级">⋮⋮</span>,
-    },
-    {
-      key: 'channel', title: '渠道',
-      render: r => <b style={{ fontWeight: 500 }}>{r.channelName}</b>,
-    },
-    {
-      key: 'provider', title: '供应商',
-      render: r => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <ProviderMark name={channelMark(r)} /> {channelLabel(r)}
-        </span>
+      title: '', width: 32,
+      render: (_, __, i) => (
+        <span {...handleProps(i ?? 0)} aria-label="拖动调整优先级">⋮⋮</span>
       ),
     },
     {
-      key: 'upstream', title: '上游名',
-      render: r =>
+      title: '渠道', dataIndex: 'channelName',
+      render: v => <b style={{ fontWeight: 500 }}>{v}</b>,
+    },
+    {
+      title: '供应商', dataIndex: 'provider',
+      render: (_, r) => {
+        const label = channelLabel(r);
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <ProviderMark name={channelMark(r)} /> {label}
+          </span>
+        );
+      },
+    },
+    {
+      title: '上游名', key: 'upstream',
+      render: (_, r) =>
         r.upstreamModel ? (
-          <span className="mono" style={{ fontSize: 12.5 }}>{r.upstreamModel}</span>
+          <span className="gw-mono" style={{ fontSize: 12.5 }}>{r.upstreamModel}</span>
         ) : (
-          <span style={{ color: 'var(--t3)', fontSize: 12.5 }} title="未单独指定,出站用模型名">同模型名</span>
+          <Tooltip title="未单独指定,出站用模型名">
+            <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>同模型名</span>
+          </Tooltip>
         ),
     },
     {
-      key: 'inP', title: '输入价', align: 'right',
-      render: r => (
-        <span className="num" style={{ color: r.enabled && lowestIn !== null && r.inputPriceUsd === lowestIn ? 'var(--brand)' : undefined }}>
-          {fmt.price(r.inputPriceUsd)}
+      title: '输入价', dataIndex: 'inputPriceUsd', align: 'right',
+      render: (v, r) => (
+        <span className="gw-num" style={{ color: r.enabled && lowestIn !== null && v === lowestIn ? 'var(--gw-primary)' : undefined }}>
+          {fmt.price(v)}
         </span>
       ),
     },
-    { key: 'outP', title: '输出价', align: 'right', render: r => <span className="num">{fmt.price(r.outputPriceUsd)}</span> },
-    { key: 'cr', title: '缓存读价', align: 'right', render: r => <span className="num">{r.cacheReadPriceUsd ? fmt.price(r.cacheReadPriceUsd) : '—'}</span> },
-    { key: 'cw', title: '缓存写价', align: 'right', render: r => <span className="num">{r.cacheWritePriceUsd ? fmt.price(r.cacheWritePriceUsd) : '—'}</span> },
+    {
+      title: '输出价', dataIndex: 'outputPriceUsd', align: 'right',
+      render: v => <span className="gw-num">{fmt.price(v)}</span>,
+    },
+    {
+      title: '缓存读价', dataIndex: 'cacheReadPriceUsd', align: 'right',
+      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
+    },
+    {
+      title: '缓存写价', dataIndex: 'cacheWritePriceUsd', align: 'right',
+      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
+    },
     {
       // 成本与本站价都贴着左边三列(手填报价)读 —— 他们回答的是同一个问题:
       // 「这行数字是手填的还是派生的,本站价定得合不合理」。
-      key: 'cost', title: '成本', align: 'right', render: r => <CostCell r={r} />,
+      title: '成本', key: 'cost', align: 'right',
+      render: (_, r) => <CostCell r={r} />,
     },
-    { key: 'retail', title: '本站价', align: 'right', render: r => <RetailCell r={r} rate={rate} /> },
-    { key: 'margin', title: '毛利', align: 'right', render: r => <MarginCell r={r} rate={rate} /> },
-    { key: 'latency', title: '延迟', align: 'right', render: r => <span className="num">{r.latencyMs ? fmt.ms(r.latencyMs) : '—'}</span> },
-    { key: 'ok', title: '成功率', align: 'right', render: r => <span className="num">{fmt.pct(r.successRate, 2)}</span> },
     {
-      key: 'src', title: '价格来源',
-      render: r =>
+      title: '本站价', key: 'retail', align: 'right',
+      render: (_, r) => <RetailCell r={r} rate={rate} />,
+    },
+    {
+      title: '毛利', key: 'margin', align: 'right',
+      render: (_, r) => <MarginCell r={r} rate={rate} />,
+    },
+    {
+      title: '延迟', dataIndex: 'latencyMs', align: 'right',
+      render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span>,
+    },
+    {
+      title: '成功率', dataIndex: 'successRate', align: 'right',
+      render: v => <span className="gw-num">{fmt.pct(v, 2)}</span>,
+    },
+    {
+      title: '价格来源', key: 'src',
+      render: (_, r) =>
         r.priceSourceUrl ? (
-          <a
-            href={r.priceSourceUrl}
-            target="_blank"
-            rel="noreferrer"
-            style={{ fontSize: 12.5 }}
-            title={[`来源:${r.priceSourceUrl}`, `抓取:${fmt.dt(r.priceFetchedAt)}`, r.priceNativeText ? `原文:${r.priceNativeText}` : ''].filter(Boolean).join('\n')}
+          <Tooltip
+            title={
+              <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                <div>来源:{r.priceSourceUrl}</div>
+                <div>抓取:{fmt.dt(r.priceFetchedAt)}</div>
+                {r.priceNativeText && <div>原文:{r.priceNativeText}</div>}
+              </div>
+            }
           >
-            官方 {r.priceCurrency} ↗
-          </a>
+            <a href={r.priceSourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>
+              官方 {r.priceCurrency} ↗
+            </a>
+          </Tooltip>
         ) : (
-          <span style={{ color: 'var(--t3)', fontSize: 12.5 }}>手工</span>
+          <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5 }}>手工</span>
         ),
     },
-    { key: 'status', title: '状态', render: r => <StatusDot status={r.enabled ? r.status : 'disabled'} /> },
     {
-      key: 'enabled', title: '启用',
-      render: r => {
+      title: '状态', dataIndex: 'status',
+      render: (_, r) => <StatusDot status={r.enabled ? r.status : 'disabled'} />,
+    },
+    {
+      title: '启用', dataIndex: 'enabled', align: 'center',
+      render: (v, r) => {
         // 零价供给源:启用即免费放流量,服务端会拒 —— 前端提前置灰并说明差什么。
-        const zero = r.cost?.zeroPrice && !r.enabled;
+        const zero = r.cost?.zeroPrice && !v;
         const sw = (
           <Switch
-            checked={r.enabled}
-            disabled={zero || (toggleOffer.isPending && toggleOffer.variables?.offerId === r.id)}
+            size="small"
+            checked={v}
+            disabled={zero}
+            loading={toggleOffer.isPending && toggleOffer.variables?.offerId === r.id}
             onChange={next => toggleOffer.mutate({ modelId: r.modelId, offerId: r.id, enabled: next })}
           />
         );
         return zero ? (
-          <span
-            title={`无成本依据,不能启用:${r.cost?.zeroReason || '官方价与兜底四价都为空'}`}
-            style={{ display: 'inline-flex' }}
-          >
-            {sw}
-          </span>
+          <Tooltip title={`无成本依据,不能启用:${r.cost?.zeroReason || '官方价与兜底四价都为空'}`}>
+            <span>{sw}</span>
+          </Tooltip>
         ) : sw;
       },
     },
     {
-      key: 'act', title: '', align: 'right', width: 56,
-      render: r => (
-        <Dropdown
-          ariaLabel="更多操作"
-          items={[
-            { label: '设为首选', icon: 'route', onClick: () => model && setPrimary.mutate({ modelId: model.id, offerId: r.id }) },
-            { label: '编辑', icon: 'sliders', onClick: () => setOfferModal({ open: true, editing: r }) },
-            { sep: true },
-            { label: '删除', icon: 'trash', danger: true, onClick: () => confirmDeleteOffer(r) },
-          ]}
-        />
+      title: '', align: 'right', width: 56,
+      render: (_, r) => (
+        <Dropdown menu={offerMenu(r)} trigger={['click']}>
+          <Button type="text" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+        </Dropdown>
       ),
     },
   ];
 
-  /* —— 价格对比图（手绘 SVG） —— */
-  const priceSeries = [
-    { name: '输入价', data: offers.map(o => o.inputPriceUsd), color: 'var(--chart-2)', kind: 'bar' as const, fmt: (v: number) => fmt.price(v) },
-    { name: '输出价', data: offers.map(o => o.outputPriceUsd), color: 'var(--brand)', kind: 'bar' as const, fmt: (v: number) => fmt.price(v) },
-  ];
+  const priceOption: EChartsOption = {
+    grid: { left: 120, right: 70, top: 34, bottom: 8 },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' },
+      backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder,
+      textStyle: { color: c.text, fontSize: 12 },
+    },
+    legend: {
+      data: ['输入价', '输出价'], right: 0, top: 0,
+      itemWidth: 8, itemHeight: 8, textStyle: { color: c.text, fontSize: 12 },
+    },
+    xAxis: {
+      type: 'value', splitLine: { lineStyle: { color: c.line } },
+      axisLabel: { color: c.text, fontSize: 11 },
+    },
+    yAxis: {
+      type: 'category', data: offers.map(o => o.channelName),
+      axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
+      axisLabel: { color: c.text, fontSize: 12 },
+    },
+    series: [
+      {
+        name: '输入价', type: 'bar', data: offers.map(o => o.inputPriceUsd),
+        itemStyle: { color: c.primarySoft, borderRadius: 2 }, barGap: '20%', barCategoryGap: '45%',
+      },
+      {
+        name: '输出价', type: 'bar', data: offers.map(o => o.outputPriceUsd),
+        itemStyle: { color: c.primary, borderRadius: 2 },
+      },
+    ],
+  };
 
   /* —— 用量（近 7 日，来自后端） —— */
   const daily = usageQuery.data?.daily ?? [];
@@ -602,55 +722,112 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
     ? 1 - periodTotal.errors / periodTotal.requests
     : (model?.successRate ?? 1);
 
+  const dailyOption: EChartsOption = {
+    grid: { left: 48, right: 56, top: 34, bottom: 26 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder,
+      textStyle: { color: c.text, fontSize: 12 },
+    },
+    legend: {
+      data: ['请求数', '花费($)'], right: 0, top: 0,
+      itemWidth: 8, itemHeight: 8, textStyle: { color: c.text, fontSize: 12 },
+    },
+    xAxis: {
+      type: 'category', data: daily.map(p => p.ts),
+      axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
+      axisLabel: { color: c.text, fontSize: 11 },
+    },
+    yAxis: [
+      {
+        type: 'value', splitLine: { lineStyle: { color: c.line } },
+        axisLabel: { color: c.text, fontSize: 11 },
+      },
+      {
+        type: 'value', splitLine: { show: false },
+        axisLabel: { color: c.text, fontSize: 11 },
+      },
+    ],
+    series: [
+      {
+        name: '请求数', type: 'bar', data: daily.map(p => p.requests),
+        itemStyle: { color: c.primary, borderRadius: 3 }, barWidth: '45%',
+      },
+      {
+        name: '花费($)', type: 'line', yAxisIndex: 1,
+        data: daily.map(p => Number(p.costUsd.toFixed(4))),
+        itemStyle: { color: c.warn }, lineStyle: { width: 2 },
+      },
+    ],
+  };
+
   const totalChReq = byChannel.reduce((a, b) => a + b.requests, 0);
   const totalChCost = byChannel.reduce((a, b) => a + b.costUsd, 0);
   const totalChCharge = byChannel.reduce((a, b) => a + b.chargeUsd, 0);
 
-  const byChannelCols: Column<ModelUsageData['byChannel'][number]>[] = [
-    { key: 'channel', title: '渠道', render: r => <b style={{ fontWeight: 500 }}>{r.channelName}</b> },
-    { key: 'requests', title: '请求', align: 'right', render: r => <span className="num">{fmt.n(r.requests)}</span> },
+  const byChannelCols: ColumnsType<ModelUsageData['byChannel'][number]> = [
     {
-      key: 'cost', title: '成本', align: 'right',
-      render: r => <span className="num" title={totalChCost ? `占本模型成本 ${((r.costUsd / totalChCost) * 100).toFixed(1)}%` : undefined}>{fmt.usd(r.costUsd)}</span>,
+      title: '渠道', dataIndex: 'channelName',
+      render: v => <b style={{ fontWeight: 500 }}>{v}</b>,
+    },
+    {
+      title: '请求', dataIndex: 'requests', align: 'right',
+      render: v => <span className="gw-num">{fmt.n(v)}</span>,
+    },
+    {
+      title: '成本', dataIndex: 'costUsd', align: 'right',
+      render: v => (
+        <Tooltip title={totalChCost ? `占本模型成本 ${((v / totalChCost) * 100).toFixed(1)}%` : undefined}>
+          <span className="gw-num">{fmt.usd(v)}</span>
+        </Tooltip>
+      ),
     },
     {
       // 营收 = 实际向客户收的钱。历史窗口里站主自用的行 charge_usd=0(未计费),
       // 与成本并列时毛利会显得是负的 —— 毛利列对这种情况显式标注「含未计费流量」。
-      key: 'charge', title: '营收', align: 'right',
-      render: r => (
-        <span className="num">
-          {fmt.usd(r.chargeUsd)}
-          {r.chargeUsd === 0 && r.costUsd > 0 && (
-            <span style={{ color: 'var(--warn)', marginLeft: 4 }} title="该渠道本时段没有计费收入(站主自用流量不计费,或历史数据早于计费改造)">*</span>
+      title: '营收', dataIndex: 'chargeUsd', align: 'right',
+      render: (v, r) => (
+        <span className="gw-num">
+          {fmt.usd(v)}
+          {v === 0 && r.costUsd > 0 && (
+            <Tooltip title="该渠道本时段没有计费收入(站主自用流量不计费,或历史数据早于计费改造)">
+              <span style={{ color: 'var(--gw-warn)', marginLeft: 4 }}>*</span>
+            </Tooltip>
           )}
         </span>
       ),
     },
     {
-      key: 'margin', title: '毛利', align: 'right',
-      render: r => {
+      title: '毛利', key: 'margin', align: 'right',
+      render: (_, r) => {
         if (r.costUsd <= 0) {
-          return <span style={{ color: 'var(--t3)' }} title="该渠道无成本依据(未绑官方价且手填四价为空),算不出毛利。">—</span>;
-        }
-        if (r.chargeUsd <= 0) {
-          return <span style={{ color: 'var(--t3)' }} title="无营收,无法算毛利率(成本仍照记)。">—</span>;
+          return <Tooltip title="该渠道无成本依据(未绑官方价且手填四价为空),算不出毛利。"><span style={{ color: 'var(--gw-text-3)' }}>—</span></Tooltip>;
         }
         const m = (r.chargeUsd - r.costUsd) / r.chargeUsd;
+        if (r.chargeUsd <= 0) {
+          return <Tooltip title="无营收,无法算毛利率(成本仍照记)。"><span style={{ color: 'var(--gw-text-3)' }}>—</span></Tooltip>;
+        }
         return (
-          <span className="num" style={{ color: m < 0 ? 'var(--err)' : undefined }} title={`毛利 = (营收 ${fmt.usd(r.chargeUsd)} − 成本 ${fmt.usd(r.costUsd)}) / 营收`}>
-            {fmt.pct(m, 1)}
-          </span>
+          <Tooltip title={`毛利 = (营收 ${fmt.usd(r.chargeUsd)} − 成本 ${fmt.usd(r.costUsd)}) / 营收`}>
+            <span className="gw-num" style={{ color: m < 0 ? 'var(--gw-err)' : undefined }}>{fmt.pct(m, 1)}</span>
+          </Tooltip>
         );
       },
     },
     {
-      key: 'share', title: '占比', align: 'right',
-      render: r => (
+      title: '占比', key: 'share', align: 'right',
+      render: (_, r) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: 160 }}>
-          <span className="bar" style={{ flex: 1 }} role="img" aria-label="用量占比">
-            <i style={{ width: totalChReq ? `${((r.requests / totalChReq) * 100).toFixed(1)}%` : '0%' }} />
+          <span className="gw-bar" style={{ flex: 1 }} role="img" aria-label="用量占比">
+            <span
+              style={{
+                display: 'block', height: '100%', borderRadius: 2,
+                background: 'var(--gw-primary)',
+                width: totalChReq ? `${((r.requests / totalChReq) * 100).toFixed(1)}%` : '0%',
+              }}
+            />
           </span>
-          <span className="num" style={{ width: 48, textAlign: 'right' }}>
+          <span className="gw-num" style={{ width: 48, textAlign: 'right' }}>
             {totalChReq ? ((r.requests / totalChReq) * 100).toFixed(1) : '0.0'}%
           </span>
         </span>
@@ -661,284 +838,329 @@ export default function ModelDrawer({ model, onClose, onDeleteModel }: Props) {
   /** 本模型本时段的合计:成本 / 营收 / 毛利,与按渠道表同源(求和即得)。 */
   const periodMargin = totalChCharge > 0 ? (totalChCharge - totalChCost) / totalChCharge : null;
 
-  const overviewStats: { label: string; value: string }[] = [
-    { label: '今日调用', value: fmt.k(model?.todayRequests ?? 0) },
-    { label: '成功率', value: fmt.pct(model?.successRate ?? 1) },
-    { label: '可用供给源', value: `${usableOffers}/${offers.length}` },
-    { label: '平均延迟', value: enabledOffers.length ? fmt.ms(Math.round(enabledOffers.reduce((a, o) => a + o.latencyMs, 0) / enabledOffers.length)) : '—' },
+  const overviewStats: [string, string][] = [
+    ['今日调用', fmt.k(model?.todayRequests ?? 0)],
+    ['成功率', fmt.pct(model?.successRate ?? 1)],
+    ['可用供给源', `${usableOffers}/${offers.length}`],
+    ['平均延迟', enabledOffers.length ? fmt.ms(Math.round(enabledOffers.reduce((a, o) => a + o.latencyMs, 0) / enabledOffers.length)) : '—'],
   ];
-
-  const toggleCap = (c: Capability) =>
-    setBasic(b => ({ ...b, capabilities: b.capabilities.includes(c) ? b.capabilities.filter(x => x !== c) : [...b.capabilities, c] }));
 
   return (
     <>
-      {model && (
-        <div className="overlay" style={{ zIndex: 70 }}>
-          <Drawer
-            width={960}
-            title={
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span className="mono" style={{ fontSize: 16, fontWeight: 600 }}>{model.name}</span>
-                {model.capabilities.map(x => <span className="badge b-slate" key={x}>{CAP_LABEL[x]}</span>)}
-                <span style={{ fontSize: 12, color: 'var(--t3)' }}>{fmt.ctx(model.contextWindow)} 上下文</span>
-                {model.displayName && (
-                  <span className="mono" style={{ fontSize: 12, color: 'var(--t3)' }}>原始名 {model.originalName}</span>
-                )}
+      <Drawer
+        width={960}
+        open={!!model}
+        onClose={handleClose}
+        destroyOnClose
+        title={
+          model ? (
+            <div>
+              <span className="gw-mono" style={{ fontSize: 16, fontWeight: 600 }}>{model.name}</span>
+              <span style={{ marginLeft: 12 }}>
+                {model.capabilities.map(x => <span className="gw-badge" key={x}>{CAP_LABEL[x]}</span>)}
               </span>
-            }
-            extra={
-              <Switch
-                checked={model.enabled}
-                disabled={toggleModel.isPending}
-                onChange={v => toggleModel.mutate({ id: model.id, enabled: v })}
-                label={model.enabled ? '启用' : '停用'}
-              />
-            }
-            footer={
-              <>
-                <Button variant="danger" icon="trash" onClick={onDeleteModel}>删除模型</Button>
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                  <Button onClick={handleClose}>取消</Button>
-                  <Button variant="primary" loading={saveModel.isPending} onClick={onSaveBasic}>保存更改</Button>
-                </div>
-              </>
-            }
-            onClose={handleClose}
-          >
-            <div style={{ marginBottom: 16 }}>
-              <Seg
-                value={tab}
-                onChange={setTab}
-                options={[
-                  { value: 'overview' as const, label: '概览' },
-                  { value: 'offers' as const, label: offers.length ? `供给源 (${offers.length})` : '供给源' },
-                  { value: 'price' as const, label: '价格对比' },
-                  { value: 'usage' as const, label: '用量' },
-                ]}
-              />
+              <span style={{ fontSize: 12, color: 'var(--gw-text-3)', marginLeft: 8 }}>
+                {fmt.ctx(model.contextWindow)} 上下文
+              </span>
+              {model.displayName && (
+                <span className="gw-mono" style={{ fontSize: 12, color: 'var(--gw-text-3)', marginLeft: 8 }}>
+                  原始名 {model.originalName}
+                </span>
+              )}
             </div>
-
-            {tab === 'overview' && (
-              <>
-                <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))', marginBottom: 16 }}>
-                  {overviewStats.map(s => <Kpi key={s.label} label={s.label} value={s.value} />)}
-                </div>
-
-                <Card>
-                  <CardHead title="基本信息" />
-                  <CardBody>
-                    <div style={{ maxWidth: 540 }}>
-                      <Field label="统一名称" hint="网关侧对外展示与调用名，留空则用原始名；重命名不改动渠道侧真实模型名">
-                        <Input className="mono" value={basic.displayName} placeholder="如 deepseek-v3（留空=用原始名）" onChange={e => setBasic(b => ({ ...b, displayName: e.target.value }))} />
-                      </Field>
-
-                      {allUpstream && !showRawName ? (
-                        <div style={{ marginBottom: 18 }}>
-                          <div style={{ fontSize: 13.5, color: 'var(--t2)', marginBottom: 4 }}>原始模型名（渠道侧）</div>
-                          <div style={{ fontSize: 12, color: 'var(--t3)' }}>
-                            已在每个供给源单独指定上游名，出站按命中的供给源改写请求体 model；模型级名称仅用于同步去重。
-                            <button type="button" className="card-link" style={{ marginLeft: 6 }} onClick={() => setShowRawName(true)}>展开编辑</button>
+          ) : null
+        }
+        extra={
+          model ? (
+            <Switch
+              checked={model.enabled}
+              loading={toggleModel.isPending}
+              onChange={v => toggleModel.mutate({ id: model.id, enabled: v })}
+              checkedChildren="启用"
+              unCheckedChildren="停用"
+            />
+          ) : null
+        }
+        footer={
+          model ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Button danger onClick={onDeleteModel}>删除模型</Button>
+              <div style={{ marginLeft: 'auto' }}>
+                <Space>
+                  <Button onClick={handleClose}>取消</Button>
+                  <Button type="primary" loading={saveModel.isPending} onClick={onSaveBasic}>保存更改</Button>
+                </Space>
+              </div>
+            </div>
+          ) : null
+        }
+      >
+        {model && (
+          <Tabs
+            activeKey={tab}
+            onChange={setTab}
+            items={[
+              {
+                key: 'overview',
+                label: '概览',
+                children: (
+                  <>
+                    <Row gutter={12} style={{ marginBottom: 16 }}>
+                      {overviewStats.map(([label, value]) => (
+                        <Col span={6} key={label}>
+                          <Card>
+                            <div style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>{label}</div>
+                            <div className="gw-num" style={{ fontSize: 20, fontWeight: 600, marginTop: 6 }}>{value}</div>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+                    <Card title="基本信息">
+                      <Form form={form} layout="vertical" style={{ maxWidth: 540 }}>
+                        <Form.Item
+                          name="displayName"
+                          label="统一名称"
+                          extra="网关侧对外展示与调用名，留空则用原始名；重命名不改动渠道侧真实模型名"
+                        >
+                          <Input className="gw-mono" placeholder="如 deepseek-v3（留空=用原始名）" />
+                        </Form.Item>
+                        {allUpstream && !showRawName ? (
+                          <div style={{ marginBottom: 24 }}>
+                            <div style={{ fontSize: 14, color: 'var(--gw-text-2)', marginBottom: 4 }}>
+                              原始模型名（渠道侧）
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
+                              已在每个供给源单独指定上游名，出站按命中的供给源改写请求体 model；模型级名称仅用于同步去重。
+                              <button
+                                type="button"
+                                className="gw-link"
+                                style={{ marginLeft: 6 }}
+                                onClick={() => setShowRawName(true)}
+                              >
+                                展开编辑
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ) : (
-                        <Field
-                          label="原始模型名（渠道侧）"
-                          hint={
-                            allUpstream ? (
-                              <>
-                                渠道上游真实模型名；修改会改变同步去重与出站请求的模型名，请谨慎操作。
-                                <button type="button" className="card-link" style={{ marginLeft: 6 }} onClick={() => setShowRawName(false)}>收起</button>
-                              </>
-                            ) : (
-                              <span style={{ color: 'var(--warn)' }}>
-                                渠道上游真实模型名。部分供给源未填上游名，出站将回落此名称 —— 建议到「供给源」补齐。
-                              </span>
-                            )
+                        ) : (
+                          <Form.Item
+                            name="name"
+                            label="原始模型名（渠道侧）"
+                            rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}
+                            extra={
+                              allUpstream ? (
+                                <>
+                                  渠道上游真实模型名；修改会改变同步去重与出站请求的模型名，请谨慎操作。
+                                  <button
+                                    type="button"
+                                    className="gw-link"
+                                    style={{ marginLeft: 6 }}
+                                    onClick={() => setShowRawName(false)}
+                                  >
+                                    收起
+                                  </button>
+                                </>
+                              ) : (
+                                <span style={{ color: 'var(--gw-warn)' }}>
+                                  渠道上游真实模型名。部分供给源未填上游名，出站将回落此名称 ——
+                                  建议到「供给源」补齐。
+                                </span>
+                              )
+                            }
+                          >
+                            <Input className="gw-mono" />
+                          </Form.Item>
+                        )}
+                        <Form.Item
+                          name="contextWindow"
+                          label="上下文窗口（tokens）"
+                          rules={[{ required: true, message: '请输入上下文窗口' }]}
+                        >
+                          <InputNumber min={0} step={1024} style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item name="capabilities" label="能力">
+                          <Checkbox.Group options={ALL_CAPS.map(x => ({ label: CAP_LABEL[x], value: x }))} />
+                        </Form.Item>
+                        <Form.Item
+                          name="rateOverride"
+                          label="售价倍率"
+                          extra={
+                            <>
+                              本站价 = 官方价 × 倍率，全站同一模型对所有客户同一价。
+                              留空则跟随全局倍率（当前 <b className="gw-num">×{globalRate}</b>）。
+                              未录官方价的模型回落「成本 × 倍率」。
+                            </>
                           }
                         >
-                          <Input className="mono" value={basic.name} invalid={!basic.name.trim()} onChange={e => setBasic(b => ({ ...b, name: e.target.value }))} />
-                        </Field>
-                      )}
-
-                      <Field label="上下文窗口（tokens）">
-                        <Input type="number" min={0} step={1024} value={basic.contextWindow} onChange={e => setBasic(b => ({ ...b, contextWindow: e.target.value }))} />
-                      </Field>
-
-                      <Field label="能力">
-                        <div className="hstack wrap" style={{ gap: 10, paddingTop: 2 }}>
-                          {ALL_CAPS.map(x => (
-                            <Checkbox key={x} checked={basic.capabilities.includes(x)} onChange={() => toggleCap(x)}>{CAP_LABEL[x]}</Checkbox>
-                          ))}
-                        </div>
-                      </Field>
-
-                      <Field
-                        label="售价倍率"
-                        hint={
-                          <>
-                            本站价 = 官方价 × 倍率，全站同一模型对所有客户同一价。
-                            留空则跟随全局倍率（当前 <b className="num">×{globalRate}</b>）。
-                            未录官方价的模型回落「成本 × 倍率」。
-                          </>
-                        }
-                      >
-                        <Input type="number" min={0.01} step={0.1} placeholder={`留空=用全局倍率（×${globalRate}）`} value={basic.rateOverride} onChange={e => setBasic(b => ({ ...b, rateOverride: e.target.value }))} />
-                      </Field>
+                          <InputNumber
+                            style={{ width: '100%' }} min={0.01} step={0.1} precision={2}
+                            placeholder={`留空=用全局倍率（×${globalRate}）`}
+                          />
+                        </Form.Item>
+                      </Form>
+                      <div style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
+                        启停开关在抽屉右上角即时生效；其余修改点击底部「保存更改」。
+                      </div>
+                    </Card>
+                  </>
+                ),
+              },
+              {
+                key: 'offers',
+                label: `供给源${offers.length ? ` (${offers.length})` : ''}`,
+                children: (
+                  <>
+                    <div
+                      style={{
+                        border: '1px solid var(--gw-border)', borderLeft: '2px solid var(--gw-primary)',
+                        borderRadius: 'var(--gw-r-card)', padding: '10px 12px', fontSize: 13,
+                        color: 'var(--gw-text-2)', background: 'var(--gw-bg)', marginBottom: 16,
+                      }}
+                    >
+                      拖动左侧手柄可调整优先级，请求按此顺序尝试，上游失败自动降级到下一个可用供给源。路由规则的优先级高于此处。
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--t3)', marginTop: 4 }}>
-                      启停开关在抽屉右上角即时生效；其余修改点击底部「保存更改」。
+                    <Table<ModelOffer>
+                      rowKey="id"
+                      size="middle"
+                      dataSource={offers}
+                      columns={offerCols}
+                      pagination={false}
+                      onRow={onRow}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无供给源，点击下方添加" /> }}
+                    />
+                    <Button
+                      type="dashed"
+                      block
+                      style={{ marginTop: 16 }}
+                      icon={<PlusOutlined />}
+                      disabled={!canAddOffer}
+                      onClick={() => setOfferModal({ open: true, editing: null })}
+                    >
+                      + 添加供给源
+                    </Button>
+                  </>
+                ),
+              },
+              {
+                key: 'price',
+                label: '价格对比',
+                children: (
+                  <>
+                    <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginBottom: 12 }}>
+                      单位:每百万 tokens(币种随「系统设置 → 计价币种」)
                     </div>
-                  </CardBody>
-                </Card>
-              </>
-            )}
-
-            {tab === 'offers' && (
-              <>
-                <div style={{ marginBottom: 16 }}>
-                  <Note>拖动左侧手柄可调整优先级，请求按此顺序尝试，上游失败自动降级到下一个可用供给源。路由规则的优先级高于此处。</Note>
-                </div>
-                {offers.length ? (
-                  <Table<ModelOffer>
-                    columns={offerCols}
-                    rows={offers}
-                    rowKey={o => o.id}
-                    rowProps={(r, i) => onRow(r, i)}
-                  />
-                ) : (
-                  <Empty icon="route" title="暂无供给源" desc="点击下方按钮为该模型挂载渠道。" />
-                )}
-                <Button
-                  style={{ marginTop: 16, width: '100%' }}
-                  icon="plus"
-                  disabled={!canAddOffer}
-                  onClick={() => setOfferModal({ open: true, editing: null })}
-                >
-                  + 添加供给源
-                </Button>
-              </>
-            )}
-
-            {tab === 'price' && (
-              <>
-                <div style={{ fontSize: 12, color: 'var(--t3)', marginBottom: 12 }}>
-                  单位:每百万 tokens(币种随「系统设置 → 计价币种」)
-                </div>
-                <Card>
-                  <CardHead title="各渠道报价" right={<ChartLegend items={priceSeries.map(s => ({ label: s.name, color: s.color }))} />} />
-                  <CardBody>
-                    {offers.length ? (
-                      <Chart
-                        labels={offers.map(o => o.channelName)}
-                        height={Math.max(140, offers.length * 42 + 70)}
-                        leftFmt={v => fmt.price(v)}
-                        series={priceSeries}
-                      />
-                    ) : (
-                      <Empty icon="route" title="暂无供给源" />
-                    )}
-                  </CardBody>
-                </Card>
-
-                <div style={{ marginTop: 20 }}>
-                  <Table<ModelOffer>
-                    columns={[
-                      { key: 'channel', title: '渠道', render: r => <b style={{ fontWeight: 500 }}>{r.channelName}</b> },
-                      { key: 'ctx', title: '上下文', align: 'right', render: r => <span className="num">{fmt.ctx(r.contextWindow)}</span> },
-                      { key: 'rpm', title: '限流', align: 'right', render: r => <span className="num">{r.rateLimitRpm} RPM</span> },
-                      { key: 'inP', title: '输入价', align: 'right', render: r => <span className="num">{fmt.price(r.inputPriceUsd)}</span> },
-                      { key: 'outP', title: '输出价', align: 'right', render: r => <span className="num">{fmt.price(r.outputPriceUsd)}</span> },
-                      { key: 'cr', title: '缓存读价', align: 'right', render: r => <span className="num">{r.cacheReadPriceUsd ? fmt.price(r.cacheReadPriceUsd) : '—'}</span> },
-                      { key: 'cw', title: '缓存写价', align: 'right', render: r => <span className="num">{r.cacheWritePriceUsd ? fmt.price(r.cacheWritePriceUsd) : '—'}</span> },
-                      { key: 'note', title: '备注', render: r => <span style={{ color: 'var(--t3)' }}>{r.note || '—'}</span> },
-                    ]}
-                    rows={offers}
-                    rowKey={o => o.id}
-                  />
-                </div>
-
-                <div style={{ marginTop: 20 }}>
-                  <OfficialPricePanel model={model} offers={offers} />
-                </div>
-              </>
-            )}
-
-            {tab === 'usage' && (
-              <>
-                <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))', marginBottom: 16 }}>
-                  <Kpi label="今日请求" value={fmt.k(lastDay?.requests ?? 0)} />
-                  <Kpi label="今日花费" value={fmt.usd(lastDay?.costUsd ?? 0)} />
-                  <Kpi label="近 7 日请求" value={fmt.k(periodTotal.requests)} />
-                  <Kpi label="近 7 日成功率" value={fmt.pct(periodOkRate, 2)} />
-                </div>
-
-                <Card id="usage-trend">
-                  <CardHead
-                    title="近 7 日趋势"
-                    right={<ChartLegend items={[{ label: '请求数', color: 'var(--brand)' }, { label: '花费($)', color: 'var(--warn)' }]} />}
-                  />
-                  <CardBody>
-                    {daily.length ? (
-                      <Chart
-                        labels={daily.map(p => (p.ts.length > 10 ? p.ts.slice(5) : p.ts))}
-                        height={260}
-                        leftFmt={fmt.k}
-                        rightFmt={v => fmt.usd(v)}
-                        series={[
-                          { name: '请求数', data: daily.map(p => p.requests), color: 'var(--brand)', kind: 'bar', fmt: v => fmt.n(v) },
-                          { name: '花费($)', data: daily.map(p => Number(p.costUsd.toFixed(4))), color: 'var(--warn)', kind: 'line', axis: 'right', fmt: v => fmt.usd(v, 4) },
-                        ]}
-                      />
-                    ) : (
-                      <Empty icon="activity" title={usageQuery.isFetching ? '加载中…' : '近 7 日暂无用量'} />
-                    )}
-                  </CardBody>
-                </Card>
-
-                <div style={{ marginTop: 16 }}>
-                  <Card>
-                    <CardHead
+                    <Chart option={priceOption} height={Math.max(120, offers.length * 42 + 70)} />
+                    <Table<ModelOffer>
+                      rowKey="id"
+                      size="middle"
+                      style={{ marginTop: 20 }}
+                      dataSource={offers}
+                      pagination={false}
+                      columns={[
+                        { title: '渠道', dataIndex: 'channelName', render: v => <b style={{ fontWeight: 500 }}>{v}</b> },
+                        {
+                          title: '上下文', align: 'right',
+                          render: (_, r) => <span className="gw-num">{fmt.ctx(r.contextWindow)}</span>,
+                        },
+                        {
+                          title: '限流', align: 'right',
+                          render: (_, r) => <span className="gw-num">{r.rateLimitRpm} RPM</span>,
+                        },
+                        {
+                          title: '输入价', align: 'right',
+                          render: (_, r) => <span className="gw-num">{fmt.price(r.inputPriceUsd)}</span>,
+                        },
+                        {
+                          title: '输出价', align: 'right',
+                          render: (_, r) => <span className="gw-num">{fmt.price(r.outputPriceUsd)}</span>,
+                        },
+                        {
+                          title: '缓存读价', align: 'right',
+                          render: (_, r) => <span className="gw-num">{r.cacheReadPriceUsd ? fmt.price(r.cacheReadPriceUsd) : '—'}</span>,
+                        },
+                        {
+                          title: '缓存写价', align: 'right',
+                          render: (_, r) => <span className="gw-num">{r.cacheWritePriceUsd ? fmt.price(r.cacheWritePriceUsd) : '—'}</span>,
+                        },
+                        {
+                          title: '备注', dataIndex: 'note',
+                          render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span>,
+                        },
+                      ]}
+                    />
+                    <OfficialPricePanel model={model} offers={offers} />
+                  </>
+                ),
+              },
+              {
+                key: 'usage',
+                label: '用量',
+                children: (
+                  <>
+                    <Row gutter={12} style={{ marginBottom: 16 }}>
+                      {[
+                        ['今日请求', fmt.k(lastDay?.requests ?? 0)],
+                        ['今日花费', fmt.usd(lastDay?.costUsd ?? 0)],
+                        ['近 7 日请求', fmt.k(periodTotal.requests)],
+                        ['近 7 日成功率', fmt.pct(periodOkRate, 2)],
+                      ].map(([label, value]) => (
+                        <Col span={6} key={label}>
+                          <Card>
+                            <div style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>{label}</div>
+                            <div className="gw-num" style={{ fontSize: 20, fontWeight: 600, marginTop: 6 }}>{value}</div>
+                          </Card>
+                        </Col>
+                      ))}
+                    </Row>
+                    <Card title="近 7 日趋势" style={{ marginBottom: 16 }}>
+                      <Chart option={dailyOption} height={260} />
+                    </Card>
+                    <Card
                       title="按渠道用量"
-                      right={
+                      extra={
                         // 合计行口径与表内一致:有营收时给毛利率,无营收时不给(算出来是 −∞ 或 100%,都没意义)。
                         totalChCharge > 0 ? (
-                          <span style={{ fontSize: 12.5, color: 'var(--t3)' }}>
-                            本时段 成本 <b className="num">{fmt.usd(totalChCost)}</b> · 营收{' '}
-                            <b className="num">{fmt.usd(totalChCharge)}</b> · 毛利{' '}
-                            <b className="num" style={{ color: (periodMargin ?? 0) < 0 ? 'var(--err)' : undefined }}>{fmt.pct(periodMargin ?? 0, 1)}</b>
+                          <span style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>
+                            本时段 成本 <b className="gw-num">{fmt.usd(totalChCost)}</b> · 营收{' '}
+                            <b className="gw-num">{fmt.usd(totalChCharge)}</b> · 毛利{' '}
+                            <b className="gw-num" style={{ color: (periodMargin ?? 0) < 0 ? 'var(--gw-err)' : undefined }}>
+                              {fmt.pct(periodMargin ?? 0, 1)}
+                            </b>
                           </span>
-                        ) : undefined
+                        ) : null
                       }
-                    />
-                    <CardBody style={{ padding: 0 }}>
+                    >
                       {byChannel.length ? (
-                        <Table columns={byChannelCols} rows={byChannel} rowKey={r => r.channelName} />
+                        <Table
+                          rowKey="channelName"
+                          size="middle"
+                          dataSource={byChannel}
+                          columns={byChannelCols}
+                          pagination={false}
+                        />
                       ) : (
-                        <div style={{ padding: 24 }}>
-                          <Empty icon="activity" title={usageQuery.isFetching ? '加载中…' : '该时段暂无按渠道用量'} />
-                        </div>
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description={usageQuery.isFetching ? '加载中…' : '该时段暂无按渠道用量'}
+                        />
                       )}
-                    </CardBody>
-                  </Card>
-                </div>
-              </>
-            )}
-          </Drawer>
-        </div>
-      )}
+                    </Card>
+                  </>
+                ),
+              },
+            ]}
+          />
+        )}
+      </Drawer>
 
-      {offerModal.open && model && (
-        <OfferFormModal
-          open={offerModal.open}
-          modelId={model.id}
-          modelName={model.originalName}
-          editing={offerModal.editing}
-          channels={channels}
-          usedChannelIds={usedChannelIds}
-          onClose={() => setOfferModal({ open: false, editing: null })}
-        />
-      )}
+      <OfferFormModal
+        open={offerModal.open}
+        modelId={model?.id ?? 0}
+        modelName={model?.originalName ?? ''}
+        editing={offerModal.editing}
+        channels={channels}
+        usedChannelIds={usedChannelIds}
+        onClose={() => setOfferModal({ open: false, editing: null })}
+      />
     </>
   );
 }

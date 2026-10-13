@@ -1,12 +1,13 @@
 import { useState } from 'react';
+import { Button, Input, Select, Table, Tooltip } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import RequestLogDrawer from '@/components/RequestLogDrawer';
 import StatusDot from '@/components/StatusDot';
 import { EmptyState, ErrorState, NoResultState } from '@/components/States';
-import { Badge, Button, Input, Pager, Seg, Select, Stack, Table } from '@/ui/primitives';
-import type { Column } from '@/ui/primitives';
+import { IconRefresh } from '@/components/icons';
 import { api } from '@/services/api';
 import { FAIL_LABEL, STATUS_CLIENT_CLOSED, classifyError, fmt } from '@/utils/format';
 import type { LogFilters, RequestLogItem } from '@/types';
@@ -47,63 +48,67 @@ export default function Logs() {
     setPage(1);
   };
 
-  const columns: Column<RequestLogItem>[] = [
-    { key: 'ts', title: '时间', width: 148, render: r => <span className="mono small">{r.ts}</span> },
+  /**
+   * 状态列：颜色 + 文字 + 归因徽章。
+   * 499（客户端中断）单独表述为「中断」—— 它既不是成功也不是网关故障，
+   * 归到「失败」会让人以为上游有问题，归到「成功」又掩盖了请求没跑完。
+   */
+  const statusCell = (v: number, r: RequestLogItem) => {
+    if (v === STATUS_CLIENT_CLOSED) {
+      return <StatusDot status="" text="中断" tone="aux" />;
+    }
+    if (okCode(v)) return <StatusDot status="" text="成功" tone="ok" />;
+    // 失败原因徽章换行显示 —— 与圆点同列上下叠放,避免撑宽整列
+    return (
+      <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+        <StatusDot status="" text={r.error ? '失败' : String(v)} tone="err" />
+        {r.error && <span className="gw-badge">{FAIL_LABEL[classifyError(r.error)]}</span>}
+      </span>
+    );
+  };
+
+  const columns: ColumnsType<RequestLogItem> = [
     {
-      key: 'statusCode',
-      title: '状态',
-      width: 100,
-      render: r => {
-        const v = r.statusCode;
-        /*
-         * 状态列：颜色 + 文字 + 归因徽章。
-         * 499（客户端中断）单独表述为「中断」—— 它既不是成功也不是网关故障，
-         * 归到「失败」会让人以为上游有问题，归到「成功」又掩盖了请求没跑完。
-         */
-        if (v === STATUS_CLIENT_CLOSED) return <StatusDot status="" text="中断" tone="aux" />;
-        if (okCode(v)) return <StatusDot status="" text="成功" tone="ok" />;
-        return (
-          <span className="hstack" style={{ gap: 7 }}>
-            <StatusDot status="" text={r.error ? '失败' : String(v)} tone="err" />
-            {r.error && <Badge tone="slate">{FAIL_LABEL[classifyError(r.error)]}</Badge>}
-          </span>
-        );
-      },
+      title: '时间', dataIndex: 'ts', width: 138,
+      render: v => <span className="gw-mono">{v}</span>,
     },
-    { key: 'model', title: '模型', render: r => <span className="mono ellip" title={r.model}>{r.model}</span> },
-    { key: 'channelName', title: '渠道', width: 118, render: r => r.channelName || <span className="muted">—</span> },
-    { key: 'tokenName', title: '令牌', width: 108, render: r => <span className="muted">{r.tokenName || '—'}</span> },
-    { key: 'inTokens', title: '输入', align: 'right', width: 84, render: r => <span className="num">{fmt.k(r.inTokens)}</span> },
-    { key: 'outTokens', title: '输出', align: 'right', width: 84, render: r => <span className="num">{fmt.k(r.outTokens)}</span> },
+    { title: '状态', dataIndex: 'statusCode', width: 88, render: statusCell },
     {
-      key: 'cacheReadTokens',
-      title: '缓存读',
-      align: 'right',
-      width: 78,
-      render: r => (r.cacheReadTokens ? <span className="num">{fmt.k(r.cacheReadTokens)}</span> : <span className="muted">—</span>),
+      title: '模型', dataIndex: 'model', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
     },
     {
-      key: 'cacheWriteTokens',
-      title: '缓存写',
-      align: 'right',
-      width: 78,
-      render: r => (r.cacheWriteTokens ? <span className="num">{fmt.k(r.cacheWriteTokens)}</span> : <span className="muted">—</span>),
+      title: '渠道', dataIndex: 'channelName', width: 98, ellipsis: true,
+      render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span>,
     },
-    { key: 'firstTokenMs', title: '首字', align: 'right', width: 78, render: r => <span className="num">{r.firstTokenMs ? fmt.ms(r.firstTokenMs) : '—'}</span> },
-    { key: 'totalMs', title: '总耗时', align: 'right', width: 86, render: r => <span className="num">{fmt.ms(r.totalMs)}</span> },
-    { key: 'costUsd', title: '花费', align: 'right', width: 90, render: r => <span className="num">{fmt.usd(r.costUsd)}</span> },
+    {
+      title: '令牌', dataIndex: 'tokenName', width: 92, ellipsis: true,
+      render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span>,
+    },
+    { title: '输入', dataIndex: 'inTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '输出', dataIndex: 'outTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    {
+      title: '缓存读', dataIndex: 'cacheReadTokens', align: 'right', width: 70,
+      render: v => (v ? <span className="gw-num">{fmt.k(v)}</span> : <span style={{ color: 'var(--gw-text-3)' }}>—</span>),
+    },
+    {
+      title: '缓存写', dataIndex: 'cacheWriteTokens', align: 'right', width: 70,
+      render: v => (v ? <span className="gw-num">{fmt.k(v)}</span> : <span style={{ color: 'var(--gw-text-3)' }}>—</span>),
+    },
+    { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 70, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
+    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 82, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
+    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 86, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
   ];
 
   const errorText = error instanceof Error ? error.message : String(error ?? '加载失败');
-  const loading = (isLoading || isFetching) && logs.length === 0;
 
   return (
-    <>
+    <div className="gw-page">
       <PageHeader
         title="请求日志"
         desc="逐条请求明细，筛选与分页均由服务端执行；499 客户端中断不计入失败率"
         extra={
-          <Button icon="refresh" loading={isFetching} onClick={() => void refetch()}>
+          <Button icon={<IconRefresh />} loading={isFetching} onClick={() => void refetch()}>
             刷新
           </Button>
         }
@@ -111,104 +116,111 @@ export default function Logs() {
 
       <Blocks>
         <BlockCard>
-          <div style={{ padding: '12px 14px 0' }}>
-            <div className="toolbar">
-              <div className="hstack wrap" style={{ gap: 8 }}>
-                <Select
-                  style={{ width: 200 }}
-                  value={filters.model ?? ''}
-                  onChange={e => applyFilter({ model: e.target.value || undefined })}
-                  options={[{ value: '', label: '全部模型' }, ...modelList.map(m => ({ value: m.name, label: m.name }))]}
-                />
-                <Select
-                  style={{ width: 180 }}
-                  value={filters.channel ?? ''}
-                  onChange={e => applyFilter({ channel: e.target.value || undefined })}
-                  options={[{ value: '', label: '全部渠道' }, ...channelList.map(c => ({ value: c.name, label: c.name }))]}
-                />
-                <Select
-                  style={{ width: 140 }}
-                  value={filters.status ?? ''}
-                  onChange={e => applyFilter({ status: e.target.value as LogFilters['status'] })}
-                  options={[
-                    { value: '', label: '全部状态' },
-                    { value: 'ok', label: '成功' },
-                    { value: 'error', label: '失败' },
-                    { value: 'canceled', label: '中断 (499)' },
-                  ]}
-                />
-                <Input
-                  type="search"
-                  placeholder="搜索模型 / 渠道 / 令牌 / IP / 错误"
-                  style={{ width: 240 }}
-                  value={kwInput}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setKwInput(val);
-                    // 点清除按钮时同步清掉已生效的关键词筛选
-                    if (!val && filters.kw) applyFilter({ kw: '' });
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') applyFilter({ kw: kwInput.trim() });
-                  }}
-                />
-                <Button onClick={reset} disabled={!hasFilter && !kwInput}>重置</Button>
-              </div>
-              <div className="hstack" style={{ gap: 10 }}>
-                <Seg
-                  size="sm"
-                  value={size}
-                  onChange={v => {
-                    setSize(Number(v));
-                    setPage(1);
-                  }}
-                  options={PAGE_SIZES.map(n => ({ value: n, label: `${n}/页` }))}
-                />
-                <span className="cell-sub">
-                  {hasFilter ? (
-                    <>筛选出 <b>{fmt.n(total)}</b> 条日志</>
-                  ) : (
-                    <>共 <b>{fmt.n(total)}</b> 条日志</>
-                  )}
-                </span>
-              </div>
-            </div>
+          <div className="gw-toolbar">
+            <Select
+              style={{ width: 230 }}
+              value={filters.model}
+              onChange={v => applyFilter({ model: v })}
+              showSearch
+              allowClear
+              placeholder="全部模型"
+              options={modelList.map(m => ({ value: m.name, label: m.name }))}
+              filterOption={(input, o) => String(o?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
+            <Select
+              style={{ width: 190 }}
+              value={filters.channel}
+              onChange={v => applyFilter({ channel: v })}
+              showSearch
+              allowClear
+              placeholder="全部渠道"
+              options={channelList.map(c => ({ value: c.name, label: c.name }))}
+              filterOption={(input, o) => String(o?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
+            <Select
+              style={{ width: 140 }}
+              value={filters.status || undefined}
+              onChange={v => applyFilter({ status: v ?? '' })}
+              placeholder="全部状态"
+              options={[
+                { value: 'ok', label: '成功' },
+                { value: 'error', label: '失败' },
+                { value: 'canceled', label: '中断 (499)' },
+              ]}
+            />
+            <Input.Search
+              allowClear
+              placeholder="搜索模型 / 渠道 / 令牌 / IP / 错误"
+              style={{ width: 260 }}
+              value={kwInput}
+              onChange={e => {
+                const val = e.target.value;
+                setKwInput(val);
+                // 点清除按钮时同步清掉已生效的关键词筛选
+                if (!val && filters.kw) applyFilter({ kw: '' });
+              }}
+              onSearch={v => applyFilter({ kw: v.trim() })}
+            />
+            <Button onClick={reset} disabled={!hasFilter && !kwInput}>重置</Button>
+            <span className="count">
+              {hasFilter ? (
+                <>筛选出 <b>{fmt.n(total)}</b> 条日志</>
+              ) : (
+                <>共 <b>{fmt.n(total)}</b> 条日志</>
+              )}
+            </span>
           </div>
 
-          {loading ? (
-            <div style={{ padding: 14 }}>
-              <Stack gap="sm">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="sk" style={{ height: 14, width: `${90 - i * 8}%` }} />
-                ))}
-              </Stack>
-            </div>
-          ) : isError ? (
-            <div style={{ padding: 14 }}>
-              <ErrorState title="日志加载失败" desc={errorText} onRetry={() => void refetch()} />
-            </div>
-          ) : logs.length === 0 ? (
-            <div style={{ padding: 14 }}>
-              {hasFilter ? (
+          <Table<RequestLogItem>
+            rowKey="id"
+            size="middle"
+            loading={(isLoading || isFetching) && logs.length === 0}
+            dataSource={logs}
+            columns={columns}
+            locale={{
+              emptyText: isError ? (
+                <ErrorState
+                  title="日志加载失败"
+                  desc={errorText}
+                  onRetry={() => void refetch()}
+                />
+              ) : hasFilter ? (
                 <NoResultState
                   title="没有符合筛选条件的日志"
                   desc="当前模型 / 渠道 / 状态 / 关键字组合没有命中任何请求。"
-                  action={<Button size="sm" onClick={reset}>清除筛选</Button>}
+                  action={<Button size="small" onClick={reset}>清除筛选</Button>}
                 />
               ) : (
-                <EmptyState title="还没有请求日志" desc="网关转发过请求后，这里会逐条列出耗时、Token 与花费。" />
-              )}
-            </div>
-          ) : (
-            <>
-              <Table<RequestLogItem> columns={columns} rows={logs} rowKey={r => r.id} onRowClick={r => setDetail(r)} />
-              <Pager total={total} page={page} size={size} onChange={setPage} />
-            </>
-          )}
+                <EmptyState
+                  title="还没有请求日志"
+                  desc="网关转发过请求后，这里会逐条列出耗时、Token 与花费。"
+                />
+              ),
+            }}
+            onRow={r => ({
+              onClick: () => setDetail(r),
+              onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail(r); } },
+              tabIndex: 0,
+              style: { cursor: 'pointer' },
+            })}
+            pagination={{
+              current: page,
+              pageSize: size,
+              total,
+              showSizeChanger: true,
+              pageSizeOptions: PAGE_SIZES.map(String),
+              showTotal: t => `共 ${fmt.n(t)} 条`,
+              onChange: (p, ps) => {
+                // 切换 pageSize 时回到第 1 页,避免超出新分页范围
+                setPage(ps !== size ? 1 : p);
+                setSize(ps);
+              },
+            }}
+          />
         </BlockCard>
       </Blocks>
 
       <RequestLogDrawer detail={detail} onClose={() => setDetail(null)} />
-    </>
+    </div>
   );
 }

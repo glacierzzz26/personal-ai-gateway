@@ -2,7 +2,7 @@
 
 个人 AI 网关(Go):把多厂商模型收敛到一个出口。一个模型可挂多家「渠道」供给源(官方 API / OpenAI 兼容中转),
 请求按「模型目录 + 供给源报价 + 路由规则 + 渠道健康」真实选路转发,统一记账、故障降级、令牌额度/RPM/有效期管控。
-管理端是带账号登录的 Web 管理台(React 18,自绘设计系统·暗/亮双主题),所有业务数据存 PostgreSQL。设计决策见 [`DESIGN.md`](DESIGN.md)。
+管理端是带账号登录的 Web 管理台(React 18 + antd v5),所有业务数据存 PostgreSQL。设计决策见 [`DESIGN.md`](DESIGN.md)。
 
 ## 快速开始
 
@@ -95,7 +95,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 - `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
 - `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生;空闲 1h + 7 天绝对上限,滑动续期)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管
-- `web-v2/` 管理台前端源码(React 18 + react-query;自绘设计系统,去 antd/echarts,暗/亮双主题)
+- `web-v2/` 管理台前端源码(React 18 + antd v5 + react-query + echarts)
 
 ## 配置与密钥(全部见 config.example.yaml)
 

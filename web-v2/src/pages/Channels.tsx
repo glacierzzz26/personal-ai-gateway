@@ -1,22 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import {
+  App, Button, Col, Dropdown, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tooltip,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
+import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
-import { Block as BlockCard, BlockBody, Blocks } from '@/components/Block';
+import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import ProviderMark from '@/components/ProviderMark';
 import StatusDot from '@/components/StatusDot';
 import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import CostRatioModal from '@/components/models/CostRatioModal';
-import { Badge, Button, Field, HStack, Input, Note, Pager, Select, Switch, Table, TagList } from '@/ui/primitives';
-import type { Column } from '@/ui/primitives';
-import { Dropdown, Modal, confirm } from '@/ui/overlay';
-import type { MenuItem } from '@/ui/overlay';
-import { message } from '@/ui/toast';
 import { api } from '@/services/api';
 import { channelTypes, egressProtos, providers, quotaShapes } from '@/constants';
 import { channelLabel, channelMark, egressLabel } from '@/utils/channel';
 import { fmt } from '@/utils/format';
 import { QUOTA_ALERT, QUOTA_WINS, pctText, quotaRatio, quotaTone } from '@/utils/quota';
+import { TOKENS } from '@/styles/tokens';
 import type {
   Channel, ChannelDraft, ChannelQuota, ChannelType, EgressProto, FetchPricingResult,
   HealthStatus, Provider, QuotaShape, QuotaWindow, QuotaWindowKey,
@@ -30,6 +32,22 @@ interface PricingRes {
   error?: string;
 }
 
+/** 新建渠道表单默认值 */
+const DEFAULTS = {
+  provider: '' as Provider,
+  channelType: 'thirdparty' as ChannelType,
+  egressProto: 'openai' as EgressProto,
+  priority: 10,
+  weight: 1,
+  timeoutMs: 60000,
+  enabled: true,
+  maxFailures: 5,
+  cooldownSec: 30,
+  tags: [] as string[],
+  quotaPath: '',
+  quotaShape: '' as QuotaShape | '',
+};
+
 const TIMEOUT_OPTIONS = [
   { value: 5000, label: '5s' },
   { value: 10000, label: '10s' },
@@ -39,12 +57,34 @@ const TIMEOUT_OPTIONS = [
   { value: 300000, label: '5min' },
 ];
 
+/** 渠道创建/编辑表单入参(apiKey 编辑态留空 = 不改) */
+interface ChannelFormValues {
+  name: string;
+  provider: Provider;
+  channelType: ChannelType;
+  egressProto: EgressProto;
+  baseUrl: string;
+  apiKey?: string;
+  priority: number;
+  weight: number;
+  timeoutMs: number;
+  enabled: boolean;
+  maxFailures: number;
+  cooldownSec: number;
+  tags: string[];
+  quotaPath?: string;
+  quotaShape?: QuotaShape | '';
+  note?: string;
+}
+
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败,请稍后重试';
 }
 
 /** 额度窗口展示顺序与标签(rolling≈近5h)。键序与 utils/quota.ts 的 QUOTA_WINS 同源。 */
 const QUOTA_WIN_LABELS: Record<QuotaWindowKey, string> = { rolling: '5h', weekly: '周', monthly: '月' };
+
+const dash = <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
 
 /** 币种符号:余额按上游原币种展示,不折算(汇率是手工维护的,不该拿它当余额前提)。 */
 const CUR_SYMBOL: Record<string, string> = { CNY: '¥', USD: '$' };
@@ -82,8 +122,6 @@ function usedCapText(win: QuotaWindow, currency: string): string {
   return `${money(win.used ?? 0, currency)} / ${money(win.cap, currency)}`;
 }
 
-const dash = <span className="muted">—</span>;
-
 /**
  * 额度单元格。行内**不依赖悬停**即可看到:百分比、已用/上限、重置时间 ——
  * 窗口上限与重置时间原本只藏在 tooltip 里,渠道一多就得逐个悬停才扫得出来。
@@ -99,9 +137,9 @@ function QuotaCell({ q, ch }: { q: UseQueryResult<ChannelQuota, Error>; ch: Chan
   // 查询**成功结束后** fetchStatus 同样是 'idle'(见 query-core 的 success 分支),
   // 拿它当「被禁用」用会把每一条已拿到数据的渠道都误判成灰色占位。
   if (!quotaEnabled(ch)) {
-    return <span className="muted" title="第三方渠道需在「编辑」里配置额度查询路径">—</span>;
+    return <Tooltip title="第三方渠道需在「编辑」里配置额度查询路径">{dash}</Tooltip>;
   }
-  if (q.isPending) return <span className="muted">读取中…</span>;
+  if (q.isPending) return <span style={{ color: 'var(--gw-text-3)' }}>读取中…</span>;
   const quota = q.data;
   if (q.isError || !quota || !quota.available) {
     const tip = quota?.error
@@ -109,374 +147,89 @@ function QuotaCell({ q, ch }: { q: UseQueryResult<ChannelQuota, Error>; ch: Chan
         ? `${quota.error} —— 点「编辑」进入渠道,填第三方额度路径`
         : quota.error
       : '额度接口未响应';
-    return <span className="muted" title={tip}>—</span>;
+    return <Tooltip title={tip}>{dash}</Tooltip>;
   }
   const wins = okWindows(quota);
   const balance = quota.balance;
   if (wins.length === 0 && !balance) {
-    return <span className="muted" title="该渠道未返回可用额度窗口(不支持或已耗尽未上报)">—</span>;
+    return <Tooltip title="该渠道未返回可用额度窗口(不支持或已耗尽未上报)">{dash}</Tooltip>;
   }
 
-  const lines: string[] = [];
-  if (quota.planName) lines.push(`套餐：${quota.planName}`);
-  if (balance) lines.push(`剩余额度  ${money(balance.amount, balance.currency)}`);
-  for (const w of wins) {
-    const raw = usedCapText(w.win, balance?.currency ?? 'USD');
-    lines.push(
-      `${w.label} 窗口  已用 ${pctText(w.win.percent)}%${raw ? ` (${raw})` : ''}${
-        w.win.resetAt ? ` · ${resetText(w.win.resetAt)} 重置` : ''
-      }`,
-    );
-  }
-
-  return (
-    <span title={lines.join('\n')} style={{ display: 'inline-flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-      {balance && <span className="num" style={{ fontSize: 12.5 }}>{money(balance.amount, balance.currency)}</span>}
+  const detail = (
+    <div style={{ fontSize: 12.5, lineHeight: 1.9, minWidth: 200 }}>
+      {quota.planName && <div style={{ opacity: 0.85 }}>套餐：{quota.planName}</div>}
+      {balance && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
+          <span>剩余额度</span>
+          <span className="gw-num">{money(balance.amount, balance.currency)}</span>
+        </div>
+      )}
       {wins.map(w => {
-        const warn = w.win.percent >= QUOTA_ALERT * 100;
         const raw = usedCapText(w.win, balance?.currency ?? 'USD');
         return (
-          <span key={w.key} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
-            <span className="hstack" style={{ gap: 7 }}>
-              <span style={{ width: 22, color: 'var(--t3)', fontSize: 12.5 }}>{w.label}</span>
-              <span
-                className="bar"
-                style={{ width: 62, marginTop: 0 }}
-                role="img"
-                aria-label={`${w.label} 额度已用 ${pctText(w.win.percent)}%`}
-              >
-                <i style={{ width: `${Math.min(w.win.percent, 100)}%`, background: warn ? 'var(--warn)' : 'var(--brand)' }} />
-              </span>
-              <span className="num" style={{ fontSize: 12.5, color: warn ? 'var(--warn)' : 'var(--t2)' }}>
-                {pctText(w.win.percent)}%
-              </span>
+          <div key={w.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
+            <span>{w.label} 窗口</span>
+            <span className="gw-num">
+              已用 {pctText(w.win.percent)}%{raw ? ` (${raw})` : ''}
+              {w.win.resetAt ? ` · ${resetText(w.win.resetAt)} 重置` : ''}
             </span>
-            {/* 告警行把「已用/上限」与重置时间摊到行内 —— 不用悬停就能判断还有多久见底 */}
-            {warn && (raw || w.win.resetAt) && (
-              <span style={{ fontSize: 11.5, color: 'var(--t3)' }}>
-                {raw}
-                {raw && w.win.resetAt ? ' · ' : ''}
-                {w.win.resetAt ? `${resetText(w.win.resetAt)} 重置` : ''}
-              </span>
-            )}
-          </span>
+          </div>
         );
       })}
-    </span>
-  );
-}
-
-/* ============================ 新建 / 编辑表单 ============================ */
-/** 表单内部状态:数字字段留字符串,提交时再解析(空串才好校验)。 */
-interface FormState {
-  name: string;
-  provider: string;
-  channelType: ChannelType;
-  egressProto: EgressProto;
-  baseUrl: string;
-  apiKey: string;
-  priority: string;
-  weight: string;
-  timeoutMs: number;
-  maxFailures: string;
-  cooldownSec: string;
-  enabled: boolean;
-  tags: string[];
-  quotaPath: string;
-  quotaShape: QuotaShape | '';
-  note: string;
-}
-
-/** 渠道创建/编辑表单入参(apiKey 编辑态留空 = 不改)。 */
-export interface ChannelFormValues {
-  name: string;
-  provider: Provider;
-  channelType: ChannelType;
-  egressProto: EgressProto;
-  baseUrl: string;
-  apiKey?: string;
-  priority: number;
-  weight: number;
-  timeoutMs: number;
-  enabled: boolean;
-  maxFailures: number;
-  cooldownSec: number;
-  tags: string[];
-  quotaPath?: string;
-  quotaShape?: QuotaShape | '';
-  note?: string;
-}
-
-const EMPTY_FORM: FormState = {
-  name: '', provider: '', channelType: 'thirdparty', egressProto: 'openai', baseUrl: '', apiKey: '',
-  priority: '10', weight: '1', timeoutMs: 60000, maxFailures: '5', cooldownSec: '30',
-  enabled: true, tags: [], quotaPath: '', quotaShape: '', note: '',
-};
-
-function ChannelFormModal({
-  open, editing, onClose, onSubmit,
-}: {
-  open: boolean;
-  editing: Channel | null;
-  onClose: () => void;
-  onSubmit: (v: ChannelFormValues, id?: number) => Promise<void>;
-}) {
-  const [f, setF] = useState<FormState>(EMPTY_FORM);
-  const [errs, setErrs] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
-  const [tagInput, setTagInput] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
-    if (editing) {
-      setF({
-        name: editing.name,
-        provider: editing.provider,
-        channelType: editing.channelType,
-        egressProto: editing.egressProto,
-        baseUrl: editing.baseUrl,
-        apiKey: '',
-        priority: String(editing.priority),
-        weight: String(editing.weight),
-        timeoutMs: editing.timeoutMs,
-        maxFailures: String(editing.maxFailures),
-        cooldownSec: String(editing.cooldownSec),
-        enabled: editing.enabled,
-        tags: editing.tags ?? [],
-        quotaPath: editing.quotaPath ?? '',
-        quotaShape: (editing.quotaShape as QuotaShape) || '',
-        note: editing.note ?? '',
-      });
-    } else {
-      setF(EMPTY_FORM);
-    }
-    setErrs({});
-    setTagInput('');
-  }, [open, editing]);
-
-  const set = <K extends keyof FormState>(k: K, v: FormState[K]) => {
-    setF((s) => ({ ...s, [k]: v }));
-    setErrs((e) => (e[k as string] ? { ...e, [k as string]: '' } : e));
-  };
-
-  const validate = (): Record<string, string> => {
-    const e: Record<string, string> = {};
-    if (!f.name.trim()) e.name = '请输入渠道名称';
-    if (!f.baseUrl.trim()) e.baseUrl = '请输入上游地址';
-    if (!editing && !f.apiKey.trim()) e.apiKey = '请输入 API Key';
-    if (f.channelType === 'thirdparty') {
-      if (f.quotaPath.trim() && !/^\/\S*$/.test(f.quotaPath.trim())) {
-        e.quotaPath = '需以 / 开头的相对路径,如 /v1/dashboard/billing/subscription';
-      }
-      if (f.quotaPath.trim() && !f.quotaShape) e.quotaShape = '填写额度路径后需选择形状';
-    }
-    const num = (k: string, label: string, min: number, max?: number) => {
-      const n = Number(f[k as keyof FormState]);
-      if (!Number.isFinite(n) || n < min) e[k] = `${label}不能小于 ${min}`;
-      else if (max != null && n > max) e[k] = `${label}不能大于 ${max}`;
-    };
-    num('priority', '优先级', 1);
-    num('weight', '权重', 1, 100);
-    num('maxFailures', '熔断阈值', 1);
-    num('cooldownSec', '冷却秒数', 1);
-    return e;
-  };
-
-  const submit = async () => {
-    const e = validate();
-    if (Object.keys(e).length) {
-      setErrs(e);
-      return;
-    }
-    const values: ChannelFormValues = {
-      name: f.name.trim(),
-      provider: f.provider as Provider,
-      channelType: f.channelType,
-      egressProto: f.egressProto,
-      baseUrl: f.baseUrl.trim(),
-      apiKey: f.apiKey.trim() || undefined,
-      priority: Number(f.priority),
-      weight: Number(f.weight),
-      timeoutMs: f.timeoutMs,
-      enabled: f.enabled,
-      maxFailures: Number(f.maxFailures),
-      cooldownSec: Number(f.cooldownSec),
-      tags: f.tags,
-      quotaPath: f.quotaPath.trim(),
-      quotaShape: f.quotaShape,
-      note: f.note.trim() || undefined,
-    };
-    setSaving(true);
-    try {
-      await onSubmit(values, editing?.id);
-    } catch {
-      // 错误信息已由父级提示,保持弹窗打开以便修改
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!open) return null;
-
-  return (
-    <div className="overlay" style={{ zIndex: 70 }}>
-      <Modal
-        title={editing ? `编辑渠道「${editing.name}」` : '新建渠道'}
-        onClose={onClose}
-        width={640}
-        footer={
-          <>
-            <Button onClick={onClose}>取消</Button>
-            <Button variant="primary" loading={saving} onClick={() => void submit()}>
-              {editing ? '保存' : '创建'}
-            </Button>
-          </>
-        }
-      >
-        <div className="stack">
-          <Field label="名称" error={errs.name}>
-            <Input value={f.name} placeholder="例:DeepSeek 官方" onChange={(e) => set('name', e.target.value)} invalid={!!errs.name} />
-          </Field>
-
-          <div className="field-row">
-            <Field label="渠道类型" hint="决定上游额度怎么查。第三方渠道需手工配置额度路径与形状">
-              <Select
-                value={f.channelType}
-                onChange={(e) => set('channelType', e.target.value as ChannelType)}
-                options={channelTypes.map((t) => ({ value: t.value, label: t.label }))}
-              />
-            </Field>
-            <Field label="出站协议" hint="决定请求怎么发上去,与「是哪家的模型」无关">
-              <Select
-                value={f.egressProto}
-                onChange={(e) => set('egressProto', e.target.value as EgressProto)}
-                options={egressProtos.map((p) => ({ value: p.value, label: p.label }))}
-              />
-            </Field>
-            <Field label="供应商" hint="卖的是谁的模型。聚合渠道留空,列表按渠道类型显示">
-              <Select
-                value={f.provider}
-                onChange={(e) => set('provider', e.target.value)}
-                options={[{ value: '', label: '— 非厂商 / 聚合' }, ...providers.map((p) => ({ value: p, label: p }))]}
-              />
-            </Field>
-          </div>
-
-          <Field label="Base URL" error={errs.baseUrl}>
-            <Input
-              className="mono"
-              value={f.baseUrl}
-              placeholder="https://api.deepseek.com/v1"
-              onChange={(e) => set('baseUrl', e.target.value)}
-              invalid={!!errs.baseUrl}
-            />
-          </Field>
-
-          {f.channelType === 'thirdparty' && (
-            <div className="field-row">
-              <Field label="额度路径" hint="相对路径,拼在 Base URL 之后。留空则该渠道不查额度" error={errs.quotaPath}>
-                <Input
-                  className="mono"
-                  value={f.quotaPath}
-                  placeholder="/v1/dashboard/billing/subscription"
-                  onChange={(e) => set('quotaPath', e.target.value)}
-                  invalid={!!errs.quotaPath}
-                />
-              </Field>
-              <Field label="额度形状" hint="上游返回的 JSON 形状;填了路径就必须选形状" error={errs.quotaShape}>
-                <Select
-                  value={f.quotaShape}
-                  onChange={(e) => set('quotaShape', e.target.value as QuotaShape | '')}
-                  options={[{ value: '', label: '选择形状' }, ...quotaShapes.map((s) => ({ value: s.value, label: s.label }))]}
-                />
-              </Field>
-            </div>
-          )}
-
-          <Field label="API Key" hint={editing ? '留空则保持原密钥不变' : undefined} error={errs.apiKey}>
-            <Input
-              type="password"
-              autoComplete="new-password"
-              value={f.apiKey}
-              placeholder={editing ? '留空则保持原密钥不变' : 'sk-…'}
-              onChange={(e) => set('apiKey', e.target.value)}
-              invalid={!!errs.apiKey}
-            />
-          </Field>
-
-          <div className="field-row">
-            <Field label="优先级" hint="越小越优先参与选路" error={errs.priority}>
-              <Input type="number" min={1} value={f.priority} onChange={(e) => set('priority', e.target.value)} invalid={!!errs.priority} />
-            </Field>
-            <Field label="权重" hint="按权重比例分摊流量(1-100)" error={errs.weight}>
-              <Input type="number" min={1} max={100} value={f.weight} onChange={(e) => set('weight', e.target.value)} invalid={!!errs.weight} />
-            </Field>
-            <Field label="超时" hint="渠道级超时只作选路参考,请求超时以「系统设置」为准">
-              <Select
-                value={f.timeoutMs}
-                onChange={(e) => set('timeoutMs', Number(e.target.value))}
-                options={TIMEOUT_OPTIONS}
-              />
-            </Field>
-          </div>
-
-          <div className="field-row">
-            <Field label="熔断阈值(次)" hint="连续失败多少次后熔断；499 客户端中断不计入" error={errs.maxFailures}>
-              <Input type="number" min={1} value={f.maxFailures} onChange={(e) => set('maxFailures', e.target.value)} invalid={!!errs.maxFailures} />
-            </Field>
-            <Field label="熔断冷却(s)" hint="熔断后的冷却秒数" error={errs.cooldownSec}>
-              <Input type="number" min={1} value={f.cooldownSec} onChange={(e) => set('cooldownSec', e.target.value)} invalid={!!errs.cooldownSec} />
-            </Field>
-            <Field label="启用" hint="停用后该渠道不再参与选路">
-              <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
-            </Field>
-          </div>
-
-          <Field label="标签">
-            <Input
-              value={tagInput}
-              placeholder="输入后回车添加，如:主力 / 备用 / 需配额"
-              onChange={(e) => setTagInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== 'Enter') return;
-                e.preventDefault();
-                const t = tagInput.trim();
-                if (t && !f.tags.includes(t)) set('tags', [...f.tags, t]);
-                setTagInput('');
-              }}
-            />
-            {f.tags.length > 0 && (
-              <TagList>
-                {f.tags.map((t) => (
-                  <span key={t} className="tag" style={{ cursor: 'pointer' }} title="点击移除" onClick={() => set('tags', f.tags.filter((x) => x !== t))}>
-                    {t} ×
-                  </span>
-                ))}
-              </TagList>
-            )}
-          </Field>
-
-          <Field label="备注">
-            <textarea className="input" rows={2} value={f.note} placeholder="可选" onChange={(e) => set('note', e.target.value)} />
-          </Field>
-        </div>
-      </Modal>
     </div>
   );
+
+  return (
+    <Tooltip title={detail}>
+      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+        {balance && (
+          <span className="gw-num" style={{ fontSize: 12.5 }}>{money(balance.amount, balance.currency)}</span>
+        )}
+        {wins.map(w => {
+          const warn = w.win.percent >= QUOTA_ALERT * 100;
+          const raw = usedCapText(w.win, balance?.currency ?? 'USD');
+          return (
+            <span key={w.key} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ width: 22, color: 'var(--gw-text-3)', fontSize: 12.5 }}>{w.label}</span>
+                <span className="gw-bar" style={{ width: 62 }} role="img" aria-label={`${w.label} 额度已用 ${pctText(w.win.percent)}%`}>
+                  <i style={{ width: `${Math.min(w.win.percent, 100)}%`, background: warn ? TOKENS.warn : TOKENS.c1 }} />
+                </span>
+                <span className="gw-num" style={{ fontSize: 12.5, color: warn ? 'var(--gw-warn)' : 'var(--gw-text-2)' }}>
+                  {pctText(w.win.percent)}%
+                </span>
+              </span>
+              {/* 告警行把「已用/上限」与重置时间摊到行内 —— 不用悬停就能判断还有多久见底 */}
+              {warn && (raw || w.win.resetAt) && (
+                <span style={{ fontSize: 11.5, color: 'var(--gw-text-3)' }}>
+                  {raw}
+                  {raw && w.win.resetAt ? ' · ' : ''}
+                  {w.win.resetAt ? `${resetText(w.win.resetAt)} 重置` : ''}
+                </span>
+              )}
+            </span>
+          );
+        })}
+      </span>
+    </Tooltip>
+  );
 }
 
-/* ============================ 页面主体 ============================ */
 export default function Channels() {
+  const { message, modal } = App.useApp();
   const qc = useQueryClient();
+  const [form] = Form.useForm<ChannelFormValues>();
+  // 第三方渠道才展开「额度路径 + 形状」,故需跟随表单实时值渲染。
+  const channelType = Form.useWatch('channelType', form);
 
   const [kw, setKw] = useState('');
   const [provider, setProvider] = useState('');
   const [status, setStatus] = useState('');
   const [quotaFilter, setQuotaFilter] = useState('');
   const [testingId, setTestingId] = useState<number | null>(null);
+  const [syncingId, setSyncingId] = useState<number | null>(null);
+  const [pricingId, setPricingId] = useState<number | null>(null);
   const [pricingRes, setPricingRes] = useState<PricingRes | null>(null);
-  const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
 
   // 成本系数编辑器(成本 = 厂商官方价 × 系数)。
   const [ratioChannel, setRatioChannel] = useState<Channel | null>(null);
@@ -484,6 +237,7 @@ export default function Channels() {
   // 新建 / 编辑共享弹窗
   const [editing, setEditing] = useState<Channel | null>(null);
   const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // 同步模型结果展示
   const [syncRes, setSyncRes] = useState<{ name: string; added: number; updated: number; models: string[]; modelCount: number } | null>(null);
@@ -543,20 +297,41 @@ export default function Channels() {
   // —— 新建 / 编辑 ——
   function openCreate() {
     setEditing(null);
+    form.resetFields();
+    form.setFieldsValue(DEFAULTS);
     setOpen(true);
   }
 
   function openEdit(row: Channel) {
     setEditing(row);
+    form.resetFields();
+    form.setFieldsValue({
+      name: row.name,
+      provider: row.provider,
+      channelType: row.channelType,
+      egressProto: row.egressProto,
+      baseUrl: row.baseUrl,
+      priority: row.priority,
+      weight: row.weight,
+      timeoutMs: row.timeoutMs,
+      enabled: row.enabled,
+      maxFailures: row.maxFailures,
+      cooldownSec: row.cooldownSec,
+      tags: row.tags ?? [],
+      quotaPath: row.quotaPath ?? '',
+      quotaShape: (row.quotaShape as QuotaShape) || '',
+      note: row.note,
+    });
     setOpen(true);
   }
 
   function closeModal() {
     setOpen(false);
     setEditing(null);
+    form.resetFields();
   }
 
-  async function handleSubmit(values: ChannelFormValues, id?: number) {
+  async function handleSubmit(values: ChannelFormValues) {
     // updateChannel 是整体替换:必须从当前表单快照构造完整 draft。
     // apiKey 仅在显式填新值时下发(undefined / 留空则后端保持原密钥)。
     const base = {
@@ -565,22 +340,23 @@ export default function Channels() {
       channelType: values.channelType,
       egressProto: values.egressProto,
       baseUrl: values.baseUrl.trim(),
-      priority: values.priority,
-      weight: values.weight,
-      timeoutMs: values.timeoutMs,
-      enabled: values.enabled,
-      maxFailures: values.maxFailures,
-      cooldownSec: values.cooldownSec,
+      priority: values.priority ?? DEFAULTS.priority,
+      weight: values.weight ?? DEFAULTS.weight,
+      timeoutMs: values.timeoutMs ?? DEFAULTS.timeoutMs,
+      enabled: values.enabled ?? DEFAULTS.enabled,
+      maxFailures: values.maxFailures ?? DEFAULTS.maxFailures,
+      cooldownSec: values.cooldownSec ?? DEFAULTS.cooldownSec,
       tags: values.tags ?? [],
       // 额度配置只有第三方渠道有意义;切回内置类型时下发空值,免得残留路径日后误导。
       quotaPath: values.channelType === 'thirdparty' ? values.quotaPath?.trim() ?? '' : '',
       quotaShape: values.channelType === 'thirdparty' ? (values.quotaShape ?? '') : '',
       note: values.note?.trim() || undefined,
     };
+    setSubmitting(true);
     try {
-      if (id != null) {
+      if (editing) {
         const draft: ChannelDraft = { ...base, apiKey: values.apiKey?.trim() || undefined };
-        await api.updateChannel(id, draft);
+        await api.updateChannel(editing.id, draft);
         message.success(`渠道「${base.name}」已更新`);
       } else {
         const draft: ChannelDraft = { ...base, apiKey: values.apiKey?.trim() ?? '' };
@@ -591,30 +367,34 @@ export default function Channels() {
       closeModal();
     } catch (e) {
       message.error(errText(e));
-      throw e;
+    } finally {
+      setSubmitting(false);
     }
   }
 
   // —— 删除 ——
-  async function handleDelete(row: Channel) {
-    const ok = await confirm({
+  function handleDelete(row: Channel) {
+    modal.confirm({
       title: `删除渠道「${row.name}」?`,
       content: '将级联删除该渠道下的全部供给源与挂载关系,且不可恢复。',
       okText: '删除',
-      danger: true,
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await api.deleteChannel(row.id);
+          message.success(`渠道「${row.name}」已删除`);
+          await invalidate();
+        } catch (e) {
+          message.error(errText(e));
+        }
+      },
     });
-    if (!ok) return;
-    try {
-      await api.deleteChannel(row.id);
-      message.success(`渠道「${row.name}」已删除`);
-      await invalidate();
-    } catch (e) {
-      message.error(errText(e));
-    }
   }
 
   // —— 同步模型(拉渠道 /v1/models → 补目录 + 挂停用 offer)——
   async function handleSyncModels(row: Channel) {
+    setSyncingId(row.id);
     try {
       const r = await api.syncModels(row.id);
       setSyncRes({ name: row.name, added: r.added, updated: r.updated, models: r.models, modelCount: r.modelCount });
@@ -626,12 +406,15 @@ export default function Channels() {
       qc.invalidateQueries({ queryKey: ['models'] });
     } catch (e) {
       message.error(`同步失败:${errText(e)}`);
+    } finally {
+      setSyncingId(null);
     }
   }
 
   // —— 获取官方定价(按 provider 抓厂商官网单价表 → 落「官方参考价」,不改 offer 价)——
   // 失败即失败:抓不到/解析不出/页面改版一律弹窗显式报错,原报价保持不变。
   async function handleFetchPricing(row: Channel) {
+    setPricingId(row.id);
     try {
       const r = await api.fetchPricing(row.id);
       setPricingRes({ name: row.name, provider: row.provider, result: r });
@@ -639,10 +422,12 @@ export default function Channels() {
       qc.invalidateQueries({ queryKey: ['official-prices'] });
     } catch (e) {
       setPricingRes({ name: row.name, provider: row.provider, error: errText(e) });
+    } finally {
+      setPricingId(null);
     }
   }
 
-  const list = useMemo(() => channels.filter(c => {
+  const list = channels.filter(c => {
     if (kw && !`${c.name}${c.baseUrl}`.toLowerCase().includes(kw.toLowerCase())) return false;
     if (provider === '__none__') { if (c.provider) return false; }
     else if (provider && c.provider !== provider) return false;
@@ -655,111 +440,123 @@ export default function Channels() {
       if (quotaFilter === 'warn' && tone !== 'alert' && tone !== 'warn') return false;
     }
     return true;
-  }), [channels, kw, provider, status, quotaFilter, quotaById]);
+  });
 
-  // 额度列可点表头排序:余量比率 = 各可用窗口已用率的最大值(见 quotaRatio)。
-  const sorted = useMemo(() => {
-    if (!sort) return list;
-    if (sort.key !== 'quota') return list;
-    return [...list].sort(
-      (a, b) => ((quotaRatio(quotaById.get(a.id)?.data) ?? -1) - (quotaRatio(quotaById.get(b.id)?.data) ?? -1)) * sort.dir,
-    );
-  }, [list, sort, quotaById]);
-
-  const onSort = (key: string) => {
-    if (key !== 'quota') return;
-    setSort(s => (s && s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: 1 }));
-  };
-
-  const PAGE_SIZE = 10;
-  const total = sorted.length;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const curPage = Math.min(page, pageCount);
-  const paged = total > PAGE_SIZE ? sorted.slice((curPage - 1) * PAGE_SIZE, curPage * PAGE_SIZE) : sorted;
-
-  const columns: Column<Channel>[] = [
+  const columns: ColumnsType<Channel> = [
     {
       // 渠道名 / 供应商 / Base URL 三合一 —— 都是「这条渠道是什么」,同格堆叠。
-      key: 'name',
-      title: '渠道',
-      render: (r) => (
+      // 不设 width:弹性列吸收剩余宽度,表格在 tableLayout="fixed" 下不横向溢出。
+      title: '渠道', dataIndex: 'name',
+      render: (v, r) => (
         <div style={{ minWidth: 0 }}>
-          <div className="strong">{r.name}</div>
-          <div className="hstack" style={{ gap: 6, fontSize: 12.5, color: 'var(--t3)' }}>
+          <div style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--gw-text-3)' }}>
             <ProviderMark name={channelMark(r)} size={14} />
             {channelLabel(r)} · {egressLabel(r.egressProto)} · {r.modelCount} 个模型
           </div>
-          <div className="mono ellip" style={{ fontSize: 12, color: 'var(--t3)' }} title={r.baseUrl}>
-            {r.baseUrl}
-          </div>
+          <Tooltip title={r.baseUrl}>
+            <div
+              className="gw-mono"
+              style={{ fontSize: 12, color: 'var(--gw-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {r.baseUrl}
+            </div>
+          </Tooltip>
         </div>
       ),
     },
     {
       // 优先级 / 权重 合并 —— 两者都是选路参数,同列上下排列
-      key: 'route', title: '选路', align: 'right', width: 84,
-      render: (r) => <span className="num" style={{ color: 'var(--t3)' }}>P{r.priority} · W{r.weight}</span>,
+      title: '选路', key: 'route', align: 'right', width: 84,
+      render: (_, r) => (
+        <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>
+          P{r.priority} · W{r.weight}
+        </span>
+      ),
     },
     {
       // 成功率 / 延迟 / 状态 合并 —— 都是「这条渠道现在健不健康」
-      key: 'health', title: '健康度', align: 'right', width: 132,
-      render: (r) => {
+      title: '健康度', key: 'health', align: 'right', width: 132,
+      render: (_, r) => {
         // down/disabled/unknown 都没有可报的成功率与延迟:前者在冷却、后两者没跑过流量或没启用。
         const noData = r.status === 'down' || r.status === 'disabled' || r.status === 'unknown';
         return (
           <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
             <StatusDot status={r.status} />
-            <span className="num" style={{ fontSize: 12.5 }}>
+            <span className="gw-num" style={{ fontSize: 12.5 }}>
               {noData ? '—' : fmt.pct(r.successRate, 2)} · {noData ? '—' : fmt.ms(r.latencyMs)}
             </span>
-            {r.circuitOpen && <Badge tone="red">熔断中</Badge>}
+            {r.circuitOpen && <span className="gw-badge" style={{ color: TOKENS.err, borderColor: TOKENS.err }}>熔断中</span>}
           </span>
         );
       },
     },
     {
       // 今日 Token / 花费 合并 —— 同一时段的量价,一行显示
-      key: 'today', title: '今日用量', align: 'right', width: 104,
-      render: (r) => (
+      title: '今日用量', key: 'today', align: 'right', width: 104,
+      render: (_, r) => (
         <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-          <span className="num">{fmt.k(r.todayTokens)}</span>
-          <span className="num" style={{ fontSize: 12.5, color: 'var(--t3)' }}>{fmt.usd(r.todayCostUsd)}</span>
+          <span className="gw-num">{fmt.k(r.todayTokens)}</span>
+          <span className="gw-num" style={{ fontSize: 12.5, color: 'var(--gw-text-3)' }}>{fmt.usd(r.todayCostUsd)}</span>
         </span>
       ),
     },
     {
-      // 额度:窗口型逐条(标签+条+%),余额型直接给金额。表头可排序。
-      key: 'quota', title: '额度', width: 200, sortable: true,
-      render: (r) => {
+      // 额度:窗口型逐条(标签+条+%),余额型直接给金额。表头可排序 ——
+      // 余量比率 = 各可用窗口已用率的最大值(见 quotaRatio),与高亮/筛选同一口径。
+      title: '额度', key: 'quota', width: 200,
+      sorter: (a, b) => (quotaRatio(quotaById.get(a.id)?.data) ?? -1) - (quotaRatio(quotaById.get(b.id)?.data) ?? -1),
+      render: (_, r) => {
         const q = quotaById.get(r.id);
         return q ? <QuotaCell q={q} ch={r} /> : dash;
       },
     },
     {
-      // 高频（测试/编辑）外露，低频（同步/抓价/删除）收进「更多」
-      key: 'actions', title: '操作', align: 'right', width: 160,
-      render: (r) => {
+      // 高频（测试/编辑）外露，低频（同步/抓价/删除）收进「更多」——12 列表格放得进笔记本宽
+      title: '操作', align: 'right', width: 160,
+      render: (_, r) => {
         const vi = vendorInfo(r.provider);
         const canFetch = !!vi && !vi.manualOnly;
         const manualOnly = !!vi?.manualOnly;
-        const moreItems: MenuItem[] = [
-          { label: '同步模型', icon: 'refresh', onClick: () => handleSyncModels(r) },
-          { label: '成本系数', icon: 'gauge', onClick: () => setRatioChannel(r) },
-        ];
-        if (canFetch) moreItems.push({ label: '获取官方定价', icon: 'download', onClick: () => handleFetchPricing(r) });
-        moreItems.push({ sep: true }, { label: '删除', icon: 'trash', danger: true, onClick: () => void handleDelete(r) });
+        const menu: MenuProps = {
+          items: [
+            { key: 'sync', label: '同步模型', disabled: syncingId === r.id },
+            { key: 'cost', label: '成本系数' },
+            ...(canFetch ? [{ key: 'pricing', label: '获取官方定价', disabled: pricingId === r.id }] : []),
+            { type: 'divider' as const },
+            { key: 'delete', label: '删除', danger: true },
+          ],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            if (key === 'sync') handleSyncModels(r);
+            else if (key === 'cost') setRatioChannel(r);
+            else if (key === 'pricing') handleFetchPricing(r);
+            else if (key === 'delete') handleDelete(r);
+          },
+        };
         return (
-          <HStack gap={4}>
-            <Button size="sm" loading={testingId === r.id} onClick={() => { setTestingId(r.id); test.mutate(r.id); }}>
+          <Space size={4}>
+            <Button
+              size="small"
+              loading={testingId === r.id}
+              onClick={() => { setTestingId(r.id); test.mutate(r.id); }}
+            >
               测试
             </Button>
-            <Button size="sm" onClick={() => openEdit(r)}>编辑</Button>
-            <Dropdown
-              title={canFetch ? undefined : `${manualOnly ? '该厂商官方页为动态渲染,无法稳定抓取。' : ''}聚合渠道请到「官方定价」页按厂商抓取。`}
-              ariaLabel={`更多操作 ${r.name}`}
-              items={moreItems}
-            />
-          </HStack>
+            <Button size="small" onClick={() => openEdit(r)}>编辑</Button>
+            <Tooltip
+              title={canFetch ? undefined : (
+                <span>
+                  {manualOnly ? '该厂商官方页为动态渲染,无法稳定抓取。' : ''}
+                  聚合渠道请到「官方定价」页按厂商抓取(本渠道的 provider 是上游协议,不是真实厂商)。
+                </span>
+              )}
+            >
+              <Dropdown menu={menu} trigger={['click']}>
+                <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`更多操作 ${r.name}`} />
+              </Dropdown>
+            </Tooltip>
+          </Space>
         );
       },
     },
@@ -777,173 +574,305 @@ export default function Channels() {
     <EmptyState
       title="还没有渠道"
       desc="一条渠道 = 一个上游 API 端点与凭据。至少建一个，网关才能把请求转发出去。"
-      action={<Button variant="primary" onClick={openCreate}>新建渠道</Button>}
+      action={<Button size="small" type="primary" onClick={openCreate}>新建渠道</Button>}
     />
   ) : (
     <NoResultState
       title="没有符合条件的渠道"
       desc="当前筛选（关键字 / 供应商 / 状态 / 额度）没有命中。"
-      action={<Button onClick={() => { setKw(''); setProvider(''); setStatus(''); setQuotaFilter(''); }}>清除筛选</Button>}
+      action={<Button size="small" onClick={() => { setKw(''); setProvider(''); setStatus(''); setQuotaFilter(''); }}>清除筛选</Button>}
     />
   );
 
   return (
-    <>
+    <div className="gw-page">
       <PageHeader
         title="渠道管理"
         desc="一条渠道 = 一个上游 API 端点与凭据，管的是「怎么连上去」"
-        extra={<Button variant="primary" onClick={openCreate}>新建渠道</Button>}
+        extra={<Button type="primary" onClick={openCreate}>新建渠道</Button>}
       />
 
       <Blocks>
         <BlockCard>
-          <BlockBody>
-            <div className="toolbar">
-              <div className="hstack wrap" style={{ gap: 8 }}>
-                <Input
-                  placeholder="搜索名称或地址"
-                  style={{ width: 240 }}
-                  value={kw}
-                  onChange={e => setKw(e.target.value)}
-                />
-                <Select
-                  style={{ width: 150 }} value={provider} onChange={e => setProvider(e.target.value)}
-                  options={[
-                    { value: '', label: '全部供应商' },
-                    ...providers.map(p => ({ value: p, label: p })),
-                    // 聚合渠道 provider 为空,单列一项才能筛出来(空串已被「全部」占用)
-                    { value: '__none__', label: '非厂商 / 聚合' },
-                  ]}
-                />
-                <Select
-                  style={{ width: 140 }} value={status} onChange={e => setStatus(e.target.value)}
-                  options={[
-                    { value: '', label: '全部状态' },
-                    { value: 'healthy' satisfies HealthStatus, label: '健康' },
-                    { value: 'degraded' satisfies HealthStatus, label: '降级' },
-                    { value: 'down' satisfies HealthStatus, label: '不可用' },
-                    { value: 'unknown' satisfies HealthStatus, label: '待观察' },
-                    { value: 'disabled' satisfies HealthStatus, label: '已停用' },
-                  ]}
-                />
-                <Select
-                  style={{ width: 160 }} value={quotaFilter} onChange={e => setQuotaFilter(e.target.value)}
-                  options={[
-                    { value: '', label: '全部额度' },
-                    { value: 'alert', label: '额度告警 ≥85%' },
-                    { value: 'warn', label: '额度逼近 ≥60%' },
-                  ]}
-                />
-              </div>
-              <span className="cell-sub">
-                {filtering ? (
-                  <>筛选出 <b>{sorted.length}</b> / {channels.length} 条渠道</>
-                ) : (
-                  <>共 <b>{channels.length}</b> 条渠道</>
-                )}
-              </span>
-            </div>
-          </BlockBody>
-        </BlockCard>
+          <div className="gw-toolbar">
+            <Input.Search allowClear placeholder="搜索名称或地址" style={{ width: 240 }} value={kw} onChange={e => setKw(e.target.value)} />
+            <Select
+              style={{ width: 150 }} value={provider} onChange={setProvider}
+              options={[
+                { value: '', label: '全部供应商' },
+                ...providers.map(p => ({ value: p, label: p })),
+                // 聚合渠道 provider 为空,单列一项才能筛出来(空串已被「全部」占用)
+                { value: '__none__', label: '非厂商 / 聚合' },
+              ]}
+            />
+            <Select
+              style={{ width: 140 }} value={status} onChange={setStatus}
+              options={[
+                { value: '', label: '全部状态' },
+                { value: 'healthy' satisfies HealthStatus, label: '健康' },
+                { value: 'degraded' satisfies HealthStatus, label: '降级' },
+                { value: 'down' satisfies HealthStatus, label: '不可用' },
+                { value: 'unknown' satisfies HealthStatus, label: '待观察' },
+                { value: 'disabled' satisfies HealthStatus, label: '已停用' },
+              ]}
+            />
+            <Select
+              style={{ width: 160 }} value={quotaFilter} onChange={setQuotaFilter}
+              options={[
+                { value: '', label: '全部额度' },
+                { value: 'alert', label: '额度告警 ≥85%' },
+                { value: 'warn', label: '额度逼近 ≥60%' },
+              ]}
+            />
+            <span className="count">
+              {filtering ? (
+                <>筛选出 <b>{list.length}</b> / {channels.length} 条渠道</>
+              ) : (
+                <>共 <b>{channels.length}</b> 条渠道</>
+              )}
+            </span>
+          </div>
 
-        <BlockCard>
-          <BlockBody style={{ padding: 0 }}>
-            {isLoading && channels.length === 0 ? (
-              <div style={{ padding: 14 }}>
-                <span className="cell-sub">加载中…</span>
-              </div>
-            ) : sorted.length === 0 ? (
-              emptyNode
-            ) : (
-              <>
-                <Table<Channel> columns={columns} rows={paged} rowKey={r => r.id} sort={sort ?? undefined} onSort={onSort} />
-                {total > PAGE_SIZE && <Pager total={total} page={curPage} size={PAGE_SIZE} onChange={setPage} />}
-              </>
-            )}
-          </BlockBody>
+          <Table<Channel>
+            rowKey="id"
+            size="middle"
+            loading={isLoading && channels.length === 0}
+            dataSource={list}
+            columns={columns}
+            tableLayout="fixed"
+            pagination={channels.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'default' } : false}
+            locale={{ emptyText: emptyNode }}
+          />
         </BlockCard>
       </Blocks>
 
       {/* 新建 / 编辑共享弹窗 */}
-      <ChannelFormModal
+      <Modal
+        title={editing ? `编辑渠道「${editing.name}」` : '新建渠道'}
         open={open}
-        editing={editing}
-        onClose={closeModal}
-        onSubmit={handleSubmit}
-      />
+        onOk={() => form.submit()}
+        confirmLoading={submitting}
+        onCancel={closeModal}
+        width={640}
+        okText={editing ? '保存' : '创建'}
+        cancelText="取消"
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleSubmit}
+          requiredMark={false}
+          initialValues={{ provider: DEFAULTS.provider, enabled: DEFAULTS.enabled }}
+        >
+          <Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true, message: '请输入渠道名称' }]}>
+            <Input placeholder="例:DeepSeek 官方" />
+          </Form.Item>
+
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item
+                name="channelType" label="渠道类型" rules={[{ required: true, message: '请选择渠道类型' }]}
+                tooltip="决定上游额度怎么查。第三方渠道需手工配置额度路径与形状"
+              >
+                <Select options={channelTypes.map(t => ({ value: t.value, label: t.label }))} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="egressProto" label="出站协议" rules={[{ required: true, message: '请选择出站协议' }]}
+                tooltip="决定请求怎么发上去,与「是哪家的模型」无关"
+              >
+                <Select options={egressProtos.map(p => ({ value: p.value, label: p.label }))} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="provider" label="供应商"
+                tooltip="卖的是谁的模型。聚合渠道(如 command code)留空,列表按渠道类型显示"
+              >
+                <Select
+                  allowClear
+                  placeholder="— 非厂商 / 聚合"
+                  options={providers.map(p => ({ value: p, label: p }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, whitespace: true, message: '请输入上游地址' }]}>
+            <Input className="gw-mono" placeholder="https://api.deepseek.com/v1" />
+          </Form.Item>
+
+          {channelType === 'thirdparty' && (
+            <Row gutter={12}>
+              <Col span={14}>
+                <Form.Item
+                  name="quotaPath" label="额度路径"
+                  tooltip="相对路径,拼在 Base URL 之后。留空则该渠道不查额度"
+                  rules={[{
+                    pattern: /^\/\S*$/,
+                    message: '需以 / 开头的相对路径,如 /v1/dashboard/billing/subscription',
+                  }]}
+                >
+                  <Input className="gw-mono" placeholder="/v1/dashboard/billing/subscription" />
+                </Form.Item>
+              </Col>
+              <Col span={10}>
+                <Form.Item
+                  name="quotaShape" label="额度形状"
+                  tooltip="上游返回的 JSON 形状;填了路径就必须选形状"
+                  dependencies={['quotaPath']}
+                  rules={[({ getFieldValue }) => ({
+                    validator: (_, v) =>
+                      getFieldValue('quotaPath') && !v
+                        ? Promise.reject(new Error('填写额度路径后需选择形状'))
+                        : Promise.resolve(),
+                  })]}
+                >
+                  <Select
+                    allowClear placeholder="选择形状"
+                    options={quotaShapes.map(s => ({ value: s.value, label: s.label, title: s.hint }))}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
+
+          <Form.Item
+            name="apiKey"
+            label="API Key"
+            extra={editing ? '留空则保持原密钥不变' : undefined}
+            rules={[{ required: !editing, whitespace: true, message: '请输入 API Key' }]}
+          >
+            <Input.Password
+              autoComplete="new-password"
+              placeholder={editing ? '留空则保持原密钥不变' : 'sk-…'}
+            />
+          </Form.Item>
+
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="priority" label="优先级" tooltip="越小越优先参与选路" rules={[{ required: true, message: '必填' }]}>
+                <InputNumber min={1} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="weight" label="权重" tooltip="按权重比例分摊流量(1-100)" rules={[{ required: true, message: '必填' }]}>
+                <InputNumber min={1} max={100} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="timeoutMs" label="超时" rules={[{ required: true, message: '必填' }]}
+                tooltip="渠道级超时只作为选路权重参考，不约束单个请求；请求超时以「系统设置」为准"
+              >
+                <Select options={TIMEOUT_OPTIONS} />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="maxFailures" label="熔断阈值(次)" tooltip="连续失败多少次后熔断；499 客户端中断不计入" rules={[{ required: true, message: '必填' }]}>
+                <InputNumber min={1} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="cooldownSec" label="熔断冷却(s)" tooltip="熔断后的冷却秒数" rules={[{ required: true, message: '必填' }]}>
+                <InputNumber min={1} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="enabled" label="启用" valuePropName="checked" tooltip="停用后该渠道不再参与选路">
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item name="tags" label="标签">
+            <Select mode="tags" allowClear placeholder="回车添加,如:主力 / 备用 / 需配额" />
+          </Form.Item>
+
+          <Form.Item name="note" label="备注">
+            <Input.TextArea rows={2} placeholder="可选" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/* 同步模型结果 */}
-      {syncRes && (
-        <div className="overlay" style={{ zIndex: 70 }}>
-          <Modal
-            title={`同步模型 · ${syncRes.name}`}
-            onClose={() => setSyncRes(null)}
-            width={560}
-            footer={<Button variant="primary" onClick={() => setSyncRes(null)}>关闭</Button>}
-          >
-            <Note>
+      <Modal
+        title={syncRes ? `同步模型 · ${syncRes.name}` : ''}
+        open={!!syncRes}
+        footer={<Button type="primary" onClick={() => setSyncRes(null)}>关闭</Button>}
+        onCancel={() => setSyncRes(null)}
+        width={560}
+      >
+        {syncRes && (
+          <>
+            <div className="gw-note" role="status" style={{ marginBottom: 14 }}>
               <b>本渠道现关联 {syncRes.modelCount} 个模型</b>
-              <div>本次新增 {syncRes.added}、已存在 {syncRes.updated}。新同步的模型默认停用，需到「模型广场」定价后启用。</div>
-            </Note>
+              <span>本次新增 {syncRes.added}、已存在 {syncRes.updated}。新同步的模型默认停用，需到「模型广场」定价后启用。</span>
+            </div>
             {syncRes.models.length > 0 ? (
-              <div className="code" style={{ marginTop: 12 }}>{syncRes.models.join('\n')}</div>
+              <pre className="gw-pre">
+                {syncRes.models.join('\n')}
+              </pre>
             ) : (
-              <div style={{ fontSize: 13.5, color: 'var(--t3)', marginTop: 12 }}>
+              <div style={{ fontSize: 13.5, color: 'var(--gw-text-3)' }}>
                 该渠道没有返回新模型（目录中均已存在）。
               </div>
             )}
-          </Modal>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* 获取官方定价结果(成功=落库条数;失败=显式报错,原报价不变) */}
-      {pricingRes && (
-        <div className="overlay" style={{ zIndex: 70 }}>
-          <Modal
-            title={`获取官方定价 · ${pricingRes.name}`}
-            onClose={() => setPricingRes(null)}
-            width={560}
-            footer={<Button variant="primary" onClick={() => setPricingRes(null)}>关闭</Button>}
-          >
-            {pricingRes.error ? (
-              <Note tone="warn">
-                <b style={{ color: 'var(--err)' }}>获取失败</b>
-                <div>
-                  {pricingRes.error}
-                  <br />
-                  本次未写入任何价格,原有报价保持不变。请核对官方页面后重试。
-                </div>
-              </Note>
-            ) : pricingRes.result ? (
-              <>
-                <Note>
-                  <b>已从官方计费页抓取 {pricingRes.result.upserted} 个模型的单价</b>
-                  <div>
-                    来源：
-                    <a href={pricingRes.result.sourceUrl} target="_blank" rel="noreferrer">{pricingRes.result.sourceUrl}</a>
+      <Modal
+        title={pricingRes ? `获取官方定价 · ${pricingRes.name}` : ''}
+        open={!!pricingRes}
+        footer={<Button type="primary" onClick={() => setPricingRes(null)}>关闭</Button>}
+        onCancel={() => setPricingRes(null)}
+        width={560}
+      >
+        {pricingRes?.error ? (
+          <div className="gw-note" role="alert" style={{ borderLeftColor: 'var(--gw-err)' }}>
+            <b style={{ color: 'var(--gw-err)' }}>获取失败</b>
+            <span>
+              {pricingRes.error}
+              <br />
+              本次未写入任何价格,原有报价保持不变。请核对官方页面后重试。
+            </span>
+          </div>
+        ) : pricingRes?.result ? (
+          <>
+            <div className="gw-note" role="status" style={{ marginBottom: 14 }}>
+              <b>已从官方计费页抓取 {pricingRes.result.upserted} 个模型的单价</b>
+              <span>
+                来源：
+                <a href={pricingRes.result.sourceUrl} target="_blank" rel="noreferrer">{pricingRes.result.sourceUrl}</a>
+                <br />
+                已存入「官方参考价」,未改动任何现有报价;需到「模型广场」逐个核对并「应用」。
+                {pricingRes.result.contentSha256 && (
+                  <>
                     <br />
-                    已存入「官方参考价」,未改动任何现有报价;需到「模型广场」逐个核对并「应用」。
-                    {pricingRes.result.contentSha256 && (
-                      <>
-                        <br />
-                        <span className="mono" style={{ fontSize: 12 }}>
-                          页面指纹 {pricingRes.result.contentSha256.slice(0, 16)}…
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </Note>
-                {pricingRes.result.models.length > 0 && (
-                  <div className="code" style={{ marginTop: 12 }}>{pricingRes.result.models.join('\n')}</div>
+                    <span className="gw-mono" style={{ fontSize: 12 }}>
+                      页面指纹 {pricingRes.result.contentSha256.slice(0, 16)}…
+                    </span>
+                  </>
                 )}
-              </>
-            ) : null}
-          </Modal>
-        </div>
-      )}
+              </span>
+            </div>
+            {pricingRes.result.models.length > 0 && (
+              <pre className="gw-pre">
+                {pricingRes.result.models.join('\n')}
+              </pre>
+            )}
+          </>
+        ) : null}
+      </Modal>
 
       {/* 成本系数:成本 = 厂商官方价 × 系数,与售价无关 */}
       <CostRatioModal open={!!ratioChannel} channel={ratioChannel} onClose={() => setRatioChannel(null)} />
-    </>
+    </div>
   );
 }
