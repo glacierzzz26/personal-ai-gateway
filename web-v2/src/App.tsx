@@ -9,7 +9,6 @@ import { setUnauthorizedHandler } from '@/services/http';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { useCurrency } from '@/stores/currency';
-import { useTheme } from '@/ui/theme';
 import { queryClient } from '@/main';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
@@ -97,10 +96,10 @@ function Boot() {
         gap: 14,
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'var(--bg)',
+        background: 'var(--gw-bg)',
       }}
     >
-      <span className="brand-mark" style={{ width: 38, height: 38, fontSize: 16, fontWeight: 600 }} aria-hidden="true">
+      <span className="gw-brand-mark lg" aria-hidden="true">
         G
       </span>
       <div style={{ width: 160 }}>
@@ -151,12 +150,6 @@ export default function App() {
     queryClient.clear();
   }, [uid]);
 
-  // 按角色取默认主题（admin→暗、user→亮）—— 仅在用户从未手动切过时生效（见 stores/theme）。
-  const role = admin?.role ?? null;
-  useEffect(() => {
-    if (role) useTheme.getState().applyRoleDefault(role === 'admin');
-  }, [role]);
-
   if (booting) return <Boot />;
   if (!admin) return <Login />;
 
@@ -184,7 +177,7 @@ export default function App() {
             path="*"
             element={
               <Blocks>
-                <div style={{ padding: 48, textAlign: 'center', color: 'var(--t3)' }}>页面不存在</div>
+                <div style={{ padding: 48, textAlign: 'center', color: 'var(--gw-text-3)' }}>页面不存在</div>
               </Blocks>
             }
           />

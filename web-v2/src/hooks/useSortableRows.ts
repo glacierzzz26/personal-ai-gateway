@@ -7,7 +7,7 @@ interface DropHint {
 
 /**
  * 表格行拖拽排序。
- * - 只有按住 .sort-handle 手柄才允许拖动（mousedown 时动态设置 draggable）
+ * - 只有按住 .gw-drag 手柄才允许拖动（mousedown 时动态设置 draggable）
  * - 落点提示用 2px 主色线，不做整行高亮或位移让位
  * - 手柄可 Tab 聚焦，Ctrl/Alt + ↑↓ 移动行（键盘无障碍底线）
  *
@@ -28,15 +28,15 @@ export function useSortableRows(onMove: (from: number, insertAt: number) => void
     (_record: unknown, index?: number) => {
       const i = index ?? 0;
       const cls = [
-        dragging === i ? 'dragging' : '',
-        hint?.index === i ? (hint.after ? 'drop-after' : 'drop-before') : '',
+        dragging === i ? 'gw-dragging' : '',
+        hint?.index === i ? (hint.after ? 'gw-drop-after' : 'gw-drop-before') : '',
       ].filter(Boolean).join(' ');
 
       return {
         className: cls,
         onMouseDown: (e: React.MouseEvent<HTMLElement>) => {
           const tr = e.currentTarget as HTMLTableRowElement;
-          tr.draggable = !!(e.target as HTMLElement).closest?.('.sort-handle');
+          tr.draggable = !!(e.target as HTMLElement).closest?.('.gw-drag');
         },
         onDragStart: (e: React.DragEvent<HTMLElement>) => {
           if (!(e.currentTarget as HTMLTableRowElement).draggable) {
@@ -79,7 +79,7 @@ export function useSortableRows(onMove: (from: number, insertAt: number) => void
 
   const handleProps = useCallback(
     (index: number) => ({
-      className: 'sort-handle',
+      className: 'gw-drag',
       title: '拖动调整顺序（或 Ctrl/Alt + ↑↓）',
       tabIndex: 0,
       onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {

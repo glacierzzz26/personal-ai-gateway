@@ -1,47 +1,37 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import {
+  App, Button, Checkbox, DatePicker, Dropdown, Form, Input, InputNumber, Modal,
+  Radio, Select, Space, Switch, Table, Tooltip,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
+import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import dayjs from 'dayjs';
+import dayjs, { type Dayjs } from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import StatusDot from '@/components/StatusDot';
 import { EmptyState, ErrorState, NoResultState, SkBlock } from '@/components/States';
-import {
-  Badge, Button, CardBody, Checkbox, Copyable, Field, Input, Note, Seg, Select, Switch, Table,
-} from '@/ui/primitives';
-import type { Column } from '@/ui/primitives';
-import { Modal, confirm } from '@/ui/overlay';
-import { message } from '@/ui/toast';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { copyText } from '@/utils/clipboard';
 import { fmt } from '@/utils/format';
 import { QUOTA_ALERT } from '@/utils/quota';
+import { TOKENS } from '@/styles/tokens';
 import type { GatewayToken, ProbeCheck, TokenCreateResult, TokenDraft, UserAccount } from '@/types';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
 
-/** 表单值:日期在受控态里统一为 'YYYY-MM-DD' 字符串,提交时再决定是否下发。 */
 interface TokenFormValues {
   name: string;
   enabled: boolean;
   allModels: boolean;
-  modelNames: string[];
+  modelNames?: string[];
   quotaUsd: number;
   rpmLimit: number;
   expiry: 'never' | 'date';
-  expiresDate: string;
-  ownerId: number;
-}
-
-const DEFAULT_FORM: TokenFormValues = {
-  name: '', enabled: true, allModels: true, modelNames: [], quotaUsd: 0,
-  rpmLimit: 60, expiry: 'never', expiresDate: '', ownerId: 0,
-};
-
-/** 自绘覆盖层外壳:页内自管 open 的弹窗统一挂在这一层(去 antd 后不再走 OverlayHost)。 */
-function Overlay({ children }: { children: ReactNode }) {
-  return <div className="overlay" style={{ zIndex: 70 }}>{children}</div>;
+  expiresDate?: Dayjs | null;
+  ownerId?: number;
 }
 
 /**
@@ -62,22 +52,19 @@ function TokenModal(props: {
   onSubmit: (draft: TokenDraft, id?: number) => Promise<void>;
 }) {
   const { open, initial, models, isAdmin, users, ceiling, onCancel, onSubmit } = props;
-  const [form, setForm] = useState<TokenFormValues>(DEFAULT_FORM);
-  const [errors, setErrors] = useState<Partial<Record<keyof TokenFormValues, string>>>({});
+  const { message } = App.useApp();
+  const [form] = Form.useForm<TokenFormValues>();
   const [saving, setSaving] = useState(false);
 
-  const set = <K extends keyof TokenFormValues>(k: K, v: TokenFormValues[K]) => {
-    setForm(f => ({ ...f, [k]: v }));
-    setErrors(e => (e[k] ? { ...e, [k]: undefined } : e));
-  };
+  const allModels = Form.useWatch('allModels', form) ?? true;
+  const expiry = Form.useWatch('expiry', form) ?? 'never';
 
   // 打开时装载初值(编辑用行数据,新建用默认:全模型 + 永不过期)
   useEffect(() => {
     if (!open) return;
     if (initial) {
       const all = initial.allowedModels.length === 1 && initial.allowedModels[0] === '*';
-      setErrors({});
-      setForm({
+      form.setFieldsValue({
         name: initial.name,
         enabled: initial.status !== 'disabled',
         allModels: all,
@@ -85,42 +72,41 @@ function TokenModal(props: {
         quotaUsd: initial.quotaUsd,
         rpmLimit: initial.rpmLimit,
         expiry: initial.expiresAt ? 'date' : 'never',
-        expiresDate: initial.expiresAt ? dayjs(initial.expiresAt).format('YYYY-MM-DD') : '',
+        expiresDate: initial.expiresAt ? dayjs(initial.expiresAt) : null,
         ownerId: initial.ownerId ?? 0,
       });
     } else {
-      setErrors({});
-      setForm(DEFAULT_FORM);
+      form.resetFields();
+      form.setFieldsValue({
+        name: '', enabled: true, allModels: true, modelNames: [], quotaUsd: 0,
+        rpmLimit: 60, expiry: 'never', expiresDate: null, ownerId: 0,
+      });
     }
-  }, [open, initial]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initial, form]);
 
   // 名单模式候选:当前模型目录 + 该令牌已授权但已下架的模型名,避免编辑时丢失旧授权
-  const modelOptions = useMemo(
-    () => Array.from(new Set([
-      ...models.map(m => m.name),
-      ...(initial?.allowedModels ?? []).filter(x => x !== '*'),
-    ])),
-    [models, initial],
-  );
-  const addable = modelOptions.filter(n => !form.modelNames.includes(n));
+  const modelOptions = Array.from(new Set([
+    ...models.map(m => m.name),
+    ...(initial?.allowedModels ?? []).filter(x => x !== '*'),
+  ])).map(name => ({ value: name, label: name }));
 
   const submit = async () => {
-    const next: Partial<Record<keyof TokenFormValues, string>> = {};
-    if (!form.name.trim()) next.name = '请输入令牌名称';
-    if (!form.allModels && form.modelNames.length === 0) next.modelNames = '请选择允许访问的模型，或勾选「允许全部模型」';
-    if (form.expiry === 'date' && !form.expiresDate) next.expiresDate = '请选择到期日期';
-    setErrors(next);
-    if (Object.keys(next).length) return;
-
+    const v = await form.validateFields();
+    if (!v.allModels && (!v.modelNames || v.modelNames.length === 0)) {
+      message.warning('请选择允许访问的模型，或勾选「允许全部模型」');
+      return;
+    }
     const draft: TokenDraft = {
-      name: form.name.trim(),
-      allowedModels: form.allModels ? ['*'] : form.modelNames,
-      quotaUsd: form.quotaUsd ?? 0,
-      rpmLimit: form.rpmLimit ?? 60,
-      expiresAt: form.expiry === 'never' ? null : form.expiresDate || null,
-      status: form.enabled ? 'active' : 'disabled',
+      name: v.name.trim(),
+      allowedModels: v.allModels ? ['*'] : (v.modelNames ?? []),
+      quotaUsd: v.quotaUsd ?? 0,
+      rpmLimit: v.rpmLimit ?? 60,
+      expiresAt: v.expiry === 'never' ? null
+        : (v.expiresDate ? v.expiresDate.format('YYYY-MM-DD') : null),
+      status: v.enabled ? 'active' : 'disabled',
       // 归属仅创建时生效;user 由服务端强制为自己,不传
-      ownerId: isAdmin ? (form.ownerId ? form.ownerId : null) : undefined,
+      ownerId: isAdmin ? (v.ownerId ? v.ownerId : null) : undefined,
     };
     setSaving(true);
     try {
@@ -132,142 +118,128 @@ function TokenModal(props: {
     }
   };
 
-  if (!open) return null;
   return (
-    <Overlay>
-      <Modal
-        title={initial ? '编辑令牌' : '新建令牌'}
-        width={560}
-        onClose={onCancel}
-        footer={
-          <>
-            <Button onClick={onCancel}>取消</Button>
-            <Button variant="primary" loading={saving} onClick={submit}>{initial ? '保存' : '创建'}</Button>
-          </>
-        }
-      >
-        <div className="stack">
-          <Switch checked={form.enabled} onChange={v => set('enabled', v)} label="启用该令牌" />
+    <Modal
+      title={initial ? '编辑令牌' : '新建令牌'}
+      open={open}
+      onCancel={onCancel}
+      onOk={submit}
+      confirmLoading={saving}
+      okText={initial ? '保存' : '创建'}
+      cancelText="取消"
+      destroyOnHidden
+      width={560}
+    >
+      <Form form={form} layout="vertical" requiredMark={false} preserve={false}>
+        <Space size={10} align="center" style={{ marginBottom: 18 }}>
+          <Form.Item name="enabled" valuePropName="checked" noStyle>
+            <Switch />
+          </Form.Item>
+          <span style={{ fontSize: 13, color: 'var(--gw-text-2)' }}>启用该令牌</span>
+        </Space>
 
-          <Field label="令牌名称" error={errors.name}>
-            <Input
-              placeholder="例如:CI 构建 / 本地 Claude Code"
-              maxLength={64}
-              invalid={!!errors.name}
-              value={form.name}
-              onChange={e => set('name', e.target.value)}
-            />
-          </Field>
+        <Form.Item
+          name="name" label="令牌名称"
+          rules={[{ required: true, whitespace: true, message: '请输入令牌名称' }]}
+        >
+          <Input placeholder="例如:CI 构建 / 本地 Claude Code" maxLength={64} />
+        </Form.Item>
 
-          {isAdmin && (
-            <Field label="归属用户" hint="仅创建时生效;选「全局」则不属于任何用户">
-              <Select
-                disabled={!!initial}
-                value={String(form.ownerId)}
-                onChange={e => set('ownerId', Number(e.target.value))}
-                options={[
-                  { value: 0, label: '全局(管理员)' },
-                  ...users.map(u => ({ value: u.id, label: u.username })),
-                ]}
-              />
-            </Field>
-          )}
-
-          <Field label="允许访问的模型" error={errors.modelNames}>
-            <Checkbox checked={form.allModels} onChange={v => set('allModels', v)}>允许全部模型(含后续新上架模型)</Checkbox>
-            {!form.allModels && (
-              <div style={{ marginTop: 8 }}>
-                <div className="taglist" style={{ marginBottom: 6 }}>
-                  {form.modelNames.map(n => (
-                    <span
-                      key={n}
-                      className="tag"
-                      style={{ cursor: 'pointer' }}
-                      title="点击移除"
-                      onClick={() => set('modelNames', form.modelNames.filter(x => x !== n))}
-                    >
-                      {n} ×
-                    </span>
-                  ))}
-                </div>
-                <Select
-                  value=""
-                  disabled={addable.length === 0}
-                  onChange={e => { if (e.target.value) set('modelNames', [...form.modelNames, e.target.value]); }}
-                  options={[{ value: '', label: addable.length ? '添加模型…' : '已全部加入' }, ...addable.map(n => ({ value: n, label: n }))]}
-                />
-              </div>
-            )}
-          </Field>
-
-          <div className="field-row">
-            <Field
-              label="额度上限"
-              hint={
-                !isAdmin && ceiling.quotaUsd > 0
-                  ? `管理员限制你最高可设 ${fmt.usd(ceiling.quotaUsd)}(必须填正数)`
-                  : '0 表示不限额；达到上限后网关将拒绝请求(HTTP 402)'
-              }
-            >
-              <Input
-                type="number"
-                min={!isAdmin && ceiling.quotaUsd > 0 ? 0.01 : 0}
-                step={0.1}
-                placeholder="0 = 不限额"
-                max={!isAdmin && ceiling.quotaUsd > 0 ? ceiling.quotaUsd : undefined}
-                value={form.quotaUsd}
-                onChange={e => set('quotaUsd', Number(e.target.value))}
-              />
-            </Field>
-            <Field
-              label="限速(RPM)"
-              hint={
-                !isAdmin && ceiling.rpmLimit > 0
-                  ? `管理员限制你最高可设 ${ceiling.rpmLimit}(必须填正数)`
-                  : '每分钟请求上限，0 表示不限速'
-              }
-            >
-              <Input
-                type="number"
-                min={!isAdmin && ceiling.rpmLimit > 0 ? 1 : 0}
-                max={!isAdmin && ceiling.rpmLimit > 0 ? ceiling.rpmLimit : 100000}
-                placeholder="默认 60"
-                value={form.rpmLimit}
-                onChange={e => set('rpmLimit', Number(e.target.value))}
-              />
-            </Field>
-          </div>
-
-          <Field label="有效期">
-            <Seg
-              value={form.expiry}
-              onChange={v => set('expiry', v)}
+        {isAdmin && (
+          <Form.Item name="ownerId" label="归属用户" extra="仅创建时生效;选「全局」则不属于任何用户">
+            <Select
+              disabled={!!initial}
               options={[
-                { value: 'never' as const, label: '永不过期' },
-                { value: 'date' as const, label: '指定日期' },
+                { value: 0, label: '全局(管理员)' },
+                ...users.map(u => ({ value: u.id, label: u.username })),
               ]}
             />
-          </Field>
-          {form.expiry === 'date' && (
-            <Field label="到期日期" error={errors.expiresDate}>
-              <Input
-                type="date"
-                invalid={!!errors.expiresDate}
-                min={dayjs().format('YYYY-MM-DD')}
-                value={form.expiresDate}
-                onChange={e => set('expiresDate', e.target.value)}
+          </Form.Item>
+        )}
+
+        <Form.Item label="允许访问的模型">
+          <Form.Item name="allModels" valuePropName="checked" noStyle>
+            <Checkbox>允许全部模型(含后续新上架模型)</Checkbox>
+          </Form.Item>
+          {!allModels && (
+            <Form.Item name="modelNames" noStyle>
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                placeholder="指定允许的模型(可多选)"
+                style={{ marginTop: 8, width: '100%' }}
+                options={modelOptions}
+                optionFilterProp="label"
               />
-            </Field>
+            </Form.Item>
           )}
-        </div>
-      </Modal>
-    </Overlay>
+        </Form.Item>
+
+        <Space size={16} style={{ display: 'flex' }} align="start">
+          <Form.Item
+            name="quotaUsd"
+            label="额度上限"
+            extra={
+              !isAdmin && ceiling.quotaUsd > 0
+                ? `管理员限制你最高可设 ${fmt.usd(ceiling.quotaUsd)}(必须填正数)`
+                : '0 表示不限额；达到上限后网关将拒绝请求(HTTP 402)'
+            }
+            style={{ flex: 1 }}
+          >
+            <InputNumber
+              min={!isAdmin && ceiling.quotaUsd > 0 ? 0.01 : 0}
+              step={0.1} precision={2} style={{ width: '100%' }} placeholder="0 = 不限额"
+              max={!isAdmin && ceiling.quotaUsd > 0 ? ceiling.quotaUsd : undefined}
+            />
+          </Form.Item>
+          <Form.Item
+            name="rpmLimit"
+            label="限速(RPM)"
+            extra={
+              !isAdmin && ceiling.rpmLimit > 0
+                ? `管理员限制你最高可设 ${ceiling.rpmLimit}(必须填正数)`
+                : '每分钟请求上限，0 表示不限速'
+            }
+            style={{ flex: 1 }}
+          >
+            <InputNumber
+              min={!isAdmin && ceiling.rpmLimit > 0 ? 1 : 0}
+              max={!isAdmin && ceiling.rpmLimit > 0 ? ceiling.rpmLimit : 100000}
+              style={{ width: '100%' }} placeholder="默认 60"
+            />
+          </Form.Item>
+        </Space>
+
+        <Form.Item name="expiry" label="有效期">
+          <Radio.Group
+            options={[
+              { value: 'never', label: '永不过期' },
+              { value: 'date', label: '指定日期' },
+            ]}
+          />
+        </Form.Item>
+        {expiry === 'date' && (
+          <Form.Item
+            name="expiresDate" label="到期日期"
+            rules={[{ required: true, message: '请选择到期日期' }]}
+          >
+            <DatePicker
+              style={{ width: '100%' }}
+              format="YYYY-MM-DD"
+              disabledDate={d => !!d && d.isBefore(dayjs().startOf('day'))}
+            />
+          </Form.Item>
+        )}
+      </Form>
+    </Modal>
   );
 }
 
 /** 「生成 Claude 配置」弹窗:拉取含真实 key 的 settings.json 片段,供逐字复制。 */
 function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => void }) {
   const { token, onClose } = props;
+  const { message } = App.useApp();
   const { data, error, isLoading } = useQuery({
     queryKey: ['claude-config', token?.id],
     queryFn: () => api.getClaudeConfig(token!.id),
@@ -276,45 +248,50 @@ function ClaudeConfigModal(props: { token: GatewayToken | null; onClose: () => v
   });
   const err = error instanceof Error ? error.message : error ? '生成失败' : '';
 
-  if (!token) return null;
+  const copy = (text: string) => {
+    copyText(text).then(
+      ok => (ok ? message.success('已复制') : message.warning('复制失败，请手动选择')),
+    );
+  };
+
   return (
-    <Overlay>
-      <Modal
-        title={`Claude 配置 · ${token.name}`}
-        width={640}
-        onClose={onClose}
-        footer={<Button variant="primary" onClick={onClose}>关闭</Button>}
-      >
-        <div className="stack">
-          {err && (
-            <Note tone="warn">
-              <b>⚠ 生成失败</b>
-              <div className="mono" style={{ marginTop: 4 }}>{err}</div>
-            </Note>
-          )}
-          {data?.warnings?.map(w => (
-            <Note key={w} tone="warn"><b>⚠ 注意</b>　{w}</Note>
-          ))}
-          <div style={{ fontSize: 13, color: 'var(--t2)' }}>
-            把下面整段合并进 <span className="mono">~/.claude/settings.json</span> 的顶层(已有 <span className="mono">env</span> 则合并其键值),然后重启 Claude Code。
-          </div>
-          <div style={{ position: 'relative' }}>
-            <div className="code" style={{ maxHeight: 360, overflow: 'auto' }}>
-              {isLoading ? '生成中…' : (data?.settingsJson ?? '')}
-            </div>
-            <div style={{ position: 'absolute', top: 8, right: 8 }}>
-              <Button
-                size="sm"
-                disabled={!data}
-                onClick={() => data && void copyText(data.settingsJson).then(ok => (ok ? message.success('已复制') : message.warning('复制失败，请手动选择')))}
-              >
-                复制
-              </Button>
-            </div>
-          </div>
+    <Modal
+      title={token ? `Claude 配置 · ${token.name}` : 'Claude 配置'}
+      open={!!token}
+      onCancel={onClose}
+      footer={<Button type="primary" onClick={onClose}>关闭</Button>}
+      destroyOnHidden
+      width={640}
+    >
+      {err && (
+        <div className="gw-note" role="status" style={{ borderLeftColor: TOKENS.err, background: 'var(--gw-card)', marginBottom: 12 }}>
+          <b style={{ color: TOKENS.err }}>⚠ 生成失败</b>
+          <span className="gw-mono" style={{ flex: 1 }}>{err}</span>
         </div>
-      </Modal>
-    </Overlay>
+      )}
+      {data?.warnings?.map(w => (
+        <div key={w} className="gw-note" role="status" style={{ borderLeftColor: TOKENS.warn, background: 'var(--gw-card)', marginBottom: 12 }}>
+          <b style={{ color: TOKENS.warn }}>⚠ 注意</b>
+          <span style={{ flex: 1 }}>{w}</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 8 }}>
+        把下面整段合并进 <span className="gw-mono">~/.claude/settings.json</span> 的顶层(已有 <span className="gw-mono">env</span> 则合并其键值),然后重启 Claude Code。
+      </div>
+      <div style={{ position: 'relative' }}>
+        <pre className="gw-pre">
+          {isLoading ? '生成中…' : (data?.settingsJson ?? '')}
+        </pre>
+        <Button
+          size="small"
+          style={{ position: 'absolute', top: 8, right: 8 }}
+          disabled={!data}
+          onClick={() => data && copy(data.settingsJson)}
+        >
+          复制
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -334,64 +311,83 @@ function ProbeModal(props: { token: GatewayToken | null; models: { name: string 
     if (!token) setModel('');
   }, [token]);
 
-  const checkColumns: Column<ProbeCheck>[] = [
-    { key: 'name', title: '检查项', width: 110, render: c => <span style={{ color: 'var(--t2)' }}>{c.name}</span> },
-    { key: 'ok', title: '结果', width: 90, render: c => <StatusDot status="" text={c.ok ? '通过' : '未通过'} tone={c.ok ? 'ok' : 'err'} /> },
-    { key: 'detail', title: '说明', render: c => <span style={{ color: 'var(--t3)' }}>{c.detail || '—'}</span> },
-  ];
-
-  if (!token) return null;
   return (
-    <Overlay>
-      <Modal
-        title={`自检 · ${token.name}`}
-        width={560}
-        onClose={onClose}
-        footer={<Button variant="primary" onClick={onClose}>关闭</Button>}
-      >
-        <div className="stack">
-          <Note>
-            选择模型后核查「状态 / 有效期 / 授权 / 可用性 / 额度 / 余额」,<b>不访问上游、不计费、不消耗限速</b>。
-          </Note>
-          <Select
-            value={model}
-            onChange={e => setModel(e.target.value)}
-            options={[{ value: '', label: '选择要自检的模型' }, ...models.map(m => ({ value: m.name, label: m.name }))]}
-          />
-          {!model ? (
-            <div className="muted" style={{ fontSize: 13 }}>请先选择一个模型。</div>
-          ) : isFetching ? (
-            <SkBlock />
-          ) : isError ? (
-            <ErrorState
-              title="自检失败"
-              desc={(error as Error)?.message || '无法完成自检,请稍后重试。'}
-              onRetry={() => void refetch()}
-            />
-          ) : data ? (
-            <Table<ProbeCheck> columns={checkColumns} rows={data.checks} rowKey={c => c.name} />
-          ) : null}
-          {data && (
-            <div style={{ fontSize: 13 }}>
-              {data.ok
-                ? <span style={{ color: 'var(--ok)' }}>✓ 该令牌可用「{data.model}」发起调用。</span>
-                : <span style={{ color: 'var(--err)' }}>✗ 该令牌当前不能使用「{data.model}」,请按上表逐项处理。</span>}
-            </div>
-          )}
+    <Modal
+      title={token ? `自检 · ${token.name}` : '令牌自检'}
+      open={!!token}
+      onCancel={onClose}
+      footer={<Button type="primary" onClick={onClose}>关闭</Button>}
+      destroyOnHidden
+      width={560}
+    >
+      <div className="gw-note" style={{ marginBottom: 14 }}>
+        <span>选择模型后核查「状态 / 有效期 / 授权 / 可用性 / 额度 / 余额」,<b>不访问上游、不计费、不消耗限速</b>。</span>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <Select
+          style={{ width: '100%' }}
+          showSearch
+          placeholder="选择要自检的模型"
+          value={model || undefined}
+          onChange={setModel}
+          optionFilterProp="label"
+          options={models.map(m => ({ value: m.name, label: m.name }))}
+        />
+      </div>
+      {!model ? (
+        <div style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>请先选择一个模型。</div>
+      ) : isFetching ? (
+        <SkBlock />
+      ) : isError ? (
+        <ErrorState
+          title="自检失败"
+          desc={(error as Error)?.message || '无法完成自检,请稍后重试。'}
+          onRetry={() => void refetch()}
+        />
+      ) : data ? (
+        <Table<ProbeCheck>
+          rowKey="name"
+          size="small"
+          dataSource={data.checks}
+          pagination={false}
+          columns={[
+            {
+              title: '检查项', dataIndex: 'name', width: 110,
+              render: v => <span style={{ color: 'var(--gw-text-2)' }}>{v}</span>,
+            },
+            {
+              title: '结果', dataIndex: 'ok', width: 90,
+              render: (v: boolean) => (
+                <StatusDot status="" text={v ? '通过' : '未通过'} tone={v ? 'ok' : 'err'} />
+              ),
+            },
+            {
+              title: '说明', dataIndex: 'detail',
+              render: (v: string) => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span>,
+            },
+          ]}
+        />
+      ) : null}
+      {data && (
+        <div style={{ marginTop: 12, fontSize: 13 }}>
+          {data.ok
+            ? <span style={{ color: TOKENS.ok }}>✓ 该令牌可用「{data.model}」发起调用。</span>
+            : <span style={{ color: TOKENS.err }}>✗ 该令牌当前不能使用「{data.model}」,请按上表逐项处理。</span>}
         </div>
-      </Modal>
-    </Overlay>
+      )}
+    </Modal>
   );
 }
 
 export default function Tokens() {
+  const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const isAdmin = useSession(s => s.admin?.role) === 'admin';
   const [editor, setEditor] = useState<{ open: boolean; initial: GatewayToken | null }>({ open: false, initial: null });
   const [created, setCreated] = useState<TokenCreateResult | null>(null);
   const [configToken, setConfigToken] = useState<GatewayToken | null>(null);
   const [probeToken, setProbeToken] = useState<GatewayToken | null>(null);
-  const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const [ownerFilter, setOwnerFilter] = useState<number | 'all'>('all');
 
   const { data: tokens = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tokens'], queryFn: api.getTokens });
   /*
@@ -412,7 +408,7 @@ export default function Tokens() {
   const view = useMemo(
     () => (!isAdmin || ownerFilter === 'all'
       ? tokens
-      : tokens.filter(t => (ownerFilter === '0' ? t.ownerId == null : t.ownerId === Number(ownerFilter)))),
+      : tokens.filter(t => (ownerFilter === 0 ? t.ownerId == null : t.ownerId === ownerFilter))),
     [tokens, isAdmin, ownerFilter],
   );
 
@@ -425,116 +421,155 @@ export default function Tokens() {
   });
 
   const saveToken = async (draft: TokenDraft, id?: number) => {
-    if (id != null) {
-      await api.updateToken(id, draft);
-      message.success('令牌已保存');
-    } else {
-      const r = await api.createToken(draft);
-      setCreated(r);
-      message.success('令牌已创建');
+    try {
+      if (id != null) {
+        await api.updateToken(id, draft);
+        message.success('令牌已保存');
+      } else {
+        const r = await api.createToken(draft);
+        setCreated(r);
+        message.success('令牌已创建');
+      }
+      refresh();
+      setEditor({ open: false, initial: null });
+    } catch (e) {
+      message.error(`保存失败:${errMsg(e)}`);
     }
-    refresh();
-    setEditor({ open: false, initial: null });
   };
 
   const confirmDelete = (t: GatewayToken) => {
-    void confirm({
+    modal.confirm({
       title: `删除令牌「${t.name}」?`,
       content: '删除后该 Key 立即失效；历史日志中的令牌名称仍会保留。',
       okText: '删除',
+      okButtonProps: { danger: true },
       cancelText: '取消',
-      danger: true,
-    }).then(ok => { if (ok) remove.mutate(t.id); });
+      onOk: () => remove.mutateAsync(t.id),
+    });
+  };
+
+  const copyKey = (text: string) => {
+    copyText(text).then(
+      ok => (ok ? message.success('已复制') : message.warning('复制失败，请手动选择')),
+    );
   };
 
   /** 额度条：颜色随占比升级，但文字始终给出具体金额与百分比。 */
   const quotaCell = (r: GatewayToken) => {
     if (r.quotaUsd <= 0) {
-      return <span className="num" style={{ fontSize: 13, color: 'var(--t3)' }}>{fmt.usd(r.usedUsd)} / 不限</span>;
+      return (
+        <span className="gw-num" style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>
+          {fmt.usd(r.usedUsd)} / 不限
+        </span>
+      );
     }
     const rate = Math.min(r.usedUsd / r.quotaUsd, 1);
-    const warn = rate >= QUOTA_ALERT;
+    const tone = rate >= QUOTA_ALERT ? 'warn' : 'primary';
     return (
       <div>
-        <div className="bar" role="img" aria-label={`额度已用 ${(rate * 100).toFixed(0)}%`} style={{ marginTop: 0 }}>
-          <i style={{ width: `${rate * 100}%`, background: warn ? 'var(--warn)' : 'var(--brand)' }} />
+        <div className="gw-bar" role="img" aria-label={`额度已用 ${(rate * 100).toFixed(0)}%`}>
+          <i style={{ width: `${rate * 100}%`, background: tone === 'warn' ? TOKENS.warn : TOKENS.c1 }} />
         </div>
-        <div className="num" style={{ fontSize: 12.5, color: 'var(--t3)', marginTop: 5 }}>
+        <div className="gw-num" style={{ fontSize: 12.5, color: 'var(--gw-text-3)', marginTop: 5 }}>
           {fmt.usd(r.usedUsd)} / {fmt.usd(r.quotaUsd)} · {(rate * 100).toFixed(0)}%
         </div>
       </div>
     );
   };
 
-  const columns: Column<GatewayToken>[] = [
+  const columns: ColumnsType<GatewayToken> = useMemo(() => [
     {
       // 名称 / 归属 / Key 三合一 —— 都是「这个令牌是谁的、长什么样」
-      key: 'name', title: '令牌', width: 240,
-      render: (r) => (
+      //
+      // 给固定宽度(而非旧版留空当弹性列):fixed 布局下无 width 的列会吃掉全部剩余宽度,
+      // 于是宽屏时这列极宽、名字只占左边一小段,窄屏时又被压成省略号 —— 两头都不对。
+      // 固定后各列按比例分剩余宽度,列宽稳定,不再随窗口剧烈漂移。
+      title: '令牌', dataIndex: 'name', width: 240,
+      render: (v, r) => (
         <div style={{ minWidth: 0, overflow: 'hidden' }}>
-          <div className="hstack" style={{ gap: 8, minWidth: 0 }}>
-            <b className="strong ellip" title={r.name} style={{ flex: '1 1 auto', minWidth: 0 }}>{r.name}</b>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Tooltip title={v}>
+              {/* flex:1 1 auto —— 名字占满列宽(而非按内容宽度收缩),超出再省略号:
+                  否则列虽宽、名字仍挤在左边一小块,看着又小又空。 */}
+              <b style={{ fontWeight: 500, color: 'var(--gw-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 auto', minWidth: 0 }}>{v}</b>
+            </Tooltip>
             {isAdmin && (r.ownerId == null
-              ? <span className="muted" style={{ fontSize: 12.5, flexShrink: 0 }}>全局</span>
-              : <Badge tone="slate">{r.ownerName}</Badge>)}
+              ? <span style={{ color: 'var(--gw-text-3)', fontSize: 12.5, flexShrink: 0 }}>全局</span>
+              : <span className="gw-badge" style={{ flexShrink: 0 }}>{r.ownerName}</span>)}
           </div>
-          <div className="mono" style={{ fontSize: 12, color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div className="gw-mono" style={{ fontSize: 12, color: 'var(--gw-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {r.keyMasked}
           </div>
         </div>
       ),
     },
     {
-      // 模型名一律拼成一个字符串 + 单元格 ellipsis(Tooltip 给全文)。
-      key: 'allowedModels', title: '可用模型', width: 140,
-      render: (r) => {
-        const list = r.allowedModels;
-        if (list.length === 1 && list[0] === '*') return <Badge tone="brand-o">不限</Badge>;
-        if (!list.length) return <span className="muted">无</span>;
+      // 模型名一律拼成一个字符串 + 单元格 ellipsis。
+      // 旧版用 flexWrap 的徽标:徽标 nowrap 且 flex 项默认不收缩,单个长模型名比 140px 单元格还宽时
+      // 直接溢出 —— antd 单元格默认只有 overflow-wrap、没有 overflow:hidden(仅配 ellipsis 的列才裁),
+      // 于是画到右边「额度使用」列上,把进度条挡住。拼接文本交给 antd 裁剪 + Tooltip 给全文。
+      title: '可用模型', dataIndex: 'allowedModels', width: 140,
+      ellipsis: { showTitle: false },
+      render: v => {
+        const list = v as string[];
+        if (list.length === 1 && list[0] === '*') return <span className="gw-badge tint">不限</span>;
+        if (!list.length) return <span style={{ color: 'var(--gw-text-3)' }}>无</span>;
         const text = list.join('、');
-        return <span className="mono ellip" title={text}>{text}</span>;
+        return <Tooltip title={text}><span className="gw-mono">{text}</span></Tooltip>;
       },
     },
-    { key: 'quota', title: '额度使用', width: 158, render: r => quotaCell(r) },
-    { key: 'rpmLimit', title: 'RPM', align: 'right', width: 72, render: r => <span className="num">{r.rpmLimit || '不限'}</span> },
+    { title: '额度使用', key: 'quota', width: 158, render: (_, r) => quotaCell(r) },
+    { title: 'RPM', dataIndex: 'rpmLimit', align: 'right', width: 72, render: v => <span className="gw-num">{v || '不限'}</span> },
     {
-      key: 'expiresAt', title: '过期时间', width: 108,
-      render: r => {
-        if (!r.expiresAt) return <span className="muted">永不过期</span>;
-        const d = dayjs(r.expiresAt);
-        return <span className="num">{d.isValid() ? d.format('YYYY-MM-DD') : r.expiresAt}</span>;
+      title: '过期时间', dataIndex: 'expiresAt', width: 108,
+      render: v => {
+        if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>永不过期</span>;
+        const d = dayjs(v);
+        if (!d.isValid()) return <span className="gw-mono">{v}</span>;
+        return <span className="gw-num">{d.format('YYYY-MM-DD')}</span>;
       },
     },
     {
-      key: 'lastUsedAt', title: '最后使用', width: 120,
-      render: r => {
-        if (!r.lastUsedAt) return <span className="muted">从未使用</span>;
-        const d = dayjs(r.lastUsedAt);
-        return <span className="num" style={{ color: 'var(--t3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : r.lastUsedAt}</span>;
+      title: '最后使用', dataIndex: 'lastUsedAt', width: 120,
+      render: v => {
+        if (!v) return <span style={{ color: 'var(--gw-text-3)' }}>从未使用</span>;
+        const d = dayjs(v);
+        return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
       },
     },
-    { key: 'status', title: '状态', width: 78, render: r => <StatusDot status={r.status} /> },
+    { title: '状态', dataIndex: 'status', width: 78, render: v => <StatusDot status={v} /> },
     {
-      // 高频（生成配置/编辑）外露，低频（自检/删除）也平铺为按钮 —— 自绘表格非 fixed 布局，
-      // 行菜单的绝对定位会被 .table-wrap 的 overflow 裁切，故不再收进下拉。
-      key: 'actions', title: '操作', align: 'right', width: 220,
-      render: (r) => (
-        <span className="hstack" style={{ gap: 4, justifyContent: 'flex-end' }}>
-          <Button
-            size="sm"
-            disabled={!r.keyRetrievable}
-            title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}
-            onClick={() => setConfigToken(r)}
-          >
-            生成配置
-          </Button>
-          <Button size="sm" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
-          <Button size="sm" onClick={() => setProbeToken(r)}>自检</Button>
-          <Button size="sm" variant="danger" onClick={() => confirmDelete(r)}>删除</Button>
-        </span>
-      ),
+      // 高频（生成配置/编辑）外露，低频（自检/删除）收进「更多」
+      title: '操作', align: 'right', width: 172,
+      render: (_, r) => {
+        const menu: MenuProps = {
+          items: [
+            { key: 'probe', label: '自检' },
+            { type: 'divider' as const },
+            { key: 'delete', label: '删除', danger: true },
+          ],
+          onClick: ({ key, domEvent }) => {
+            domEvent.stopPropagation();
+            if (key === 'probe') setProbeToken(r);
+            else if (key === 'delete') confirmDelete(r);
+          },
+        };
+        return (
+          <Space size={4}>
+            <Tooltip title={r.keyRetrievable ? undefined : '旧密钥无法回显，请重新创建'}>
+              <Button size="small" disabled={!r.keyRetrievable} onClick={() => setConfigToken(r)}>
+                生成配置
+              </Button>
+            </Tooltip>
+            <Button size="small" onClick={() => setEditor({ open: true, initial: r })}>编辑</Button>
+            <Dropdown menu={menu} trigger={['click']}>
+              <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`更多操作 ${r.name}`} />
+            </Dropdown>
+          </Space>
+        );
+      },
     },
-  ];
+  ], [isAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const emptyNode = isError ? (
     <ErrorState title="令牌列表加载失败" desc="无法读取令牌，对外分发的 Key 不受影响。" onRetry={() => void refetch()} />
@@ -542,41 +577,49 @@ export default function Tokens() {
     <EmptyState
       title="还没有访问令牌"
       desc="令牌是对外分发的网关 Key。创建后可用它调用网关，并单独限制额度与速率。"
-      action={<Button size="sm" variant="primary" onClick={() => setEditor({ open: true, initial: null })}>新建令牌</Button>}
+      action={<Button size="small" type="primary" onClick={() => setEditor({ open: true, initial: null })}>新建令牌</Button>}
     />
   ) : (
     <NoResultState title="没有符合归属筛选的令牌" desc="换一个归属用户，或切回「全部归属」。" />
   );
 
   return (
-    <>
+    <div className="gw-page">
       <PageHeader
         title="访问令牌"
         desc="对外分发的网关 Key，可独立设额度、限流与过期时间"
         extra={
-          <div className="hstack" style={{ gap: 6 }}>
+          <Space>
             {isAdmin && (
               <Select
                 value={ownerFilter}
-                onChange={e => setOwnerFilter(e.target.value)}
+                style={{ width: 180 }}
+                onChange={setOwnerFilter}
                 options={[
                   { value: 'all', label: '全部归属' },
-                  { value: '0', label: '全局(管理员)' },
+                  { value: 0, label: '全局(管理员)' },
                   ...users.map(u => ({ value: u.id, label: u.username })),
                 ]}
               />
             )}
-            <Button variant="primary" onClick={() => setEditor({ open: true, initial: null })}>新建令牌</Button>
-          </div>
+            <Button type="primary" onClick={() => setEditor({ open: true, initial: null })}>新建令牌</Button>
+          </Space>
         }
       />
 
       <Blocks>
         {!isAdmin && wallet && (
-          <div className="hstack" style={{ gap: 10, fontSize: 13.5, color: 'var(--t2)', flexWrap: 'wrap' }}>
-            <span className="muted">账户余额</span>
-            <b className="num" style={{ color: wallet.balanceUsd <= 0 ? 'var(--err)' : 'var(--t1)' }}>{fmt.usd(wallet.balanceUsd)}</b>
-            <span className="muted">
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14,
+              fontSize: 13.5, color: 'var(--gw-text-2)',
+            }}
+          >
+            <span style={{ color: 'var(--gw-text-3)' }}>账户余额</span>
+            <b className="gw-num" style={{ color: wallet.balanceUsd <= 0 ? TOKENS.err : 'var(--gw-text)' }}>
+              {fmt.usd(wallet.balanceUsd)}
+            </b>
+            <span style={{ color: 'var(--gw-text-3)' }}>
               {wallet.balanceUsd <= 0
                 ? '余额不足，调用已被拒绝，请联系管理员充值'
                 : '每次调用按本站售价从余额扣除；令牌额度为单令牌上限'}
@@ -584,15 +627,16 @@ export default function Tokens() {
           </div>
         )}
         <BlockCard>
-          {isLoading && tokens.length === 0 ? (
-            <CardBody><SkBlock /></CardBody>
-          ) : view.length === 0 ? (
-            <CardBody>{emptyNode}</CardBody>
-          ) : (
-            <CardBody style={{ padding: 0 }}>
-              <Table<GatewayToken> columns={columns} rows={view} rowKey={r => r.id} />
-            </CardBody>
-          )}
+          <Table<GatewayToken>
+            rowKey="id"
+            size="middle"
+            loading={isLoading && tokens.length === 0}
+            dataSource={view}
+            columns={columns}
+            tableLayout="fixed"
+            pagination={false}
+            locale={{ emptyText: emptyNode }}
+          />
         </BlockCard>
       </Blocks>
 
@@ -610,31 +654,39 @@ export default function Tokens() {
       <ClaudeConfigModal token={configToken} onClose={() => setConfigToken(null)} />
       <ProbeModal token={probeToken} models={models} onClose={() => setProbeToken(null)} />
 
-      {created && (
-        <Overlay>
-          <Modal
-            title="令牌已创建"
-            onClose={() => setCreated(null)}
-            footer={<Button variant="primary" onClick={() => setCreated(null)}>我已妥善保存</Button>}
-          >
-            <div className="stack">
-              <Note>
-                <b>密钥已加密存储</b>
-                <div style={{ marginTop: 4 }}>之后可在列表用「生成配置」再次获取完整 Key。</div>
-              </Note>
-              <div style={{ fontSize: 13, color: 'var(--t2)' }}>
-                掩码形式 <span className="mono" style={{ color: 'var(--t3)' }}>{created.token.keyMasked}</span>
-              </div>
-              <div>
-                <div style={{ fontSize: 13, color: 'var(--t2)', marginBottom: 6 }}>完整 Key</div>
-                <Copyable text={created.key}>
-                  <span className="mono" style={{ wordBreak: 'break-all' }}>{created.key}</span>
-                </Copyable>
-              </div>
+      <Modal
+        open={!!created}
+        title="令牌已创建"
+        onCancel={() => setCreated(null)}
+        footer={<Button type="primary" onClick={() => setCreated(null)}>我已妥善保存</Button>}
+      >
+        {created && (
+          <>
+            <div className="gw-note" role="status" style={{ marginBottom: 16 }}>
+              <b>密钥已加密存储</b>
+              <span>之后可在列表用「生成配置」再次获取完整 Key。</span>
             </div>
-          </Modal>
-        </Overlay>
-      )}
-    </>
+            <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 14 }}>
+              掩码形式
+              <span className="gw-mono" style={{ marginLeft: 8, color: 'var(--gw-text-3)' }}>{created.token.keyMasked}</span>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--gw-text-2)', marginBottom: 6 }}>完整 Key</div>
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, wordBreak: 'break-all',
+                fontSize: 13,
+                border: '1px solid var(--gw-border)', borderRadius: 'var(--gw-r-card)', padding: 12,
+                background: 'var(--gw-bg)',
+              }}
+            >
+              <span className="gw-mono">{created.key}</span>
+              <Button size="small" style={{ marginLeft: 'auto', flex: '0 0 auto' }} onClick={() => copyKey(created.key)}>
+                复制
+              </Button>
+            </div>
+          </>
+        )}
+      </Modal>
+    </div>
   );
 }

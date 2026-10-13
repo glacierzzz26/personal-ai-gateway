@@ -1,15 +1,17 @@
 import { useMemo, useState } from 'react';
+import { Card, Col, Row, Segmented, Table } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
-import Chart, { ChartLegend } from '@/components/Chart';
+import Chart from '@/components/Chart';
 import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
-import { Block as BlockCard, BlockBody, BlockHead, Blocks, MetricBlock } from '@/components/Block';
+import { Block as BlockCard, Blocks, BlockHead, MetricBlock } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
-import { ErrorState, SkLines } from '@/components/States';
-import { Empty, Seg, Table } from '@/ui/primitives';
-import type { Column } from '@/ui/primitives';
+import { EmptyState, ErrorState } from '@/components/States';
+import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { fmt } from '@/utils/format';
+import type { EChartsOption } from 'echarts';
 import type { UsageRow } from '@/types';
 
 /**
@@ -27,6 +29,7 @@ const dayLabel = (ts: string) => (ts.length > 10 ? `${ts.slice(11)}:00` : ts.sli
 
 export default function SelfUsage() {
   const me = useSession(s => s.admin);
+  const c = useChartColors();
   const [dim, setDim] = useState<'model' | 'token'>('model');
   /** 统计窗口:预设 1/7/30 天或自定义区间;改动即重取用量与曲线 */
   const [range, setRange] = useState(defaultRange);
@@ -53,106 +56,122 @@ export default function SelfUsage() {
     return { requests, inTokens, outTokens, cost };
   }, [rows]);
 
-  const usageColumns: Column<UsageRow>[] = [
-    { key: 'name', title: dim === 'model' ? '模型' : '令牌', render: r => <span className="mono">{r.name}</span> },
-    { key: 'requests', title: '请求数', align: 'right', render: r => <span className="num">{fmt.n(r.requests)}</span> },
-    { key: 'inTokens', title: '输入 Token', align: 'right', render: r => <span className="num">{fmt.k(r.inTokens)}</span> },
-    { key: 'outTokens', title: '输出 Token', align: 'right', render: r => <span className="num">{fmt.k(r.outTokens)}</span> },
-    { key: 'costUsd', title: '花费', align: 'right', render: r => <span className="num">{fmt.usd(r.costUsd ?? 0)}</span> },
+  const barOption: EChartsOption = {
+    grid: { left: 44, right: 44, top: 34, bottom: 26 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder,
+      textStyle: { color: c.text, fontSize: 12 },
+    },
+    legend: {
+      data: ['请求数', '花费'], right: 0, top: 0,
+      itemWidth: 8, itemHeight: 8, textStyle: { color: c.text, fontSize: 12 },
+    },
+    xAxis: {
+      type: 'category', data: series.map(d => dayLabel(d.ts)),
+      axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
+      axisLabel: { color: c.text, fontSize: 11, interval: 'auto', rotate: 0, hideOverlap: true },
+    },
+    yAxis: [
+      { type: 'value', splitLine: { lineStyle: { color: c.line } }, axisLabel: { color: c.text, fontSize: 11 } },
+      { type: 'value', splitLine: { show: false }, axisLabel: { color: c.text, fontSize: 11 } },
+    ],
+    series: [
+      { name: '请求数', type: 'bar', data: series.map(d => d.requests), itemStyle: { color: c.primary, borderRadius: 3 }, barWidth: '45%' },
+      {
+        name: '花费', type: 'line', yAxisIndex: 1, data: series.map(d => Number((d.costUsd ?? 0).toFixed(4))),
+        showSymbol: false, lineStyle: { width: 1.8, color: c.warn }, itemStyle: { color: c.warn },
+      },
+    ],
+  };
+
+  const usageColumns: ColumnsType<UsageRow> = [
+    { title: dim === 'model' ? '模型' : '令牌', dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
+    { title: '请求数', dataIndex: 'requests', align: 'right', render: v => <span className="gw-num">{fmt.n(v)}</span> },
+    { title: '输入 Token', dataIndex: 'inTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '输出 Token', dataIndex: 'outTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '花费', dataIndex: 'costUsd', align: 'right', render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
   return (
-    <>
+    <div className="gw-page">
       <PageHeader
         title="自用统计"
         desc={`${me?.username ?? ''} 自己名下流量的用量与花费（成本口径 · 含站主自用，不含客户）`}
         extra={<RangePicker value={range} onChange={setRange} />}
       />
 
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))' }}>
-        <MetricBlock label={`${rl}请求`} value={fmt.n(totals.requests)} note="仅统计你自己名下令牌" />
-        <MetricBlock
-          label={`${rl}Token`}
-          value={fmt.k(totals.inTokens + totals.outTokens)}
-          note={`入 ${fmt.k(totals.inTokens)} / 出 ${fmt.k(totals.outTokens)}`}
-        />
-        <MetricBlock label={`${rl}花费`} value={fmt.usd(totals.cost)} note="你付上游的成本（非客户营收）" />
-        <MetricBlock
-          label="平均单请求"
-          value={totals.requests ? fmt.usd(totals.cost / totals.requests) : '—'}
-          note="花费 ÷ 请求数"
-        />
-      </div>
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock label={`${rl}请求`} value={fmt.n(totals.requests)} note="仅统计你自己名下令牌" />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock
+            label={`${rl}Token`}
+            value={fmt.k(totals.inTokens + totals.outTokens)}
+            note={`入 ${fmt.k(totals.inTokens)} / 出 ${fmt.k(totals.outTokens)}`}
+          />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock label={`${rl}花费`} value={fmt.usd(totals.cost)} note="你付上游的成本（非客户营收）" />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock
+            label="平均单请求"
+            value={totals.requests ? fmt.usd(totals.cost / totals.requests) : '—'}
+            note="花费 ÷ 请求数"
+          />
+        </Col>
+      </Row>
 
-      <div className="sec-head" style={{ marginTop: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
         <div style={{ minWidth: 0 }}>
-          <div className="sec-title">用量拆解</div>
-          <div className="cell-sub" style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
+          <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
             按 {dim === 'model' ? '模型' : '令牌'} × {rl} 聚合请求与花费
           </div>
         </div>
-        <Seg
-          value={dim}
-          onChange={v => setDim(v)}
-          options={[
-            { value: 'model' as const, label: '按模型' },
-            { value: 'token' as const, label: '按令牌' },
-          ]}
-        />
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <Segmented
+            value={dim} onChange={v => setDim(v as 'model' | 'token')}
+            options={[{ value: 'model', label: '按模型' }, { value: 'token', label: '按令牌' }]}
+          />
+        </div>
       </div>
 
-      <div style={{ margin: '14px 0' }}>
-        <BlockCard>
-          <BlockHead
-            title={`每日请求与花费（${rl}）`}
-            right={<ChartLegend items={[{ label: '请求数', color: 'var(--brand)' }, { label: '花费', color: 'var(--warn)' }]} />}
-          />
-          <BlockBody>
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24}>
+          <Card title={`每日请求与花费(${rl})`}>
             {usageQ.isError ? (
               <ErrorState title="用量加载失败" desc="无法读取用量数据，请稍后重试。" onRetry={() => void usageQ.refetch()} />
             ) : (
-              <Chart
-                labels={series.map(d => dayLabel(d.ts))}
-                height={280}
-                leftFmt={fmt.k}
-                rightFmt={v => fmt.usd(v)}
-                series={[
-                  { name: '请求数', data: series.map(d => d.requests), color: 'var(--brand)', kind: 'bar', fmt: v => fmt.n(v) },
-                  {
-                    name: '花费',
-                    data: series.map(d => Number((d.costUsd ?? 0).toFixed(4))),
-                    color: 'var(--warn)',
-                    kind: 'line',
-                    axis: 'right',
-                    fmt: v => fmt.usd(v, 4),
-                  },
-                ]}
-              />
+              <Chart option={barOption} height={280} />
             )}
-          </BlockBody>
-        </BlockCard>
-      </div>
+          </Card>
+        </Col>
+      </Row>
 
       <Blocks>
         <BlockCard>
           <BlockHead title="用量明细" sub={`按${dim === 'model' ? '模型' : '令牌'}聚合`} />
-          <BlockBody style={{ padding: 0 }}>
-            {usageQ.isFetching && rows.length === 0 ? (
-              <div style={{ padding: 14 }}>
-                <SkLines rows={['', 'w80', 'w60', 'w80']} />
-              </div>
-            ) : rows.length === 0 ? (
-              <Empty
-                icon="activity"
-                title="所选范围内暂无自用流量"
-                desc="你自己名下的令牌发起调用后，这里会按模型 / 令牌汇总请求与花费（成本）。"
-              />
-            ) : (
-              <Table<UsageRow> columns={usageColumns} rows={rows} rowKey={r => r.name} />
-            )}
-          </BlockBody>
+          <Table<UsageRow>
+            rowKey="name"
+            size="middle"
+            loading={usageQ.isFetching && rows.length === 0}
+            dataSource={rows}
+            columns={usageColumns}
+            pagination={false}
+            locale={{
+              emptyText: (
+                <EmptyState
+                  title="所选范围内暂无自用流量"
+                  desc="你自己名下的令牌发起调用后，这里会按模型 / 令牌汇总请求与花费（成本）。"
+                />
+              ),
+            }}
+          />
         </BlockCard>
       </Blocks>
-    </>
+    </div>
   );
 }

@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
+import {
+  App, Button, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Table, Tooltip,
+} from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import ModelCard, { bestPrice } from '@/components/models/ModelCard';
 import ModelDrawer from '@/components/models/ModelDrawer';
 import CompareModal from '@/components/models/CompareModal';
-import { ErrorState, EmptyState, NoResultState, SkBlock } from '@/components/States';
-import { Button, Checkbox, Field, Input, Note, Seg, Select, Switch, Table } from '@/ui/primitives';
-import type { Column } from '@/ui/primitives';
-import { confirm, Modal } from '@/ui/overlay';
-import { message } from '@/ui/toast';
+import { EmptyState, ErrorState, NoResultState } from '@/components/States';
 import { api } from '@/services/api';
 import { capabilities, providers } from '@/constants';
 import { CAP_LABEL, fmt } from '@/utils/format';
@@ -41,83 +41,63 @@ function AddModelModal({ open, onClose, onCreate, creating }: {
   onCreate: (v: ModelFormValues) => Promise<void>;
   creating: boolean;
 }) {
-  const [name, setName] = useState('');
-  const [contextWindow, setContextWindow] = useState('0');
-  const [caps, setCaps] = useState<Capability[]>([]);
-  const [enabled, setEnabled] = useState(true);
-  const [err, setErr] = useState('');
-
-  useEffect(() => {
-    if (open) {
-      setName('');
-      setContextWindow('0');
-      setCaps([]);
-      setEnabled(true);
-      setErr('');
-    }
-  }, [open]);
-
-  const submit = async () => {
-    if (!name.trim()) {
-      setErr('请输入模型名称');
-      return;
-    }
-    setErr('');
-    try {
-      await onCreate({
-        name: name.trim(),
-        contextWindow: Number(contextWindow) || 0,
-        capabilities: caps,
-        enabled,
-      });
-    } catch {
-      /* 校验未过或请求失败：保持弹窗以便修正 */
-    }
-  };
-
-  const toggleCap = (c: Capability) =>
-    setCaps(prev => (prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]));
-
+  const [form] = Form.useForm<ModelFormValues>();
   return (
-    <div className="overlay" style={{ zIndex: 70 }}>
-      <Modal
-        title="新增模型"
-        width={480}
-        onClose={onClose}
-        footer={
-          <>
-            <Button onClick={onClose}>取消</Button>
-            <Button variant="primary" loading={creating} onClick={submit}>创建</Button>
-          </>
-        }
+    <Modal
+      open={open}
+      title="新增模型"
+      onCancel={onClose}
+      destroyOnHidden
+      width={480}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="primary"
+            loading={creating}
+            onClick={async () => {
+              try {
+                const v = await form.validateFields();
+                await onCreate(v);
+              } catch {
+                /* 校验未过或请求失败：保持弹窗以便修正 */
+              }
+            }}
+          >
+            创建
+          </Button>
+        </div>
+      }
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark={false}
+        initialValues={{ contextWindow: 0, capabilities: [], enabled: true }}
       >
-        <Field label="模型名称" error={err}>
-          <Input value={name} invalid={!!err} placeholder="如 gpt-4o-mini" className="mono" onChange={e => setName(e.target.value)} />
-        </Field>
-        <Field label="上下文窗口">
-          <Input
-            type="number"
-            min={0}
-            step={1000}
-            value={contextWindow}
-            onChange={e => setContextWindow(e.target.value)}
-            style={{ width: '100%' }}
+        <Form.Item
+          name="name"
+          label="模型名称"
+          rules={[{ required: true, whitespace: true, message: '请输入模型名称' }]}
+        >
+          <Input placeholder="如 gpt-4o-mini" className="gw-mono" />
+        </Form.Item>
+        <Form.Item name="contextWindow" label="上下文窗口">
+          <InputNumber min={0} step={1000} style={{ width: '100%' }} addonAfter="tokens" />
+        </Form.Item>
+        <Form.Item name="capabilities" label="能力">
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="选择能力标签，可留空"
+            options={capabilities.map(x => ({ value: x, label: CAP_LABEL[x] }))}
           />
-        </Field>
-        <Field label="能力">
-          <div className="hstack wrap" style={{ gap: 10, paddingTop: 2 }}>
-            {capabilities.map(x => (
-              <Checkbox key={x} checked={caps.includes(x)} onChange={() => toggleCap(x)}>
-                {CAP_LABEL[x]}
-              </Checkbox>
-            ))}
-          </div>
-        </Field>
-        <Field label="启用">
-          <Switch checked={enabled} onChange={setEnabled} />
-        </Field>
-      </Modal>
-    </div>
+        </Form.Item>
+        <Form.Item name="enabled" label="启用" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }
 
@@ -129,6 +109,7 @@ function SyncModal({ open, onClose, channels, onSync, syncing }: {
   onSync: (channelId: number) => Promise<void>;
   syncing: boolean;
 }) {
+  const { message } = App.useApp();
   const [cid, setCid] = useState<number | undefined>(undefined);
 
   useEffect(() => {
@@ -148,36 +129,42 @@ function SyncModal({ open, onClose, channels, onSync, syncing }: {
   };
 
   return (
-    <div className="overlay" style={{ zIndex: 70 }}>
-      <Modal
-        title="从渠道同步模型"
-        width={480}
-        onClose={onClose}
-        footer={
-          <>
-            <Button onClick={onClose}>取消</Button>
-            <Button variant="primary" loading={syncing} disabled={channels.length === 0} onClick={run}>开始同步</Button>
-          </>
-        }
-      >
-        <div style={{ marginBottom: 16 }}>
-          <Note>
-            <b>拉取上游模型清单</b>{' '}
-            网关将调用该渠道上游 <span className="mono">/v1/models</span>：目录中不存在的模型会自动新建，已存在的自动补一条停用供给源（定价后启用）。
-          </Note>
+    <Modal
+      open={open}
+      title="从渠道同步模型"
+      onCancel={onClose}
+      destroyOnHidden
+      width={480}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" loading={syncing} disabled={channels.length === 0} onClick={run}>
+            开始同步
+          </Button>
         </div>
-        {channels.length === 0 ? (
-          <EmptyState title="还没有渠道" desc="请先在「渠道管理」创建一条渠道，才能从它同步模型。" />
-        ) : (
-          <Select
-            style={{ width: '100%' }}
-            value={cid ?? ''}
-            onChange={e => setCid(e.target.value ? Number(e.target.value) : undefined)}
-            options={[{ value: '', label: '选择渠道' }, ...channels.map(ch => ({ value: ch.id, label: `${ch.name}（${channelLabel(ch)}）` }))]}
-          />
-        )}
-      </Modal>
-    </div>
+      }
+    >
+      <div className="gw-note" role="status" style={{ marginBottom: 16 }}>
+        <b>拉取上游模型清单</b>
+        <span>
+          网关将调用该渠道上游 <span className="gw-mono">/v1/models</span>：目录中不存在的模型会自动新建，已存在的自动补一条停用供给源（定价后启用）。
+        </span>
+      </div>
+      {channels.length === 0 ? (
+        <EmptyState title="还没有渠道" desc="请先在「渠道管理」创建一条渠道，才能从它同步模型。" />
+      ) : (
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择渠道"
+          value={cid}
+          onChange={setCid}
+          showSearch
+          optionFilterProp="label"
+          autoFocus
+          options={channels.map(ch => ({ value: ch.id, label: `${ch.name}（${channelLabel(ch)}）` }))}
+        />
+      )}
+    </Modal>
   );
 }
 
@@ -191,57 +178,61 @@ function MergeModal({ from, models, onClose, onConfirm }: {
 
   useEffect(() => { if (from) setIntoId(undefined); }, [from]);
 
-  if (!from) return null;
-  const candidates = models.filter(m => m.id !== from.id);
+  const candidates = from ? models.filter(m => m.id !== from.id) : [];
 
   return (
-    <div className="overlay" style={{ zIndex: 70 }}>
-      <Modal
-        title={`把「${from.name}」合并到…`}
-        width={520}
-        onClose={onClose}
-        footer={
-          <>
-            <Button onClick={onClose}>取消</Button>
-            <Button
-              variant="primary"
-              disabled={!intoId}
-              onClick={() => {
-                const into = candidates.find(m => m.id === intoId);
-                if (into) onConfirm(into);
-              }}
-            >
-              合并
-            </Button>
-          </>
-        }
-      >
-        <div style={{ marginBottom: 16 }}>
-          <Note>
-            <b>消除重复模型</b>{' '}
-            「{from.name}」的供给源会并入目标模型后删除源行；各供给源的上游真实名会保留。
-            若两者在同一渠道上都有供给源，会提示先删除其一。
-          </Note>
+    <Modal
+      open={!!from}
+      title={from ? `把「${from.name}」合并到…` : '合并模型'}
+      onCancel={onClose}
+      destroyOnHidden
+      width={520}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="primary"
+            disabled={!intoId}
+            onClick={() => {
+              const into = candidates.find(m => m.id === intoId);
+              if (into) onConfirm(into);
+            }}
+          >
+            合并
+          </Button>
         </div>
-        {candidates.length === 0 ? (
-          <EmptyState title="没有可合并的目标" desc="目录里只有这一个模型。" />
-        ) : (
-          <Select
-            style={{ width: '100%' }}
-            value={intoId ?? ''}
-            onChange={e => setIntoId(e.target.value ? Number(e.target.value) : undefined)}
-            options={[{ value: '', label: '选择目标模型' }, ...candidates.map(m => ({
-              value: m.id,
-              label: `${m.name}${m.displayName ? ` · 原始名 ${m.originalName}` : ''}（${m.offers.length} 家供给）`,
-            }))]}
-          />
-        )}
-      </Modal>
-    </div>
+      }
+    >
+      <div className="gw-note" role="status" style={{ marginBottom: 16 }}>
+        <b>消除重复模型</b>
+        <span>
+          「{from?.name}」的供给源会并入目标模型后删除源行；各供给源的上游真实名会保留。
+          若两者在同一渠道上都有供给源，会提示先删除其一。
+        </span>
+      </div>
+      {candidates.length === 0 ? (
+        <EmptyState title="没有可合并的目标" desc="目录里只有这一个模型。" />
+      ) : (
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择目标模型"
+          value={intoId}
+          onChange={setIntoId}
+          showSearch
+          optionFilterProp="label"
+          autoFocus
+          options={candidates.map(m => ({
+            value: m.id,
+            label: `${m.name}${m.displayName ? ` · 原始名 ${m.originalName}` : ''}（${m.offers.length} 家供给）`,
+          }))}
+        />
+      )}
+    </Modal>
   );
 }
 
 export default function Models() {
+  const { message, modal } = App.useApp();
   const qc = useQueryClient();
 
   const [kw, setKw] = useState(NO_FILTER.kw);
@@ -250,7 +241,7 @@ export default function Models() {
   const [ctxRange, setCtxRange] = useState(NO_FILTER.ctxRange);
   const [sort, setSort] = useState<SortKey>('price');
   const [enableState, setEnableState] = useState<EnableState>('on');
-  const [view, setView] = useState<'plaza' | 'table'>('plaza');
+  const [view, setView] = useState<string>('plaza');
   const [compare, setCompare] = useState<number[]>([]);
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -337,13 +328,13 @@ export default function Models() {
   };
 
   const confirmDeleteModel = (m: ModelCatalogItem) => {
-    void confirm({
+    modal.confirm({
       title: `删除模型「${m.name}」`,
       content: '该模型下的全部供给源会一并删除，此操作不可恢复。',
       okText: '删除',
-      danger: true,
-    }).then(ok => {
-      if (ok) deleteModel.mutateAsync(m.id).catch(() => undefined);
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: () => deleteModel.mutateAsync(m.id).catch(() => undefined),
     });
   };
 
@@ -357,6 +348,18 @@ export default function Models() {
     },
     onError: (e: Error) => message.error(e.message || '合并失败'),
   });
+
+  const confirmMergeModel = (from: ModelCatalogItem, into: ModelCatalogItem) => {
+    if (from.id === into.id) return;
+    modal.confirm({
+      title: `把「${from.name}」合并到「${into.name}」`,
+      content: `「${from.name}」的 ${from.offers.length} 条供给源将并入「${into.name}」，源模型随后删除。`
+        + '若两者在同一渠道上都有供给源会冲突，需先删除其中一个。',
+      okText: '合并',
+      cancelText: '取消',
+      onOk: () => mergeModel.mutateAsync({ fromId: from.id, intoId: into.id }).catch(() => undefined),
+    });
+  };
 
   const list = useMemo(() => {
     const filtered = models.filter(m => {
@@ -405,70 +408,78 @@ export default function Models() {
     setEnableState('all');
   };
 
-  const filtering = !!(kw || provider || cap || ctxRange) || enableState !== 'all';
+  const filtering =
+    !!(kw || provider || cap || ctxRange) || enableState !== 'all';
 
-  const tableCols: Column<ModelCatalogItem>[] = [
+  const tableCols: ColumnsType<ModelCatalogItem> = [
     {
-      key: 'model', title: '模型',
-      render: m => (
+      title: '模型', dataIndex: 'name',
+      render: (v, m) => (
         <span style={{ display: 'flex', flexDirection: 'column' }}>
-          <span className="mono" style={{ color: 'var(--t1)' }}>{m.name}</span>
-          {m.displayName && <span className="mono" style={{ fontSize: 12, color: 'var(--t3)' }}>原始名 {m.originalName}</span>}
+          <span className="gw-mono" style={{ color: 'var(--gw-text)' }}>{v}</span>
+          {m.displayName && (
+            <span className="gw-mono" style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>原始名 {m.originalName}</span>
+          )}
         </span>
       ),
     },
     {
-      key: 'offers', title: '供给源', align: 'right', width: 110,
-      render: m => (
-        <span className="num">
-          {m.offers.filter(o => o.enabled).length}<span style={{ color: 'var(--t3)' }}>/{m.offers.length}</span>
+      title: '供给源', key: 'offers', align: 'right', width: 110,
+      render: (_, m) => (
+        <span className="gw-num">
+          {m.offers.filter(o => o.enabled).length}<span style={{ color: 'var(--gw-text-3)' }}>/{m.offers.length}</span>
         </span>
       ),
     },
-    { key: 'ctx', title: '上下文', align: 'right', width: 100, render: m => <span className="num">{fmt.ctx(m.contextWindow)}</span> },
+    { title: '上下文', dataIndex: 'contextWindow', align: 'right', width: 100, render: v => <span className="gw-num">{fmt.ctx(v)}</span> },
     {
-      key: 'inP', title: '最低输入价', align: 'right', width: 136,
-      render: m => {
+      title: '最低输入价', key: 'inP', align: 'right', width: 136,
+      render: (_, m) => {
         const p = bestPrice(m);
         const op = officialOf(m);
         return (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
-            <span className="num" style={{ color: p ? 'var(--brand)' : undefined }}>{p ? fmt.price(p.inP) : '—'}</span>
+            <span className="gw-num" style={{ color: p ? 'var(--gw-primary)' : undefined }}>{p ? fmt.price(p.inP) : '—'}</span>
             {op && (
-              <a
-                className="badge b-brand-o"
-                href={op.sourceUrl}
-                target="_blank"
-                rel="noreferrer"
-                style={{ fontSize: 11.5 }}
-                title={`官方参考价 ${op.currency === 'CNY' ? '¥' : '$'}${op.inputPrice} / ${op.currency === 'CNY' ? '¥' : '$'}${op.outputPrice}\n来源:${op.sourceUrl}\n抓取:${fmt.dt(op.fetchedAt)}`}
+              <Tooltip
+                title={
+                  <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    <div>官方参考价 {op.currency === 'CNY' ? '¥' : '$'}{op.inputPrice} / {op.currency === 'CNY' ? '¥' : '$'}{op.outputPrice}</div>
+                    <div>来源:{op.sourceUrl}</div>
+                    <div>抓取:{fmt.dt(op.fetchedAt)}</div>
+                  </div>
+                }
               >
-                官方 ↗
-              </a>
+                <a className="gw-badge" href={op.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 11.5 }}>
+                  官方 ↗
+                </a>
+              </Tooltip>
             )}
           </span>
         );
       },
     },
     {
-      key: 'outP', title: '最低输出价', align: 'right', width: 118,
-      render: m => {
+      title: '最低输出价', key: 'outP', align: 'right', width: 118,
+      render: (_, m) => {
         const p = bestPrice(m);
-        return <span className="num">{p ? fmt.price(p.outP) : '—'}</span>;
+        return <span className="gw-num">{p ? fmt.price(p.outP) : '—'}</span>;
       },
     },
     {
-      key: 'caps', title: '能力', width: 172,
-      render: m => (m.capabilities.length ? m.capabilities.map(x => CAP_LABEL[x]).join(' · ') : '—'),
+      title: '能力', dataIndex: 'capabilities', width: 172,
+      render: v => (v.length ? v.map((x: Capability) => CAP_LABEL[x]).join(' · ') : '—'),
     },
-    { key: 'today', title: '今日调用', align: 'right', width: 108, render: m => <span className="num">{fmt.k(m.todayRequests)}</span> },
+    { title: '今日调用', dataIndex: 'todayRequests', align: 'right', width: 108, render: v => <span className="gw-num">{fmt.k(v)}</span> },
     {
-      key: 'enabled', title: '启用', width: 80,
-      render: m => (
+      title: '启用', dataIndex: 'enabled', align: 'center', width: 80,
+      render: (v, m) => (
         <span onClick={e => e.stopPropagation()}>
           <Switch
-            checked={m.enabled}
-            disabled={busyId === m.id}
+            size="small"
+            checked={v}
+            loading={busyId === m.id}
+            aria-label={`${v ? '停用' : '启用'}模型 ${m.name}`}
             onChange={next => toggleModel.mutate({ id: m.id, enabled: next })}
           />
         </span>
@@ -488,7 +499,7 @@ export default function Models() {
       title="模型目录还是空的"
       desc="可以「从渠道同步」把上游模型批量拉进来，也可以手动新增一个。"
       action={
-        <Button size="sm" variant="primary" onClick={() => setSyncOpen(true)} disabled={channels.length === 0}>
+        <Button size="small" type="primary" onClick={() => setSyncOpen(true)} disabled={channels.length === 0}>
           从渠道同步
         </Button>
       }
@@ -497,100 +508,102 @@ export default function Models() {
     <NoResultState
       title="没有符合条件的模型"
       desc="当前筛选（关键字 / 供应商 / 能力 / 上下文 / 启用状态）没有命中。"
-      action={<Button size="sm" onClick={clearFilters}>清除筛选</Button>}
+      action={<Button size="small" onClick={clearFilters}>清除筛选</Button>}
     />
   );
 
   return (
-    <>
+    <div className="gw-page">
       <PageHeader
         title="模型广场"
         desc="以模型为中心聚合多家供应商供给源，可对比价格与延迟、编排优先级"
         extra={
           <>
             <Button onClick={() => setSyncOpen(true)}>从渠道同步</Button>
-            <Button variant="primary" onClick={() => setAddOpen(true)}>新增模型</Button>
+            <Button type="primary" onClick={() => setAddOpen(true)}>新增模型</Button>
           </>
         }
       />
 
       <Blocks>
         <BlockCard>
-          <div className="toolbar" style={{ padding: '12px 14px 0' }}>
-            <div className="hstack wrap" style={{ gap: 8 }}>
-              <Input
-                placeholder="搜索模型名"
-                style={{ width: 240 }}
-                value={kw}
-                onChange={e => setKw(e.target.value)}
-              />
-              <Select
-                style={{ width: 150 }} value={provider} onChange={e => setProvider(e.target.value)}
-                options={[{ value: '', label: '全部供应商' }, ...providers.map(p => ({ value: p, label: p }))]}
-              />
-              <Select
-                style={{ width: 140 }} value={cap} onChange={e => setCap(e.target.value)}
-                options={[{ value: '', label: '全部能力' }, ...capabilities.map(x => ({ value: x, label: CAP_LABEL[x] }))]}
-              />
-              <Select
-                style={{ width: 150 }} value={ctxRange} onChange={e => setCtxRange(e.target.value)}
-                options={[
-                  { value: '', label: '上下文不限' },
-                  { value: 's', label: '< 32K' },
-                  { value: 'm', label: '32K – 128K' },
-                  { value: 'l', label: '> 128K' },
-                ]}
-              />
-              <Select
-                style={{ width: 140 }} value={sort} onChange={e => setSort(e.target.value as SortKey)}
-                options={[
-                  { value: 'price', label: '按最低价' },
-                  { value: 'latency', label: '按最低延迟' },
-                  { value: 'hot', label: '按调用量' },
-                  { value: 'ctx', label: '按上下文' },
-                ]}
-              />
-              <Seg
-                size="sm"
-                value={enableState}
-                onChange={setEnableState}
-                options={[
-                  { value: 'all', label: '全部' },
-                  { value: 'on', label: '仅已启用' },
-                  { value: 'off', label: '仅未启用' },
-                ]}
-              />
-            </div>
-            <span className="cell-sub">
-              {filtering ? <>筛选出 <b>{list.length}</b> / {models.length} 个模型</> : <>共 <b>{models.length}</b> 个模型</>}
+          <div className="gw-toolbar">
+            <Input.Search
+              allowClear
+              placeholder="搜索模型名"
+              style={{ width: 240 }}
+              value={kw}
+              onChange={e => setKw(e.target.value)}
+            />
+            <Select
+              style={{ width: 150 }} value={provider} onChange={setProvider}
+              options={[{ value: '', label: '全部供应商' }, ...providers.map(p => ({ value: p, label: p }))]}
+            />
+            <Select
+              style={{ width: 140 }} value={cap} onChange={setCap}
+              options={[{ value: '', label: '全部能力' }, ...capabilities.map(x => ({ value: x, label: CAP_LABEL[x] }))]}
+            />
+            <Select
+              style={{ width: 150 }} value={ctxRange} onChange={setCtxRange}
+              options={[
+                { value: '', label: '上下文不限' },
+                { value: 's', label: '< 32K' },
+                { value: 'm', label: '32K – 128K' },
+                { value: 'l', label: '> 128K' },
+              ]}
+            />
+            <Select
+              style={{ width: 140 }} value={sort} onChange={setSort}
+              options={[
+                { value: 'price', label: '按最低价' },
+                { value: 'latency', label: '按最低延迟' },
+                { value: 'hot', label: '按调用量' },
+                { value: 'ctx', label: '按上下文' },
+              ]}
+            />
+            <Segmented
+              size="small"
+              value={enableState}
+              onChange={v => setEnableState(v as EnableState)}
+              options={[
+                { value: 'all', label: '全部' },
+                { value: 'on', label: '仅已启用' },
+                { value: 'off', label: '仅未启用' },
+              ]}
+            />
+            <span className="count">
+              {filtering ? (
+                <>筛选出 <b>{list.length}</b> / {models.length} 个模型</>
+              ) : (
+                <>共 <b>{models.length}</b> 个模型</>
+              )}
             </span>
           </div>
 
-          <div style={{ padding: '14px' }}>
-            <div className="hstack" style={{ gap: 11, marginBottom: 14 }}>
-              <span style={{ fontSize: 13, color: 'var(--t3)' }}>
+          <div style={{ padding: '16px 20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
+              <span style={{ fontSize: 13.5, color: 'var(--gw-text-3)' }}>
                 「仅已启用」按真实可用性过滤：目录启用且至少一个供给源启用
               </span>
               <div style={{ marginLeft: 'auto' }}>
-                <Seg
-                  size="sm"
-                  value={view}
-                  onChange={setView}
+                <Segmented
+                  size="small"
+                  value={view} onChange={setView}
                   options={[{ value: 'plaza', label: '广场' }, { value: 'table', label: '表格' }]}
                 />
               </div>
             </div>
 
             {isLoading && models.length === 0 ? (
-              <div className="mc-grid">
+              <div className="gw-grid-cards">
                 {[0, 1, 2, 3].map(i => (
-                  <div key={i} style={{ height: 190 }}><SkBlock /></div>
+                  <div className="gw-sk-metric" key={i} style={{ height: 190 }} />
                 ))}
               </div>
             ) : list.length === 0 ? (
               emptyNode
             ) : view === 'plaza' ? (
-              <div className="mc-grid">
+              <div className="gw-grid-cards">
                 {list.map(m => (
                   <ModelCard
                     key={m.id}
@@ -608,10 +621,18 @@ export default function Models() {
               </div>
             ) : (
               <Table<ModelCatalogItem>
+                rowKey="id"
+                size="middle"
+                dataSource={list}
                 columns={tableCols}
-                rows={list}
-                rowKey={m => m.id}
-                onRowClick={m => setDrawerId(m.id)}
+                tableLayout="fixed"
+                pagination={list.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
+                onRow={r => ({
+                  onClick: () => setDrawerId(r.id),
+                  onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrawerId(r.id); } },
+                  tabIndex: 0,
+                  style: { cursor: 'pointer' },
+                })}
               />
             )}
           </div>
@@ -623,21 +644,21 @@ export default function Models() {
         <div
           style={{
             position: 'sticky', bottom: 8, marginTop: 18, zIndex: 30,
-            background: 'var(--panel)', border: '1px solid var(--line)',
-            borderRadius: 5, padding: '10px 14px',
+            background: 'var(--gw-card)', border: '1px solid var(--gw-border)',
+            borderRadius: 'var(--gw-r-popup)', padding: '10px 14px',
             display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
           }}
         >
-          <span style={{ fontSize: 13, color: 'var(--t2)' }}>
-            已选 <b className="num">{compare.length}</b> 个（最多 4 个）
+          <span style={{ fontSize: 13.5, color: 'var(--gw-text-2)' }}>
+            已选 <b className="gw-num">{compare.length}</b> 个（最多 4 个）
           </span>
-          <div className="hstack wrap" style={{ gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {compareModels.map(m => (
-              <span className="badge b-slate mono" key={m.id}>
+              <span className="gw-badge gw-mono" key={m.id} style={{ gap: 7 }}>
                 {m.name}
                 <button
                   type="button"
-                  className="card-link"
+                  className="gw-link"
                   style={{ padding: '0 2px', lineHeight: 1 }}
                   aria-label={`从对比中移除 ${m.name}`}
                   onClick={() => toggleCompare(m.id)}
@@ -648,8 +669,8 @@ export default function Models() {
             ))}
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <Button size="sm" onClick={() => setCompare([])}>清空</Button>
-            <Button size="sm" variant="primary" onClick={() => setCompareOpen(true)}>开始对比</Button>
+            <Button size="small" onClick={() => setCompare([])}>清空</Button>
+            <Button size="small" type="primary" onClick={() => setCompareOpen(true)}>开始对比</Button>
           </div>
         </div>
       )}
@@ -663,20 +684,14 @@ export default function Models() {
         }}
       />
       <CompareModal open={compareOpen} models={compareModels} onClose={() => setCompareOpen(false)} />
-      {syncOpen && (
-        <SyncModal open={syncOpen} channels={channels} syncing={syncModel.isPending} onClose={() => setSyncOpen(false)} onSync={handleSyncModel} />
-      )}
-      {addOpen && (
-        <AddModelModal open={addOpen} creating={createModel.isPending} onClose={() => setAddOpen(false)} onCreate={handleCreateModel} />
-      )}
+      <SyncModal open={syncOpen} channels={channels} syncing={syncModel.isPending} onClose={() => setSyncOpen(false)} onSync={handleSyncModel} />
+      <AddModelModal open={addOpen} creating={createModel.isPending} onClose={() => setAddOpen(false)} onCreate={handleCreateModel} />
       <MergeModal
         from={mergeFrom}
         models={models}
         onClose={() => setMergeFrom(null)}
-        onConfirm={into => {
-          if (mergeFrom) mergeModel.mutate({ fromId: mergeFrom.id, intoId: into.id });
-        }}
+        onConfirm={into => { if (mergeFrom) confirmMergeModel(mergeFrom, into); }}
       />
-    </>
+    </div>
   );
 }

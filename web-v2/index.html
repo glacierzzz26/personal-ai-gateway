@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,26 +8,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
     />
-    <script>
-      /* 首帧前定主题，避免白闪（原型口径：localStorage['gw-theme']；默认暗色） */
-      try {
-        var t = localStorage.getItem('gw-theme');
-        document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
-      } catch (e) {}
-    </script>
     <style>
-      /* 首屏底色（CSS 变量尚未可用，按 data-theme 两档硬编码，与原型 --bg 一致） */
+      /* 首屏底色，避免字体/样式加载前白闪（与 --gw-bg 一致） */
       html,
       body {
         margin: 0;
-      }
-      html[data-theme='dark'] {
-        background: #0f1419;
-      }
-      html[data-theme='light'] {
-        background: #f5f6f8;
+        background: #f8fafc;
       }
     </style>
   </head>

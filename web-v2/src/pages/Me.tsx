@@ -1,21 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Card, Col, Empty, Row, Segmented, Space, Table, Tooltip } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
-import Chart, { ChartLegend } from '@/components/Chart';
+import Chart from '@/components/Chart';
 import LedgerDrawer from '@/components/LedgerDrawer';
 import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
 import RequestLogDrawer from '@/components/RequestLogDrawer';
-import { Block as BlockCard, BlockBody, BlockHead, Blocks, MetricBlock } from '@/components/Block';
+import { Block as BlockCard, Blocks, BlockHead, MetricBlock } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import StatusDot from '@/components/StatusDot';
-import { ErrorState, SkBlock, SkLines } from '@/components/States';
-import { Badge, Card, CardBody, CardHead, Empty, Li, Pager, Seg, Strip, Table } from '@/ui/primitives';
-import type { Column } from '@/ui/primitives';
-import { Icon } from '@/ui/icons';
+import { EmptyState, ErrorState, SkBlock } from '@/components/States';
+import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { useCurrency } from '@/stores/currency';
-import { FAIL_LABEL, STATUS_CLIENT_CLOSED, classifyError, fmt } from '@/utils/format';
+import { FAIL_LABEL, STATUS_CLIENT_CLOSED, TONE_COLOR, classifyError, fmt } from '@/utils/format';
 import type { Tone } from '@/utils/format';
+import { TOKENS } from '@/styles/tokens';
+import type { EChartsOption } from 'echarts';
 import type { RequestLogItem, UsageRow } from '@/types';
 
 const okCode = (code: number) => code >= 100 && code < 400;
@@ -26,10 +28,10 @@ const QUOTA_ALERT = 0.85;
 /** 账变流水卡片内联展示的条数;更多走 Drawer。 */
 const LEDGER_PREVIEW = 4;
 
-const REASON: Record<string, string> = {
-  topup: '充值',
-  charge: '扣费',
-  adjust: '调整',
+const REASON: Record<string, { t: string; tone: string }> = {
+  topup: { t: '充值', tone: 'ok' },
+  charge: { t: '扣费', tone: 'aux' },
+  adjust: { t: '调整', tone: 'warn' },
 };
 
 /** "2026-09-03" → "09-03";小时桶 "2026-09-03 20" → "20:00" */
@@ -45,6 +47,7 @@ function balanceTip(balance: number): string {
 /** 我的账户 —— 普通用户自助面：余额、用量、请求日志（作用域锁本人）。 */
 export default function Me() {
   const me = useSession(s => s.admin);
+  const c = useChartColors();
   const setCurrency = useCurrency(s => s.setCurrency);
   const [dim, setDim] = useState<'model' | 'token'>('model');
   /** 统计窗口:预设 1/7/30 天或自定义区间;改动即重取用量与曲线 */
@@ -112,41 +115,71 @@ export default function Me() {
     return { requests, inTokens, outTokens, cost };
   }, [rows]);
 
-  const usageColumns: Column<UsageRow>[] = [
-    { key: 'name', title: dim === 'model' ? '模型' : '令牌', render: r => <span className="mono">{r.name}</span> },
-    { key: 'requests', title: '请求数', align: 'right', render: r => <span className="num">{fmt.n(r.requests)}</span> },
-    { key: 'inTokens', title: '输入 Token', align: 'right', render: r => <span className="num">{fmt.k(r.inTokens)}</span> },
-    { key: 'outTokens', title: '输出 Token', align: 'right', render: r => <span className="num">{fmt.k(r.outTokens)}</span> },
-    { key: 'chargeUsd', title: '花费', align: 'right', render: r => <span className="num">{fmt.usd(r.chargeUsd ?? 0)}</span> },
+  const barOption: EChartsOption = {
+    grid: { left: 44, right: 44, top: 34, bottom: 26 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder,
+      textStyle: { color: c.text, fontSize: 12 },
+    },
+    legend: {
+      data: ['请求数', '花费'], right: 0, top: 0,
+      itemWidth: 8, itemHeight: 8, textStyle: { color: c.text, fontSize: 12 },
+    },
+    xAxis: {
+      type: 'category', data: series.map(d => dayLabel(d.ts)),
+      axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
+      axisLabel: { color: c.text, fontSize: 11, interval: 'auto', rotate: 0, hideOverlap: true },
+    },
+    yAxis: [
+      { type: 'value', splitLine: { lineStyle: { color: c.line } }, axisLabel: { color: c.text, fontSize: 11 } },
+      { type: 'value', splitLine: { show: false }, axisLabel: { color: c.text, fontSize: 11 } },
+    ],
+    series: [
+      { name: '请求数', type: 'bar', data: series.map(d => d.requests), itemStyle: { color: c.primary, borderRadius: 3 }, barWidth: '45%' },
+      {
+        name: '花费', type: 'line', yAxisIndex: 1, data: series.map(d => Number((d.chargeUsd ?? 0).toFixed(4))),
+        showSymbol: false, lineStyle: { width: 1.8, color: c.warn }, itemStyle: { color: c.warn },
+      },
+    ],
+  };
+
+  const usageColumns: ColumnsType<UsageRow> = [
+    { title: dim === 'model' ? '模型' : '令牌', dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
+    { title: '请求数', dataIndex: 'requests', align: 'right', render: v => <span className="gw-num">{fmt.n(v)}</span> },
+    { title: '输入 Token', dataIndex: 'inTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '输出 Token', dataIndex: 'outTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '花费', dataIndex: 'chargeUsd', align: 'right', render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
-  const logColumns: Column<RequestLogItem>[] = [
-    { key: 'ts', title: '时间', width: 148, render: r => <span className="mono small">{r.ts}</span> },
+  const logColumns: ColumnsType<RequestLogItem> = [
+    { title: '时间', dataIndex: 'ts', width: 148, render: v => <span className="gw-mono">{v}</span> },
     {
-      key: 'statusCode',
-      title: '状态',
-      width: 110,
-      render: r => {
-        if (r.statusCode === STATUS_CLIENT_CLOSED) return <StatusDot status="" text="中断" tone="aux" />;
-        if (okCode(r.statusCode)) return <StatusDot status="" text="成功" tone="ok" />;
+      title: '状态', dataIndex: 'statusCode', width: 110,
+      render: (v: number, r) => {
+        if (v === STATUS_CLIENT_CLOSED) return <StatusDot status="" text="中断" tone="aux" />;
+        if (okCode(v)) return <StatusDot status="" text="成功" tone="ok" />;
         return (
-          <span className="hstack" style={{ gap: 7 }}>
-            <StatusDot status="" text={r.error ? '失败' : String(r.statusCode)} tone="err" />
-            {r.error && <Badge tone="slate">{FAIL_LABEL[classifyError(r.error)]}</Badge>}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+            <StatusDot status="" text={r.error ? '失败' : String(v)} tone="err" />
+            {r.error && <span className="gw-badge">{FAIL_LABEL[classifyError(r.error)]}</span>}
           </span>
         );
       },
     },
-    { key: 'model', title: '模型', render: r => <span className="mono ellip" title={r.model}>{r.model}</span> },
-    { key: 'tokenName', title: '令牌', width: 116, render: r => <span className="muted">{r.tokenName || '—'}</span> },
-    { key: 'inTokens', title: '输入', align: 'right', width: 88, render: r => <span className="num">{fmt.k(r.inTokens)}</span> },
-    { key: 'outTokens', title: '输出', align: 'right', width: 88, render: r => <span className="num">{fmt.k(r.outTokens)}</span> },
-    { key: 'totalMs', title: '总耗时', align: 'right', width: 88, render: r => <span className="num">{fmt.ms(r.totalMs)}</span> },
-    { key: 'chargeUsd', title: '花费', align: 'right', width: 92, render: r => <span className="num">{fmt.usd(r.chargeUsd ?? 0)}</span> },
+    {
+      title: '模型', dataIndex: 'model', ellipsis: true,
+      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
+    },
+    { title: '令牌', dataIndex: 'tokenName', width: 116, ellipsis: true, render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span> },
+    { title: '输入', dataIndex: 'inTokens', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '输出', dataIndex: 'outTokens', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.k(v)}</span> },
+    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 88, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
+    { title: '花费', dataIndex: 'chargeUsd', align: 'right', width: 92, render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
   ];
 
   return (
-    <>
+    <div className="gw-page">
       <PageHeader
         title="我的账户"
         desc={`${me?.username ?? ''} 的余额、用量与请求明细`}
@@ -154,183 +187,183 @@ export default function Me() {
       />
 
       {alert && (
-        <div style={{ marginBottom: 16 }}>
-          <Strip tone={alert.tone}>
-            <span className="st-title">{alert.title}</span>
-            <span className="st-desc">{alert.desc}</span>
-          </Strip>
+        <div
+          role="status"
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 11, marginBottom: 16,
+            border: '1px solid var(--gw-border)',
+            borderLeft: `3px solid ${TONE_COLOR[alert.tone]}`,
+            borderRadius: 'var(--gw-r-card)',
+            background: 'var(--gw-card)',
+            padding: '13px 16px', fontSize: 14,
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 500, color: 'var(--gw-text)', flexShrink: 0 }}>
+            <i className={`gw-dot ${alert.tone}`} />
+            {alert.title}
+          </span>
+          <span style={{ color: 'var(--gw-text-2)' }}>{alert.desc}</span>
         </div>
       )}
 
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0,1fr))' }}>
-        <MetricBlock label="可用余额" value={fmt.usd(balance)} note={balanceTip(balance)} />
-        <MetricBlock label={`${rl}请求`} value={fmt.n(totals.requests)} note="仅统计你名下令牌" />
-        <MetricBlock
-          label={`${rl}Token`}
-          value={fmt.k(totals.inTokens + totals.outTokens)}
-          note={`入 ${fmt.k(totals.inTokens)} / 出 ${fmt.k(totals.outTokens)}`}
-        />
-        <MetricBlock label={`${rl}花费`} value={fmt.usd(totals.cost)} note="按本站售价累计" />
-      </div>
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock
+            label="可用余额"
+            value={fmt.usd(balance)}
+            note={balanceTip(balance)}
+          />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock label={`${rl}请求`} value={fmt.n(totals.requests)} note="仅统计你名下令牌" />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock
+            label={`${rl}Token`}
+            value={fmt.k(totals.inTokens + totals.outTokens)}
+            note={`入 ${fmt.k(totals.inTokens)} / 出 ${fmt.k(totals.outTokens)}`}
+          />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <MetricBlock label={`${rl}花费`} value={fmt.usd(totals.cost)} note="按本站售价累计" />
+        </Col>
+      </Row>
 
       {balanceQ.isError && (
-        <Blocks style={{ marginTop: 16 }}>
+        <Blocks style={{ marginBottom: 16 }}>
           <BlockCard>
-            <BlockBody>
+            <div style={{ padding: '16px 20px' }}>
               <ErrorState title="余额加载失败" desc="无法读取钱包余额，请稍后重试。" onRetry={() => void balanceQ.refetch()} />
-            </BlockBody>
+            </div>
           </BlockCard>
         </Blocks>
       )}
 
-      <div className="sec-head" style={{ marginTop: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
         <div style={{ minWidth: 0 }}>
-          <div className="sec-title">用量拆解</div>
-          <div className="cell-sub" style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
+          <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
             按 {dim === 'model' ? '模型' : '令牌'} × {rl} 聚合请求与花费
           </div>
         </div>
-        <Seg
-          value={dim}
-          onChange={v => setDim(v)}
-          options={[
-            { value: 'model' as const, label: '按模型' },
-            { value: 'token' as const, label: '按令牌' },
-          ]}
-        />
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <Segmented
+            value={dim} onChange={v => setDim(v as 'model' | 'token')}
+            options={[{ value: 'model', label: '按模型' }, { value: 'token', label: '按令牌' }]}
+          />
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 14, margin: '14px 0' }}>
-        <Card>
-          <CardHead
-            title={`每日请求与花费(${rl})`}
-            right={<ChartLegend items={[{ label: '请求数', color: 'var(--brand)' }, { label: '花费', color: 'var(--warn)' }]} />}
-          />
-          <CardBody>
-            <Chart
-              labels={series.map(d => dayLabel(d.ts))}
-              height={280}
-              leftFmt={fmt.k}
-              rightFmt={v => fmt.usd(v)}
-              series={[
-                { name: '请求数', data: series.map(d => d.requests), color: 'var(--brand)', kind: 'bar', fmt: v => fmt.n(v) },
-                {
-                  name: '花费',
-                  data: series.map(d => Number((d.chargeUsd ?? 0).toFixed(4))),
-                  color: 'var(--warn)',
-                  kind: 'line',
-                  axis: 'right',
-                  fmt: v => fmt.usd(v, 4),
-                },
-              ]}
-            />
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHead
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24} xl={16}>
+          <Card title={`每日请求与花费(${rl})`}>
+            <Chart option={barOption} height={280} />
+          </Card>
+        </Col>
+        <Col xs={24} xl={8}>
+          <Card
             title="账变流水"
-            right={
-              ledger.length > LEDGER_PREVIEW ? (
-                <button type="button" className="card-link" onClick={() => setLedgerOpen(true)}>
-                  全部 {ledger.length} 条 <Icon name="right" size={12} />
+            styles={{ body: { padding: 0 } }}
+            extra={
+              ledger.length > LEDGER_PREVIEW && (
+                <button type="button" className="gw-link" onClick={() => setLedgerOpen(true)}>
+                  全部 {ledger.length} 条 →
                 </button>
-              ) : undefined
+              )
             }
-          />
-          <CardBody>
+          >
             {balanceQ.isLoading ? (
-              <SkBlock />
+              <div style={{ padding: 20 }}><SkBlock /></div>
             ) : ledger.length === 0 ? (
-              <Empty icon="wallet" title="暂无账变记录" />
+              <Empty description="暂无账变记录" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '32px 0' }} />
             ) : (
               /*
-               * 右栏窄,不放可滚动表格 —— 这里只列最近几条做摘要,完整流水(含备注)点右上角进 Drawer 看。
+               * 右栏窄(1366 下约 322px),不放可滚动表格 —— 固定高度 + 内层滚动条既丑又不完整。
+               * 这里只列最近几条做摘要,完整流水(含备注)点右上角进 Drawer 看。
                */
-              ledger.slice(0, LEDGER_PREVIEW).map(log => (
-                <Li
-                  key={log.id}
-                  k={<Badge tone="slate">{REASON[log.reason] ?? log.reason}</Badge>}
-                  v={
-                    <span style={{ color: log.delta < 0 ? 'var(--err)' : 'var(--ok)' }}>
-                      {log.delta > 0 ? '+' : ''}
-                      {fmt.usd(log.delta)}
-                    </span>
-                  }
-                  r2={
-                    <span className="hstack" style={{ gap: 8 }}>
-                      <span className="num">{fmt.dt(log.createdAt)}</span>
-                      <span className="num" style={{ marginLeft: 'auto' }}>
+              <div className="gw-list">
+                {ledger.slice(0, LEDGER_PREVIEW).map(log => (
+                  <div className="gw-li" key={log.id} style={{ padding: '12px 20px', gap: 4 }}>
+                    <div className="r1">
+                      <span className="gw-badge">{REASON[log.reason]?.t ?? log.reason}</span>
+                      <span className="v" style={{ color: log.delta < 0 ? TOKENS.err : TOKENS.ok }}>
+                        {log.delta > 0 ? '+' : ''}{fmt.usd(log.delta)}
+                      </span>
+                    </div>
+                    <div className="r2" style={{ display: 'flex', gap: 8 }}>
+                      <span className="gw-num">{fmt.dt(log.createdAt)}</span>
+                      <span style={{ marginLeft: 'auto' }} className="gw-num">
                         余额 {fmt.usd(log.balanceAfter)}
                       </span>
-                    </span>
-                  }
-                />
-              ))
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-          </CardBody>
-        </Card>
-      </div>
+          </Card>
+        </Col>
+      </Row>
 
       <Blocks>
         <BlockCard>
           <BlockHead title="用量明细" sub={`按${dim === 'model' ? '模型' : '令牌'}聚合`} />
-          <BlockBody style={{ padding: 0 }}>
-            {usageQ.isFetching && rows.length === 0 ? (
-              <div style={{ padding: 14 }}>
-                <SkLines rows={['', 'w80', 'w60', 'w80']} />
-              </div>
-            ) : rows.length === 0 ? (
-              <Empty icon="activity" title="所选范围内暂无用量" desc="通过网关发起调用后，这里会按模型 / 令牌汇总请求与花费。" />
-            ) : (
-              <Table<UsageRow> columns={usageColumns} rows={rows} rowKey={r => r.name} />
-            )}
-          </BlockBody>
+          <Table<UsageRow>
+            rowKey="name"
+            size="middle"
+            loading={usageQ.isFetching && rows.length === 0}
+            dataSource={rows}
+            columns={usageColumns}
+            pagination={false}
+            locale={{
+              emptyText: (
+                <EmptyState
+                  title="所选范围内暂无用量"
+                  desc="通过网关发起调用后，这里会按模型 / 令牌汇总请求与花费。"
+                />
+              ),
+            }}
+          />
         </BlockCard>
       </Blocks>
 
-      <Blocks style={{ marginTop: 16 }}>
+      <Space direction="vertical" size={16} style={{ width: '100%', marginTop: 16 }}>
         <BlockCard>
-          <BlockHead
-            title="我的请求日志"
-            sub="仅显示你名下令牌"
-            right={
-              <Seg
-                size="sm"
-                value={size}
-                onChange={v => {
-                  setPage(1);
-                  setSize(Number(v));
-                }}
-                options={[20, 50, 100].map(n => ({ value: n, label: `${n}/页` }))}
-              />
-            }
-          />
-          <BlockBody style={{ padding: 0 }}>
-            {logsQ.isFetching && logs.length === 0 ? (
-              <div style={{ padding: 14 }}>
-                <SkLines rows={['', 'w80', 'w60', 'w80', 'w60']} />
-              </div>
-            ) : logs.length === 0 ? (
-              logsQ.isError ? (
-                <div style={{ padding: 14 }}>
-                  <ErrorState title="日志加载失败" desc="无法读取请求日志。" onRetry={() => void logsQ.refetch()} />
-                </div>
+          <BlockHead title="我的请求日志" sub="仅显示你名下令牌" />
+          <Table<RequestLogItem>
+            rowKey="id"
+            size="middle"
+            loading={logsQ.isFetching && logs.length === 0}
+            dataSource={logs}
+            columns={logColumns}
+            locale={{
+              emptyText: logsQ.isError ? (
+                <ErrorState title="日志加载失败" desc="无法读取请求日志。" onRetry={() => void logsQ.refetch()} />
               ) : (
-                <Empty icon="scroll" title="还没有请求日志" desc="网关转发过请求后，这里会逐条列出耗时、Token 与花费。" />
-              )
-            ) : (
-              <>
-                <Table<RequestLogItem> columns={logColumns} rows={logs} rowKey={r => r.id} onRowClick={r => setDetail(r)} />
-                <Pager total={total} page={page} size={size} onChange={p => setPage(p)} />
-              </>
-            )}
-          </BlockBody>
+                <EmptyState title="还没有请求日志" desc="网关转发过请求后，这里会逐条列出耗时、Token 与花费。" />
+              ),
+            }}
+            onRow={r => ({
+              onClick: () => setDetail(r),
+              onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail(r); } },
+              tabIndex: 0,
+              style: { cursor: 'pointer' },
+            })}
+            pagination={{
+              current: page,
+              pageSize: size,
+              total,
+              showSizeChanger: true,
+              pageSizeOptions: ['20', '50', '100'],
+              showTotal: t => `共 ${fmt.n(t)} 条`,
+              onChange: p => setPage(p),
+              onShowSizeChange: (_, ps) => { setPage(1); setSize(ps); },
+            }}
+          />
         </BlockCard>
-      </Blocks>
+      </Space>
 
       <RequestLogDrawer detail={detail} onClose={() => setDetail(null)} />
       <LedgerDrawer open={ledgerOpen} logs={ledger} onClose={() => setLedgerOpen(false)} />
-    </>
+    </div>
   );
 }
