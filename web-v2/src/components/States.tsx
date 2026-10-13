@@ -1,6 +1,6 @@
-import { Button, Card } from 'antd';
+import { Btn } from '@/ui/primitives';
+import { Icon } from '@/ui/icons';
 import type { ReactNode } from 'react';
-import { IconAlert, IconInbox, IconSearch } from '@/components/icons';
 
 /**
  * 五种状态积木：加载 / 空数据 / 空结果 / 错误 / 降级。
@@ -12,26 +12,34 @@ import { IconAlert, IconInbox, IconSearch } from '@/components/icons';
  */
 
 /* ---------- 加载 ---------- */
+const W: Record<string, string> = { '': '100%', w40: '40%', w60: '60%', w80: '80%' };
+
 export function SkLine({ w }: { w?: 'w40' | 'w60' | 'w80' }) {
-  return <div className={`gw-sk-l${w ? ` ${w}` : ''}`} />;
+  return <span className="sk" style={{ display: 'inline-block', width: w ? W[w] : '100%', height: 12 }} />;
 }
 
 export function SkLines({ rows }: { rows: Array<'w40' | 'w60' | 'w80' | ''> }) {
   return (
-    <div className="gw-sk">
+    <div className="stack-sm stack">
       {rows.map((w, i) => (
-        <SkLine key={i} w={w || undefined} />
+        <span key={i} className="sk" style={{ display: 'inline-block', width: W[w] ?? '60%', height: 12 }} />
       ))}
     </div>
   );
 }
 
 export function SkBlock() {
-  return <div className="gw-sk-block" />;
+  return <div className="sk" style={{ display: 'block', width: '100%', height: 120, borderRadius: 5 }} />;
 }
 
 export function SkMetric() {
-  return <div className="gw-sk-metric" />;
+  return (
+    <div className="card kpi">
+      <div className="kpi-label"><span className="sk" style={{ display: 'inline-block', width: '50%', height: 11 }} /></div>
+      <div style={{ height: 8 }} />
+      <div className="kpi-value"><span className="sk" style={{ display: 'inline-block', width: '70%', height: 22 }} /></div>
+    </div>
+  );
 }
 
 /* ---------- 空 / 错误 版式 ---------- */
@@ -46,15 +54,13 @@ interface EstateProps {
 }
 
 function Estate({ title, desc, action, isError, isSearch }: EstateProps) {
-  const Icon = isError ? IconAlert : isSearch ? IconSearch : IconInbox;
+  const ic = isError ? 'xCircle' : isSearch ? 'search' : 'box';
   return (
-    <div className="gw-estate">
-      <span className={`ic${isError ? ' err' : ''}`}>
-        <Icon size={42} />
-      </span>
-      <div className="et">{title}</div>
-      {desc && <div className="ed">{desc}</div>}
-      {action && <div className="ea">{action}</div>}
+    <div className="empty">
+      <div className="empty-ico"><Icon n={ic} /></div>
+      <h3>{title}</h3>
+      {desc && <p>{desc}</p>}
+      {action && <div style={{ marginTop: 12 }}>{action}</div>}
     </div>
   );
 }
@@ -86,7 +92,7 @@ export function ErrorState({
       title={title}
       desc={desc}
       isError
-      action={onRetry ? <Button size="small" onClick={onRetry}>{retryText}</Button> : undefined}
+      action={onRetry ? <Btn size="sm" onClick={onRetry}>{retryText}</Btn> : undefined}
     />
   );
 }
@@ -94,9 +100,11 @@ export function ErrorState({
 /** 卡片内错误态：错误信息常带接口路径，用等宽体 */
 export function ErrorCard({ title, desc, onRetry }: { title: string; desc?: string; onRetry?: () => void }) {
   return (
-    <Card>
-      <ErrorState title={title} desc={desc} onRetry={onRetry} />
-    </Card>
+    <div className="card">
+      <div className="card-body">
+        <ErrorState title={title} desc={desc} onRetry={onRetry} />
+      </div>
+    </div>
   );
 }
 
@@ -111,8 +119,8 @@ export function DegradedNote({
   action?: ReactNode;
 }) {
   return (
-    <div className="gw-note" role="status" style={{ borderLeftColor: 'var(--gw-warn)', background: 'var(--gw-card)' }}>
-      <b style={{ color: 'var(--gw-warn)' }}>⚠ {title}</b>
+    <div className="note note-warn" role="status">
+      <b style={{ color: 'var(--warn)' }}>⚠ {title}</b>
       <span style={{ flex: 1 }}>{children}</span>
       {action}
     </div>

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { App, Form, Input, InputNumber, Modal, Select, Space } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Btn, Field, Input, Modal, Note, Select } from '@/ui/primitives';
+import { toast } from '@/ui/toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/services/api';
 import type { ManualPriceDraft, Provider } from '@/types';
@@ -22,9 +23,19 @@ interface Props {
 export default function ManualPriceModal({
   open, defaultProvider, defaultModelName, providerOptions, onClose,
 }: Props) {
-  const { message } = App.useApp();
   const qc = useQueryClient();
-  const [form] = Form.useForm<ManualPriceDraft>();
+  const [f, setF] = useState<ManualPriceDraft>({
+    provider: '' as Provider,
+    modelName: '',
+    sourceUrl: '',
+    currency: 'CNY',
+    inputPrice: 0,
+    outputPrice: 0,
+    cacheReadPrice: 0,
+    cacheWritePrice: 0,
+    nativeText: '',
+    note: '',
+  });
 
   const { data: vendors = [] } = useQuery({
     queryKey: ['official-vendors'],
@@ -37,16 +48,16 @@ export default function ManualPriceModal({
     [providerOptions, vendors],
   );
 
-  const provider = Form.useWatch('provider', form);
+  const provider = f.provider;
   // 默认原币随厂商:Anthropic/OpenAI/Azure 官网标美元,国内厂商标人民币。
   // 用户一旦手动选过币种就不再覆盖(避免改厂商时抹掉手动选择)。
   const curTouched = useRef(false);
   useEffect(() => {
     const info = vendors.find(v => v.provider === provider);
     if (!curTouched.current && info?.manualCurrency) {
-      form.setFieldValue('currency', info.manualCurrency);
+      setF(p => ({ ...p, currency: info.manualCurrency as 'CNY' | 'USD' }));
     }
-  }, [provider, vendors, form]);
+  }, [provider, vendors]);
 
   // 每次打开按上下文预填(不保留上次残留)。
   useEffect(() => {
@@ -54,93 +65,114 @@ export default function ManualPriceModal({
     curTouched.current = false;
     const p = defaultProvider ?? options[0];
     const info = vendors.find(v => v.provider === p);
-    form.resetFields();
-    form.setFieldsValue({
+    setF({
       provider: p,
       modelName: defaultModelName ?? '',
+      sourceUrl: '',
       currency: info?.manualCurrency ?? 'CNY',
       inputPrice: 0,
       outputPrice: 0,
       cacheReadPrice: 0,
       cacheWritePrice: 0,
+      nativeText: '',
+      note: '',
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultProvider, defaultModelName]);
+  }, [open, defaultProvider, defaultModelName, options, vendors]);
 
   const manual = useMutation({
     mutationFn: (v: ManualPriceDraft) => api.manualOfficialPrice(v),
     onSuccess: () => {
-      message.success('官方参考价已录入');
+      toast.ok('官方参考价已录入');
       qc.invalidateQueries({ queryKey: ['official-prices'] });
       qc.invalidateQueries({ queryKey: ['models'] });
       onClose();
     },
-    onError: (e) => message.error((e as Error)?.message || '录入失败'),
+    onError: (e) => toast.err((e as Error)?.message || '录入失败'),
   });
+
+  const submit = () => {
+    if (!f.provider) { toast.err('请选择供应商'); return; }
+    if (!f.modelName.trim()) { toast.err('请填写模型名(渠道侧真实名)'); return; }
+    if (!/^https?:\/\//.test(f.sourceUrl)) { toast.err('来源 URL 须为 http(s) 地址'); return; }
+    manual.mutate({
+      ...f,
+      modelName: f.modelName.trim(),
+      nativeText: f.nativeText || undefined,
+      note: f.note || undefined,
+    });
+  };
 
   return (
     <Modal
-      title="手工录入官方参考价"
       open={open}
-      onCancel={onClose}
-      onOk={() => form.submit()}
-      confirmLoading={manual.isPending}
-      okText="录入"
-      cancelText="取消"
+      onClose={onClose}
+      title="手工录入官方参考价"
       width={560}
-      destroyOnHidden
+      footer={
+        <>
+          <Btn onClick={onClose}>取消</Btn>
+          <Btn variant="primary" loading={manual.isPending} onClick={submit}>录入</Btn>
+        </>
+      }
     >
-      <Form form={form} layout="vertical" onFinish={v => manual.mutate(v)} requiredMark={false}>
-        <div className="gw-note" style={{ marginBottom: 14 }}>
-          <span>请对照厂商官网计费页逐项填写,并粘贴官网页面地址作为来源 —— 手工录入同样需要可追溯核对。</span>
+      <Note>请对照厂商官网计费页逐项填写,并粘贴官网页面地址作为来源 —— 手工录入同样需要可追溯核对。</Note>
+
+      <div style={{ marginTop: 14 }}>
+        <Field label="供应商">
+          <Select value={f.provider} onChange={e => setF(p => ({ ...p, provider: e.target.value as Provider }))}>
+            <option value="">请选择</option>
+            {options.map(p => <option key={p} value={p}>{p}</option>)}
+          </Select>
+        </Field>
+
+        <Field label="模型名(渠道侧真实名)">
+          <Input className="mono" value={f.modelName} placeholder="如 deepseek-flash"
+            onChange={e => setF(p => ({ ...p, modelName: e.target.value }))} />
+        </Field>
+
+        <Field label="来源 URL(官方计费页)">
+          <Input className="mono" value={f.sourceUrl} placeholder="https://bigmodel.cn/pricing"
+            onChange={e => setF(p => ({ ...p, sourceUrl: e.target.value }))} />
+        </Field>
+
+        <Field label="币种">
+          <Select value={f.currency} onChange={e => { curTouched.current = true; setF(p => ({ ...p, currency: e.target.value as 'CNY' | 'USD' })); }}>
+            <option value="CNY">人民币 CNY</option>
+            <option value="USD">美元 USD</option>
+          </Select>
+        </Field>
+
+        <div className="form-grid">
+          <Field label="输入价(每百万 tokens)">
+            <Input type="number" step="0.01" min="0" value={String(f.inputPrice)}
+              onChange={e => setF(p => ({ ...p, inputPrice: Number(e.target.value) || 0 }))} />
+          </Field>
+          <Field label="输出价(每百万 tokens)">
+            <Input type="number" step="0.01" min="0" value={String(f.outputPrice)}
+              onChange={e => setF(p => ({ ...p, outputPrice: Number(e.target.value) || 0 }))} />
+          </Field>
         </div>
-        <Form.Item name="provider" label="供应商" rules={[{ required: true, message: '必填' }]}>
-          <Select options={options.map(p => ({ value: p, label: p }))} />
-        </Form.Item>
-        <Form.Item
-          name="modelName"
-          label="模型名(渠道侧真实名)"
-          rules={[{ required: true, whitespace: true, message: '必填' }]}
-        >
-          <Input className="gw-mono" placeholder="如 deepseek-flash" />
-        </Form.Item>
-        <Form.Item
-          name="sourceUrl"
-          label="来源 URL(官方计费页)"
-          rules={[
-            { required: true, whitespace: true, message: '必填:手工价也须可追溯' },
-            { pattern: /^https?:\/\//, message: '须为 http(s) 地址' },
-          ]}
-        >
-          <Input className="gw-mono" placeholder="https://bigmodel.cn/pricing" />
-        </Form.Item>
-        <Form.Item name="currency" label="币种" rules={[{ required: true, message: '必填' }]}>
-          <Select onChange={() => { curTouched.current = true; }}
-            options={[{ value: 'CNY', label: '人民币 CNY' }, { value: 'USD', label: '美元 USD' }]} />
-        </Form.Item>
-        <Space size={12} style={{ display: 'flex' }}>
-          <Form.Item name="inputPrice" label="输入价(每百万 tokens)" rules={[{ required: true, message: '必填' }]} style={{ flex: 1 }}>
-            <InputNumber min={0} precision={4} step={0.01} style={{ width: 160 }} />
-          </Form.Item>
-          <Form.Item name="outputPrice" label="输出价(每百万 tokens)" rules={[{ required: true, message: '必填' }]} style={{ flex: 1 }}>
-            <InputNumber min={0} precision={4} step={0.01} style={{ width: 160 }} />
-          </Form.Item>
-        </Space>
-        <Space size={12} style={{ display: 'flex' }}>
-          <Form.Item name="cacheReadPrice" label="缓存命中读价" style={{ flex: 1 }}>
-            <InputNumber min={0} precision={4} step={0.01} style={{ width: 160 }} />
-          </Form.Item>
-          <Form.Item name="cacheWritePrice" label="缓存写入价" tooltip="留 0 = 无依据(计费按输入价回落)" style={{ flex: 1 }}>
-            <InputNumber min={0} precision={4} step={0.01} style={{ width: 160 }} />
-          </Form.Item>
-        </Space>
-        <Form.Item name="nativeText" label="官网原文(可选)" tooltip="如限时折扣说明、档位描述,便于日后核对">
-          <Input placeholder="例:限时 5 折 / 0<Token≤1M" />
-        </Form.Item>
-        <Form.Item name="note" label="备注(可选)">
-          <Input.TextArea rows={2} />
-        </Form.Item>
-      </Form>
+
+        <div className="form-grid">
+          <Field label="缓存命中读价">
+            <Input type="number" step="0.01" min="0" value={String(f.cacheReadPrice)}
+              onChange={e => setF(p => ({ ...p, cacheReadPrice: Number(e.target.value) || 0 }))} />
+          </Field>
+          <Field label="缓存写入价">
+            <Input type="number" step="0.01" min="0" value={String(f.cacheWritePrice)}
+              onChange={e => setF(p => ({ ...p, cacheWritePrice: Number(e.target.value) || 0 }))} />
+          </Field>
+        </div>
+
+        <Field label="官网原文(可选)" hint="如限时折扣说明、档位描述,便于日后核对">
+          <Input value={f.nativeText ?? ''} placeholder="例:限时 5 折 / 0<Token≤1M"
+            onChange={e => setF(p => ({ ...p, nativeText: e.target.value }))} />
+        </Field>
+
+        <Field label="备注(可选)">
+          <Input value={f.note ?? ''} onChange={e => setF(p => ({ ...p, note: e.target.value }))} />
+        </Field>
+      </div>
     </Modal>
   );
 }

@@ -1,4 +1,3 @@
-import { Card } from 'antd';
 import type { ReactNode } from 'react';
 
 /**
@@ -11,13 +10,13 @@ import type { ReactNode } from 'react';
 /** 垂直区块容器 */
 export function Blocks({ children, style }: { children: ReactNode; style?: React.CSSProperties }) {
   return (
-    <div className="gw-blocks" style={style}>
+    <div className="stack" style={style}>
       {children}
     </div>
   );
 }
 
-/** 区块外壳：等价于一张卡片 */
+/** 区块外壳：等价于一张卡片（body 内边距交由 BlockHead/BlockBody 控制，故此处不另加 padding） */
 export function Block({
   children,
   style,
@@ -30,9 +29,9 @@ export function Block({
   id?: string;
 }) {
   return (
-    <Card id={id} className={className} style={style} styles={{ body: { padding: 0 } }}>
+    <div id={id} className={`card${className ? ' ' + className : ''}`} style={style}>
       {children}
-    </Card>
+    </div>
   );
 }
 
@@ -53,11 +52,11 @@ export function BlockHead({
         alignItems: 'center',
         gap: 11,
         padding: '16px 20px',
-        borderBottom: '1px solid var(--gw-border)',
+        borderBottom: '1px solid var(--line)',
       }}
     >
-      <h3 style={{ margin: 0, fontSize: 16, fontWeight: 500, color: 'var(--gw-text)' }}>{title}</h3>
-      {sub && <span style={{ fontSize: 13.5, color: 'var(--gw-text-3)' }}>{sub}</span>}
+      <h3 style={{ margin: 0, fontSize: 16, fontWeight: 500, color: 'var(--t1)' }}>{title}</h3>
+      {sub && <span style={{ fontSize: 13.5, color: 'var(--t3)' }}>{sub}</span>}
       {right && <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 11 }}>{right}</div>}
     </div>
   );
@@ -97,23 +96,33 @@ export function MetricBlock({
   spark?: ReactNode;
 }) {
   return (
-    <Card className="gw-card-hover" styles={{ body: { padding: 0 } }}>
-      <div className="gw-metric">
-        <div className="l">{label}</div>
-        <div className="v">
-          {value}
-          {unit && <small>{unit}</small>}
-        </div>
-        <div className="d">
+    <div className="card kpi">
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value">
+        {value}
+        {unit && <small className="unit">{unit}</small>}
+      </div>
+      {(delta || note || spark) && (
+        <div className="kpi-foot">
           {delta && (
-            <span className={deltaGood ? 'down' : 'up'}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                fontFamily: "'JetBrains Mono',monospace",
+                fontSize: 12,
+                fontWeight: 500,
+                color: deltaGood ? 'var(--ok)' : 'var(--err)',
+              }}
+            >
               {delta.startsWith('-') ? '▼' : '▲'} {delta.replace(/^[+-]/, '')}
             </span>
           )}
-          {note && <span>{note}</span>}
+          {note && <span className="cell-sub">{note}</span>}
+          {spark}
         </div>
-        {spark}
-      </div>
-    </Card>
+      )}
+    </div>
   );
 }

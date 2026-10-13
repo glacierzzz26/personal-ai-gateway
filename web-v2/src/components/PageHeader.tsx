@@ -9,12 +9,12 @@ interface Props {
 
 export default function PageHeader({ title, desc, extra }: Props) {
   return (
-    <div className="gw-page-h">
+    <div className="page-head">
       <div style={{ minWidth: 0 }}>
         <h1>{title}</h1>
-        {desc && <p>{desc}</p>}
+        {desc && <div className="sub">{desc}</div>}
       </div>
-      {extra && <div className="gw-acts">{extra}</div>}
+      {extra && <div className="head-actions">{extra}</div>}
     </div>
   );
 }

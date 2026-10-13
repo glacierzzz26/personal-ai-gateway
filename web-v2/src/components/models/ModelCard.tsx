@@ -1,6 +1,6 @@
-import { Button, Card, Dropdown, Switch, Tooltip, Typography } from 'antd';
-import { MoreOutlined } from '@ant-design/icons';
 import ProviderMark from '@/components/ProviderMark';
+import { Copyable, IconBtn, Switch } from '@/ui/primitives';
+import { Dropdown } from '@/ui/overlay';
 import { CAP_LABEL, fmt } from '@/utils/format';
 import type { ModelCatalogItem, OfficialPriceView } from '@/types';
 
@@ -35,123 +35,94 @@ export default function ModelCard({
   const p = bestPrice(model);
   const usable = model.offers.filter(o => o.enabled).length;
   const officialBadge = officialPrice;
+  const sym = (c?: string) => (c === 'CNY' ? '¥' : '$');
 
   return (
-    <Card
-      className="gw-mcard"
-      onClick={onOpen}
-      styles={{ body: { padding: 16, display: 'flex', flexDirection: 'column', gap: 10, height: '100%' } }}
-    >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <span style={{ minWidth: 0 }}>
-          <span className="gw-mono" style={{ fontSize: 14, fontWeight: 500, wordBreak: 'break-all' }}>
-            {model.name}
+    <div className="mcard" onClick={onOpen}>
+      <div className="mc-top">
+        <span className="mc-name">
+          <Copyable text={model.name}>{model.name}</Copyable>
+        </span>
+        {model.displayName && (
+          <span className="cell-sub mono" style={{ fontSize: 11, marginLeft: 6 }}>
+            原始名 {model.originalName}
           </span>
-          {model.displayName && (
-            <span
-              className="gw-mono"
-              style={{ display: 'block', fontSize: 11, color: 'var(--gw-text-3)', wordBreak: 'break-all' }}
-            >
-              原始名 {model.originalName}
-            </span>
-          )}
-        </span>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--gw-text-3)', flex: '0 0 auto' }}>
-          {model.offers.length} 家
-        </span>
+        )}
+        <span className="mc-ctx">{model.offers.length} 家</span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="hstack wrap" style={{ gap: 6 }}>
         {model.offers.slice(0, 3).map(o => (
           <ProviderMark key={o.id} name={o.provider} />
         ))}
         {model.offers.length > 3 && (
-          <span style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>+{model.offers.length - 3}</span>
+          <span className="cell-sub">+{model.offers.length - 3}</span>
         )}
-        <span style={{ fontSize: 12, color: 'var(--gw-text-3)', marginLeft: 4 }}>
-          {fmt.ctx(model.contextWindow)} 上下文
-        </span>
+        <span className="cell-sub" style={{ marginLeft: 4 }}>{fmt.ctx(model.contextWindow)} 上下文</span>
       </div>
 
-      <div>
+      <div className="taglist">
         {model.capabilities.length
-          ? model.capabilities.map(c => <span className="gw-badge" key={c}>{CAP_LABEL[c]}</span>)
-          : <span style={{ color: 'var(--gw-text-3)', fontSize: 13 }}>—</span>}
+          ? model.capabilities.map(c => <span key={c} className="tag">{CAP_LABEL[c] ?? c}</span>)
+          : <span className="muted small">—</span>}
       </div>
 
-      <div>
+      <div className="prow">
         {p ? (
-          <span>
-            <span className="gw-num" style={{ fontSize: 15, fontWeight: 500, color: 'var(--gw-primary)' }}>
-              {fmt.price(p.inP)}
+          <>
+            <span className="plabel">本站价</span>
+            <span className="ppair">
+              <span className="pin">{fmt.price(p.inP)}</span>
+              <span className="psep">/</span>
+              <span className="pout">{fmt.price(p.outP)}</span>
             </span>
-            <span className="gw-num" style={{ fontSize: 13, color: 'var(--gw-text-2)' }}> / {fmt.price(p.outP)}</span>
-            <span style={{ fontSize: 11, color: 'var(--gw-text-3)', marginLeft: 4 }}>输入/输出 · 每 1M tokens</span>
             {officialBadge && (
-              <Tooltip
-                title={
-                  <div style={{ fontSize: 12, lineHeight: 1.7 }}>
-                    <div>官方参考价 {officialBadge.currency === 'CNY' ? '¥' : '$'}{officialBadge.inputPrice} / {officialBadge.currency === 'CNY' ? '¥' : '$'}{officialBadge.outputPrice}</div>
-                    <div>来源:{officialBadge.sourceUrl}</div>
-                    <div>抓取:{fmt.dt(officialBadge.fetchedAt)}</div>
-                  </div>
-                }
+              <a
+                className="badge b-brand-o"
+                href={officialBadge.sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ marginLeft: 6, fontSize: 11 }}
+                title={`官方参考价 ${sym(officialBadge.currency)}${officialBadge.inputPrice} / ${sym(officialBadge.currency)}${officialBadge.outputPrice}\n来源:${officialBadge.sourceUrl}\n抓取:${fmt.dt(officialBadge.fetchedAt)}`}
+                onClick={e => e.stopPropagation()}
               >
-                <a
-                  className="gw-badge"
-                  href={officialBadge.sourceUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ marginLeft: 6, fontSize: 11 }}
-                  onClick={e => e.stopPropagation()}
-                >
-                  官方 ↗
-                </a>
-              </Tooltip>
+                官方 ↗
+              </a>
             )}
-          </span>
+            <span className="cell-sub" style={{ marginLeft: 4 }}>输入/输出 · 每 1M tokens</span>
+          </>
         ) : (
-          <span style={{ color: 'var(--gw-text-3)', fontSize: 13 }}>未启用供给源</span>
+          <span className="muted">未启用供给源</span>
         )}
       </div>
 
-      <div
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          paddingTop: 10, borderTop: '1px solid var(--gw-border)', marginTop: 'auto',
-        }}
-      >
-        <span style={{ fontSize: 12, color: 'var(--gw-text-3)' }}>
-          今日 <b className="gw-num">{fmt.k(model.todayRequests)}</b> 次 · {usable} 家可用
+      <div className="mc-foot">
+        <span>
+          今日 <b className="num">{fmt.k(model.todayRequests)}</b> 次 · {usable} 家可用
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onClick={e => e.stopPropagation()}>
-          <Typography.Link
-            onClick={onToggleCompare}
-            style={{ color: picked ? 'var(--gw-primary)' : undefined }}
-          >
+        <span
+          className="hstack"
+          style={{ gap: 4, marginLeft: 'auto' }}
+          onClick={e => e.stopPropagation()}
+        >
+          <button type="button" className="link-btn" onClick={onToggleCompare}>
             {picked ? '✓ 已选' : '对比'}
-          </Typography.Link>
-          <Switch size="small" checked={model.enabled} loading={busy} onChange={onToggleEnabled} />
+          </button>
+          <Switch
+            checked={model.enabled}
+            loading={busy}
+            onChange={onToggleEnabled}
+          />
           <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'merge', label: '合并到…', onClick: onMerge },
-                { key: 'delete', label: '删除模型', danger: true, onClick: onDelete },
-              ],
-            }}
+            menu={[
+              { key: 'merge', label: '合并到…', icon: 'layers', onClick: onMerge },
+              { key: 'delete', label: '删除模型', icon: 'trash', danger: true, onClick: onDelete },
+            ]}
           >
-            <Button
-              type="text"
-              size="small"
-              style={{ padding: '0 4px', width: 22, height: 22 }}
-              aria-label="更多操作"
-            >
-              <MoreOutlined style={{ fontSize: 13 }} />
-            </Button>
+            {() => <IconBtn n="more" title="更多操作" />}
           </Dropdown>
-        </div>
+        </span>
       </div>
-    </Card>
+    </div>
   );
 }

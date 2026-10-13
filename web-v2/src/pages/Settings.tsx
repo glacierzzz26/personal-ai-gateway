@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { App, Button, Input, InputNumber, Select, Slider, Switch } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Block as BlockCard, Blocks } from '@/components/Block';
-import PageHeader from '@/components/PageHeader';
+import { Block as BlockCard, BlockHead, BlockBody, Blocks } from '@/components/Block';
 import { DegradedNote, ErrorState, SkLines } from '@/components/States';
+import { Btn, Input, PageHead, Select, Switch } from '@/ui/primitives';
+import { confirm } from '@/ui/overlay';
+import { toast } from '@/ui/toast';
 import { api } from '@/services/api';
 import type { PriceCurrency, Settings as SettingsModel } from '@/types';
 
@@ -38,8 +39,18 @@ interface Group {
   rows: RowDef[];
 }
 
+/** 数值输入 + 尾缀单位（InputNumber addonAfter 的同形替身） */
+function NumInput(p: { value: number; min?: number; max?: number; step?: number; unit: string; placeholder?: string; onChange: (v: number) => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <Input type="number" min={p.min} max={p.max} step={p.step} placeholder={p.placeholder}
+        value={p.value} onChange={e => p.onChange(Number(e.target.value) || 0)} />
+      <span className="cell-sub" style={{ flex: '0 0 auto' }}>{p.unit}</span>
+    </div>
+  );
+}
+
 export default function Settings() {
-  const { message, modal } = App.useApp();
   const qc = useQueryClient();
 
   const { data: server, isLoading, error, refetch } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
@@ -62,34 +73,34 @@ export default function Settings() {
       const saved = await api.updateSettings(form);
       setForm(saved);
       qc.setQueryData(['settings'], saved);
-      message.success('设置已保存');
+      toast.ok('设置已保存');
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '保存失败');
+      toast.err(e instanceof Error ? e.message : '保存失败');
     } finally {
       setSaving(false);
     }
   };
 
   const clearLogs = () => {
-    modal.confirm({
+    confirm({
       title: '清空全部请求日志?',
-      content: '所有日志与用量统计将被删除,此操作不可恢复。',
-      okText: '清空', okButtonProps: { danger: true }, cancelText: '取消',
-      onOk: async () => {
-        setClearing(true);
-        try {
-          await api.clearLogs();
-          message.success('日志已清空');
-          await qc.invalidateQueries({ queryKey: ['logs'] });
-          await qc.invalidateQueries({ queryKey: ['recentLogs'] });
-          await qc.invalidateQueries({ queryKey: ['overview'] });
-          await qc.invalidateQueries({ queryKey: ['usage'] });
-        } catch (e) {
-          message.error(e instanceof Error ? e.message : '清空失败');
-        } finally {
-          setClearing(false);
-        }
-      },
+      body: '所有日志与用量统计将被删除,此操作不可恢复。',
+      okText: '清空', danger: true, cancelText: '取消',
+    }).then(async ok => {
+      if (!ok) return;
+      setClearing(true);
+      try {
+        await api.clearLogs();
+        toast.ok('日志已清空');
+        await qc.invalidateQueries({ queryKey: ['logs'] });
+        await qc.invalidateQueries({ queryKey: ['recentLogs'] });
+        await qc.invalidateQueries({ queryKey: ['overview'] });
+        await qc.invalidateQueries({ queryKey: ['usage'] });
+      } catch (e) {
+        toast.err(e instanceof Error ? e.message : '清空失败');
+      } finally {
+        setClearing(false);
+      }
     });
   };
 
@@ -100,15 +111,15 @@ export default function Settings() {
         {
           key: 'timeout', t: '请求超时', d: '上游在该窗口内无响应即中断并尝试下一个供给源；应留出上游最慢一次生成的时间',
           render: (f, s) => (
-            <InputNumber style={{ width: 150 }} min={1000} step={1000} value={f.requestTimeoutMs}
-              addonAfter="ms" onChange={v => s('requestTimeoutMs', Number(v) || 90000)} />
+            <NumInput unit="ms" min={1000} step={1000} value={f.requestTimeoutMs}
+              onChange={v => s('requestTimeoutMs', v || 90000)} />
           ),
         },
         {
           key: 'retries', t: '最大重试', d: '同一请求切换供给源的最大次数',
           render: (f, s) => (
-            <InputNumber style={{ width: 130 }} min={0} max={10} value={f.maxRetries}
-              addonAfter="次" onChange={v => s('maxRetries', Number(v) || 0)} />
+            <NumInput unit="次" min={0} max={10} value={f.maxRetries}
+              onChange={v => s('maxRetries', v)} />
           ),
         },
         {
@@ -139,9 +150,13 @@ export default function Settings() {
         {
           key: 'retention', t: '保留天数', d: '超期日志自动清理,0 = 不清理',
           render: (f, s) => (
-            <Select style={{ width: 170 }} value={f.logRetentionDays}
-              onChange={v => s('logRetentionDays', v)}
-              options={[{ value: 0, label: '不自动清理' }, { value: 7, label: '7 天' }, { value: 30, label: '30 天' }, { value: 90, label: '90 天' }]} />
+            <Select style={{ width: 170 }} value={String(f.logRetentionDays)}
+              onChange={e => s('logRetentionDays', Number(e.target.value))}>
+              <option value="0">不自动清理</option>
+              <option value="7">7 天</option>
+              <option value="30">30 天</option>
+              <option value="90">90 天</option>
+            </Select>
           ),
         },
         {
@@ -152,9 +167,12 @@ export default function Settings() {
           key: 'sample', t: '采样率', d: '个人规模建议 100;高流量时可降低采样以省空间',
           render: (f, s) => (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Slider style={{ flex: 1 }} min={0} max={100} value={f.sampleRatePct}
-                onChange={v => s('sampleRatePct', v)} />
-              <span className="gw-num" style={{ width: 46, textAlign: 'right' }}>{f.sampleRatePct}%</span>
+              <input
+                type="range" min={0} max={100} value={f.sampleRatePct}
+                style={{ flex: 1, ['--p' as string]: `${f.sampleRatePct}%` } as React.CSSProperties}
+                onChange={e => s('sampleRatePct', Number(e.target.value))}
+              />
+              <span className="num" style={{ width: 46, textAlign: 'right' }}>{f.sampleRatePct}%</span>
             </div>
           ),
         },
@@ -166,7 +184,10 @@ export default function Settings() {
         {
           key: 'tz', t: '时区', d: '影响日志时间与统计分桶的本地口径',
           render: (f, s) => (
-            <Select style={{ width: 280 }} value={f.tzOffsetMin} onChange={v => s('tzOffsetMin', v)} options={TZ_OPTIONS} />
+            <Select style={{ width: 280 }} value={String(f.tzOffsetMin)}
+              onChange={e => s('tzOffsetMin', Number(e.target.value))}>
+              {TZ_OPTIONS.map(tz => <option key={tz.value} value={String(tz.value)}>{tz.label}</option>)}
+            </Select>
           ),
         },
         {
@@ -180,20 +201,22 @@ export default function Settings() {
           key: 'displayCurrency', t: '计价币种',
           d: '全站价格(模型单价 / 用量花费 / 官方参考价)统一按此币种展示,也是「应用官方价」的目标币种',
           render: (f, s) => (
-            <Select<PriceCurrency> style={{ width: 200 }} value={f.displayCurrency ?? 'CNY'}
-              onChange={v => s('displayCurrency', v)}
-              options={[{ value: 'CNY', label: '人民币 ¥' }, { value: 'USD', label: '美元 $' }]} />
+            <Select style={{ width: 200 }} value={f.displayCurrency ?? 'CNY'}
+              onChange={e => s('displayCurrency', e.target.value as PriceCurrency)}>
+              <option value="CNY">人民币 ¥</option>
+              <option value="USD">美元 $</option>
+            </Select>
           ),
         },
         {
           key: 'usdPerCny', t: 'USD/CNY 汇率',
           d: '仅当官方价原币种与计价币种不一致时用于折算(如官方为美元、计价为人民币)。手工维护:1 元人民币合多少美元就填多少(如 0.139);留 0 = 未设,此时拒绝折算,不臆造汇率',
           render: (f, s) => (
-            <InputNumber
-              style={{ width: 200 }} min={0} max={10} step={0.001} precision={4}
+            <NumInput
+              unit="" min={0} max={10} step={0.001}
               placeholder="0 = 未设"
               value={f.usdPerCny ?? 0}
-              onChange={v => s('usdPerCny', Number(v) || 0)}
+              onChange={v => s('usdPerCny', v)}
             />
           ),
         },
@@ -201,11 +224,11 @@ export default function Settings() {
           key: 'priceMultiplier', t: '全局售价倍率',
           d: '本站价 = 官方价 × 倍率,是展示给用户的售价口径(成本仅管理员可见)。留空或 0 = 1.0 不加价;单个模型可在「模型广场」编辑页单独覆盖',
           render: (f, s) => (
-            <InputNumber
-              style={{ width: 200 }} min={0.01} max={1000} step={0.1} precision={2}
+            <NumInput
+              unit="" min={0.01} max={1000} step={0.1}
               placeholder="1 = 不加价"
               value={f.priceMultiplier ?? 1}
-              onChange={v => s('priceMultiplier', Number(v) || 1)}
+              onChange={v => s('priceMultiplier', v || 1)}
             />
           ),
         },
@@ -217,7 +240,7 @@ export default function Settings() {
       rows: [
         {
           key: 'db', t: '数据库', d: '日志、渠道、令牌与设置同库存放(gateway-v2.db,SQLite WAL)',
-          render: () => <span className="gw-mono" style={{ color: 'var(--gw-text-3)' }}>gateway-v2.db</span>,
+          render: () => <span className="mono" style={{ color: 'var(--t3)' }}>gateway-v2.db</span>,
         },
       ],
     },
@@ -232,8 +255,8 @@ export default function Settings() {
 
   if (!form) {
     return (
-      <div className="gw-page">
-        <PageHeader title="系统设置" desc="网关运行参数" />
+      <div>
+        <PageHead title="系统设置" sub="网关运行参数" />
         <Blocks>
           <BlockCard>
             <div style={{ padding: '18px 20px' }}>
@@ -254,29 +277,32 @@ export default function Settings() {
   }
 
   return (
-    <div className="gw-page">
-      <PageHeader
+    <div>
+      <PageHead
         title="系统设置"
-        desc="网关运行参数；改动保存后对后续请求即时生效"
-        extra={
-          <Button type="primary" loading={saving} onClick={save}>
+        sub="网关运行参数；改动保存后对后续请求即时生效"
+        actions={
+          <Btn variant="primary" loading={saving} onClick={save}>
             保存设置
-          </Button>
+          </Btn>
         }
       />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,168px) minmax(0,1fr)', gap: 24, alignItems: 'start' }}>
-        <nav
-          className="gw-anchor"
-          aria-label="设置分组"
-          style={{ position: 'sticky', top: 86 }}
-        >
+        <nav aria-label="设置分组" style={{ position: 'sticky', top: 86, display: 'grid', gap: 2 }}>
           {groups.map(g => (
             <button
               key={g.id}
               type="button"
               aria-current={active === g.id}
               onClick={() => goTo(g.id)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer',
+                padding: '7px 10px', borderRadius: 4, fontSize: 12.5, fontFamily: 'inherit',
+                background: active === g.id ? 'var(--panel-2)' : 'transparent',
+                color: active === g.id ? 'var(--brand)' : 'var(--t2)',
+                fontWeight: active === g.id ? 500 : 400,
+              }}
             >
               {g.title}
             </button>
@@ -286,45 +312,46 @@ export default function Settings() {
         <Blocks>
           {groups.map(g => (
             <BlockCard key={g.id} id={g.id}>
-              <div
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 11,
-                  padding: '16px 20px', borderBottom: '1px solid var(--gw-border)',
-                }}
-              >
-                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 500, color: 'var(--gw-text)' }}>{g.title}</h3>
-                {g.note && <span style={{ fontSize: 13.5, color: 'var(--gw-text-3)' }}>{g.note}</span>}
-                {g.danger && (
-                  <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 11 }}>
-                    <span style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>{g.danger.text}</span>
-                    <Button size="small" danger loading={g.danger.loading} onClick={g.danger.run}>
+              <BlockHead
+                title={g.title}
+                sub={g.note}
+                right={g.danger && (
+                  <>
+                    <span style={{ fontSize: 13, color: 'var(--t3)' }}>{g.danger.text}</span>
+                    <Btn size="sm" variant="danger" loading={g.danger.loading} onClick={g.danger.run}>
                       {g.danger.label}
-                    </Button>
-                  </div>
+                    </Btn>
+                  </>
                 )}
-              </div>
+              />
 
-              <div style={{ padding: '4px 20px 8px' }}>
+              <BlockBody style={{ padding: '4px 20px 8px' }}>
                 {g.rows.map(r => (
-                  <div className="gw-settings-row" key={r.key}>
+                  <div
+                    key={r.key}
+                    style={{
+                      display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,340px)',
+                      gap: 16, alignItems: 'center', padding: '13px 0', borderBottom: '1px solid var(--line-2)',
+                    }}
+                  >
                     <div>
-                      <div className="sl">{r.t}</div>
-                      <div className="sd">{r.d}</div>
+                      <div style={{ fontSize: 13.5, fontWeight: 500, color: 'var(--t1)' }}>{r.t}</div>
+                      <div className="cell-sub" style={{ marginTop: 2 }}>{r.d}</div>
                     </div>
-                    <div style={{ justifySelf: 'end', width: '100%', maxWidth: 340 }}>{r.render(form, set)}</div>
+                    <div style={{ justifySelf: 'end', width: '100%' }}>{r.render(form, set)}</div>
                   </div>
                 ))}
-              </div>
+              </BlockBody>
 
               {g.persisted && (
                 <div
                   style={{
-                    padding: '12px 20px', borderTop: '1px solid var(--gw-border)',
+                    padding: '12px 20px', borderTop: '1px solid var(--line)',
                     display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12,
                   }}
                 >
-                  <span style={{ fontSize: 13, color: 'var(--gw-text-3)' }}>保存后对后续请求即时生效</span>
-                  <Button size="small" type="primary" loading={saving} onClick={save}>保存</Button>
+                  <span style={{ fontSize: 13, color: 'var(--t3)' }}>保存后对后续请求即时生效</span>
+                  <Btn size="sm" variant="primary" loading={saving} onClick={save}>保存</Btn>
                 </div>
               )}
             </BlockCard>

@@ -1,69 +1,38 @@
-import { useMemo, useState } from 'react';
+/* ============================================================
+   应用外壳 —— 移植自原型（.app / .sidebar / .topbar / .content）。
+   保留原行为：/healthz 30s 探活、版本展示、登出、改密弹窗、
+   公告自动弹窗、Ctrl+K 面板；新增：顶栏明暗主题切换。
+   ============================================================ */
+import { useMemo } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { App, Tooltip } from 'antd';
-import type { MenuProps } from 'antd';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
 import AnnouncementModal from '@/components/AnnouncementModal';
 import CmdK from '@/layout/CmdK';
-import { IconFold } from '@/components/icons';
 import { NAV_GROUPS, crumbOf, visibleNav } from '@/layout/nav';
+import { Icon } from '@/ui/icons';
+import { Dropdown } from '@/ui/overlay';
+import { toast } from '@/ui/toast';
+import { useTheme } from '@/ui/theme';
 import { useUi } from '@/stores/ui';
 import { useSession } from '@/stores/session';
 import { api } from '@/services/api';
 import { queryClient } from '@/main';
 
-const SIDER_W = 248;
-const SIDER_COLLAPSED_W = 64;
-const TOPBAR_H = 62;
-
-/** 全局状态 chip 三态 —— 由后端健康检查驱动，不是装饰。 */
-type GateStatus = 'ok' | 'warn' | 'err' | 'loading';
-
-const GATE_TEXT: Record<GateStatus, string> = {
-  ok: '运行正常',
-  warn: '降级运行',
-  err: '网关不可达',
-  loading: '状态读取中',
-};
-
 /** /healthz 未回版本（本地 go run 未注入、或网关不可达）时的兜底展示，绝不显示 undefined。 */
 const VERSION_FALLBACK = 'v0.0.0';
 
-/** 从发布版本串里取短 hash：`v0.0.0-4de1cde`→`4de1cde`（脏工作区后缀 `-dirty` 一并跳过）。
- *  取不到 hex 段就原样返回（如本地跑成 `dev`）。折叠态只放得下短 hash。 */
+/** 从发布版本串里取短 hash：`v0.0.0-4de1cde`→`4de1cde`（脏工作区后缀 `-dirty` 一并跳过）。 */
 function shortHash(version: string): string {
   return version.match(/[0-9a-f]{7,}/)?.[0] ?? version;
 }
 
-function Brand({ collapsed }: { collapsed: boolean }) {
-  return (
-    <div
-      style={{
-        height: TOPBAR_H,
-        flex: `0 0 ${TOPBAR_H}px`,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '0 16px',
-        borderBottom: '1px solid var(--gw-border)',
-        overflow: 'hidden',
-      }}
-    >
-      <span className="gw-brand-mark" aria-hidden="true">
-        G
-      </span>
-      {!collapsed && (
-        <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--gw-text)', whiteSpace: 'nowrap' }}>
-          AI Gateway
-        </span>
-      )}
-    </div>
-  );
-}
+/** 全局状态 chip 三态 —— 由后端健康检查驱动，不是装饰。 */
+type GateStatus = 'ok' | 'warn' | 'err' | 'loading';
+const GATE_DOT: Record<GateStatus, string> = { ok: 'g', warn: 'a', err: 'r', loading: 's' };
 
 export default function AppLayout() {
-  const { message } = App.useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const collapsed = useUi(s => s.collapsed);
@@ -72,9 +41,9 @@ export default function AppLayout() {
   const admin = useSession(s => s.admin);
   const setAdmin = useSession(s => s.setAdmin);
   const isAdmin = admin?.role === 'admin';
+  const mode = useTheme(s => s.mode);
+  const toggleTheme = useTheme(s => s.toggle);
   const [pwOpen, setPwOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [userMenuPos, setUserMenuPos] = useState({ top: 0, left: 0 });
 
   /**
    * 全局状态：探 /healthz。管理面自身可达 = 网关在跑；
@@ -98,9 +67,8 @@ export default function AppLayout() {
       : health.ok === false || health.store === 'down'
         ? 'warn'
         : 'ok';
-  const gateTone = gate === 'ok' ? 'ok' : gate === 'warn' ? 'warn' : gate === 'err' ? 'err' : 'aux';
 
-  /** 发布版本：取 /healthz 的 version（后端由 APP_VERSION/env 注入），缺失时回退 VERSION_FALLBACK。 */
+  /** 发布版本：取 /healthz 的 version，缺失时回退。 */
   const version = health?.version || VERSION_FALLBACK;
 
   const items = useMemo(() => visibleNav(isAdmin), [isAdmin]);
@@ -109,7 +77,6 @@ export default function AppLayout() {
   const avatarLetter = username ? username[0].toUpperCase() : 'A';
 
   const logout = async () => {
-    setUserMenuOpen(false);
     try {
       await api.logout();
     } catch {
@@ -118,103 +85,43 @@ export default function AppLayout() {
     // 清空查询缓存:部分响应按角色收敛(如 /models),留着会被下一个登录的账号读到(见 App.tsx 同名处理)。
     queryClient.clear();
     setAdmin(null);
-    message.success('已退出登录');
+    toast.ok('已退出登录');
   };
 
-  const userItems: MenuProps['items'] = [
-    { key: 'password', label: '修改密码', onClick: () => setPwOpen(true) },
-    ...(isAdmin
-      ? [{ key: 'settings', label: '系统设置', onClick: () => navigate('/settings') }]
-      : []),
-    { type: 'divider' as const },
-    { key: 'logout', label: '退出登录', danger: true, onClick: logout },
-  ];
-
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
+    <div className="app">
       {/* ============ 侧栏 ============ */}
-      <aside
-        className="gw-sider"
-        style={{
-          width: collapsed ? SIDER_COLLAPSED_W : SIDER_W,
-          flex: `0 0 ${collapsed ? SIDER_COLLAPSED_W : SIDER_W}px`,
-          background: 'var(--gw-card)',
-          borderRight: '1px solid var(--gw-border)',
-          display: 'flex',
-          flexDirection: 'column',
-          position: 'sticky',
-          top: 0,
-          height: '100vh',
-          transition: 'width .15s ease, flex-basis .15s ease',
-        }}
-      >
-        <Brand collapsed={collapsed} />
+      <aside className={`sidebar${collapsed ? ' collapsed' : ''}`}>
+        <div className="brand">
+          <div className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="6" cy="19" r="2.4" /><circle cx="18" cy="5" r="2.4" />
+              <path d="M8.4 19h7.9a3.4 3.4 0 0 0 0-6.8H7.7a3.4 3.4 0 0 1 0-6.8H15" />
+            </svg>
+          </div>
+          <div className="brand-text">
+            <div className="brand-name">AI Gateway</div>
+            <div className="brand-sub">site · {shortHash(version)}</div>
+          </div>
+        </div>
 
-        <nav style={{ flex: 1, overflowY: 'auto', padding: '12px 0 18px' }} aria-label="主导航">
+        <nav className="nav" aria-label="主导航">
           {NAV_GROUPS.map(g => {
             const inGroup = items.filter(it => it.group === g);
             if (inGroup.length === 0) return null;
             return (
               <div key={g}>
-                {!collapsed && (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: 'var(--gw-text-3)',
-                      padding: '16px 22px 7px',
-                      letterSpacing: '.04em',
-                    }}
-                  >
-                    {g}
-                  </div>
-                )}
+                <div className="nav-group">{g}</div>
                 {inGroup.map(it => (
                   <NavLink
                     key={it.key}
                     to={it.key}
+                    className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
                     aria-current={pathname === it.key ? 'page' : undefined}
                     title={collapsed ? it.label : undefined}
-                    style={({ isActive }) => ({
-                      position: 'relative',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: collapsed ? 'center' : 'flex-start',
-                      gap: 11,
-                      width: `calc(100% - 18px)`,
-                      margin: '2px 9px',
-                      height: 42,
-                      padding: collapsed ? 0 : '0 14px',
-                      border: 0,
-                      background: isActive ? 'var(--gw-primary-50)' : 'transparent',
-                      borderRadius: 'var(--gw-r-btn)',
-                      fontSize: 14.5,
-                      fontWeight: isActive ? 500 : 400,
-                      color: isActive ? 'var(--gw-primary)' : 'var(--gw-text-2)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      textDecoration: 'none',
-                    })}
                   >
-                    {({ isActive }) => (
-                      <>
-                        {/* 激活项 = 3px 主色竖条 */}
-                        {isActive && (
-                          <span
-                            aria-hidden="true"
-                            style={{
-                              position: 'absolute',
-                              left: 0,
-                              top: 6,
-                              bottom: 6,
-                              width: 3,
-                              background: 'var(--gw-primary)',
-                            }}
-                          />
-                        )}
-                        <span style={{ flex: '0 0 16px', display: 'inline-flex' }}>{it.icon}</span>
-                        {!collapsed && <span>{it.label}</span>}
-                      </>
-                    )}
+                    {it.icon}
+                    <span className="nav-label">{it.label}</span>
                   </NavLink>
                 ))}
               </div>
@@ -222,256 +129,76 @@ export default function AppLayout() {
           })}
         </nav>
 
-        <div
-          style={{
-            borderTop: '1px solid var(--gw-border)',
-            padding: collapsed ? '12px 0' : '12px 18px',
-            fontSize: 12.5,
-            color: 'var(--gw-text-3)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: collapsed ? 'center' : 'space-between',
-            gap: 8,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-          }}
-        >
-          {!collapsed && <span>AI Gateway</span>}
-          <Tooltip title="发布版本(版本号 + 短 hash)">
-            <span
-              style={{
-                fontFamily: 'var(--gw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
-                fontSize: 11.5,
-                letterSpacing: 0.2,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {collapsed ? shortHash(version) : version}
+        <div className="side-foot">
+          <div
+            className="gw-chip"
+            title={gate === 'err' ? '管理面 /healthz 不可达' : gate === 'warn' ? '数据面降级运行' : '网关运行正常'}
+          >
+            <span className={`dot ${GATE_DOT[gate]}`} />
+            <span className="gtext">
+              {collapsed ? shortHash(version) : `${gate === 'err' ? 'gateway · 不可达' : gate === 'warn' ? 'gateway · 降级' : 'gateway · 正常'} · ${version}`}
             </span>
-          </Tooltip>
+          </div>
         </div>
       </aside>
 
       {/* ============ 主区 ============ */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <header
-          style={{
-            height: TOPBAR_H,
-            flex: `0 0 ${TOPBAR_H}px`,
-            background: 'var(--gw-card)',
-            borderBottom: '1px solid var(--gw-border)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '0 20px',
-            position: 'sticky',
-            top: 0,
-            zIndex: 20,
-          }}
-        >
+      <div className="main">
+        <header className="topbar">
           <button
             type="button"
+            className="icon-btn"
             onClick={toggleCollapsed}
             aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
             title={collapsed ? '展开侧栏' : '折叠侧栏'}
-            style={{
-              width: 34,
-              height: 34,
-              flex: '0 0 34px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: 0,
-              background: 'transparent',
-              borderRadius: 'var(--gw-r-btn)',
-              color: 'var(--gw-text-2)',
-              cursor: 'pointer',
-            }}
           >
-            <IconFold />
+            <Icon n="panelLeft" />
           </button>
 
-          <nav
-            aria-label="面包屑"
-            style={{ fontSize: 14, color: 'var(--gw-text-3)', display: 'flex', alignItems: 'center', gap: 7 }}
-          >
+          <nav className="crumbs" aria-label="面包屑">
             {crumb.group && (
               <>
                 <span>{crumb.group}</span>
-                <span style={{ color: 'var(--gw-border)' }}>/</span>
+                <Icon n="chevR" />
               </>
             )}
-            <b style={{ color: 'var(--gw-text)', fontWeight: 500 }}>{crumb.label}</b>
+            <span className="cur">{crumb.label}</span>
           </nav>
 
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button
-              type="button"
-              className="gw-kbtn"
-              onClick={() => setCmdkOpen(true)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 9,
-                height: 34,
-                padding: '0 9px 0 12px',
-                border: '1px solid var(--gw-border)',
-                borderRadius: 'var(--gw-r-btn)',
-                background: 'var(--gw-card)',
-                color: 'var(--gw-text-3)',
-                fontSize: 14,
-                cursor: 'pointer',
-              }}
-            >
-              搜索 <kbd style={kbdStyle}>Ctrl K</kbd>
+          <div className="cmd-trigger" onClick={() => setCmdkOpen(true)}>
+            <Icon n="search" />
+            <span className="t">搜索页面 / 跳转</span>
+            <span className="kbd">Ctrl K</span>
+          </div>
+
+          <div className="top-right">
+            <button className="icon-btn" onClick={toggleTheme} title={mode === 'dark' ? '切换到浅色' : '切换到深色'}>
+              <Icon n={mode === 'dark' ? 'sun' : 'moon'} />
             </button>
-
-            <Tooltip title={gate === 'err' ? '管理面 /healthz 不可达' : undefined}>
-              <span
-                role="status"
-                aria-live="polite"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 7,
-                  height: 34,
-                  padding: '0 12px',
-                  border: '1px solid var(--gw-border)',
-                  borderRadius: 'var(--gw-r-badge)',
-                  fontSize: 14,
-                  color: 'var(--gw-text-2)',
-                  background: 'var(--gw-card)',
-                }}
-              >
-                <i className={`gw-dot ${gateTone}`} />
-                {GATE_TEXT[gate]}
-              </span>
-            </Tooltip>
-
-            <span aria-hidden="true" style={{ width: 1, height: 22, background: 'var(--gw-border)' }} />
-
-            <button
-              type="button"
-              onClick={e => {
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                setUserMenuPos({ top: r.bottom + 8, left: Math.max(8, r.right - 210) });
-                setUserMenuOpen(true);
-              }}
-              aria-haspopup="menu"
-              aria-expanded={userMenuOpen}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 9,
-                height: 38,
-                padding: '0 9px',
-                border: 0,
-                background: 'transparent',
-                borderRadius: 'var(--gw-r-btn)',
-                cursor: 'pointer',
-                color: 'var(--gw-text-2)',
-                fontSize: 14.5,
-              }}
+            <div className="sep" />
+            <Dropdown
+              menu={[
+                { key: 'password', label: '修改密码', icon: 'key', onClick: () => setPwOpen(true) },
+                ...(isAdmin ? [{ key: 'settings', label: '系统设置', icon: 'sliders', onClick: () => navigate('/settings') }] : []),
+                { key: 'logout', label: '退出登录', icon: 'logout', danger: true, onClick: logout },
+              ]}
             >
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: '50%',
-                  background: 'var(--gw-primary)',
-                  color: 'var(--gw-card)',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 14,
-                  fontWeight: 600,
-                }}
-              >
-                {avatarLetter}
-              </span>
-              <span>{username}</span>
-            </button>
+              {() => <div className="avatar" aria-haspopup="menu">{avatarLetter}</div>}
+            </Dropdown>
           </div>
         </header>
 
-        <main style={{ flex: 1, padding: '26px 30px 36px', minWidth: 0 }}>
-          <Outlet />
-        </main>
+        <div className="content">
+          <div className="inner page-in">
+            <Outlet />
+          </div>
+        </div>
       </div>
 
       {/* 全站公告:登录后自动拉取未读公告并弹窗(见 AnnouncementModal) */}
       <AnnouncementModal />
-
-      {/* 用户菜单：自己定位，避免 antd Dropdown 的默认阴影与圆角 */}
-      {userMenuOpen && (
-        <>
-          <div
-            style={{ position: 'fixed', inset: 0, zIndex: 49 }}
-            onMouseDown={() => setUserMenuOpen(false)}
-            aria-hidden="true"
-          />
-          <div
-            role="menu"
-            style={{
-              position: 'fixed',
-              top: userMenuPos.top,
-              left: userMenuPos.left,
-              width: 210,
-              background: 'var(--gw-card)',
-              border: '1px solid var(--gw-border)',
-              borderRadius: 'var(--gw-r-popup)',
-              padding: 6,
-              zIndex: 50,
-            }}
-          >
-            {userItems.map((it, i) =>
-              it && 'type' in it && it.type === 'divider' ? (
-                <div key={`d${i}`} style={{ height: 1, background: 'var(--gw-border)', margin: '6px 0' }} />
-              ) : (
-                <button
-                  key={(it as { key: string }).key}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setUserMenuOpen(false);
-                    (it as { onClick?: () => void }).onClick?.();
-                  }}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    height: 38,
-                    padding: '0 11px',
-                    border: 0,
-                    background: 'transparent',
-                    borderRadius: 'var(--gw-r-btn)',
-                    fontSize: 14.5,
-                    color: (it as { danger?: boolean }).danger ? 'var(--gw-err)' : 'var(--gw-text-2)',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                  }}
-                >
-                  {(it as { label: React.ReactNode }).label}
-                </button>
-              ),
-            )}
-          </div>
-        </>
-      )}
-
       <CmdK />
       <ChangePasswordModal open={pwOpen} onClose={() => setPwOpen(false)} />
     </div>
   );
 }
-
-const kbdStyle: React.CSSProperties = {
-  fontFamily: 'var(--gw-mono)',
-  fontSize: 12,
-  color: 'var(--gw-text-3)',
-  border: '1px solid var(--gw-border)',
-  borderRadius: 'var(--gw-r-badge)',
-  padding: '2px 6px',
-};

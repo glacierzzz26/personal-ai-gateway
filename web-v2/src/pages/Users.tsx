@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { App, Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { MoreOutlined } from '@ant-design/icons';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
-import PageHeader from '@/components/PageHeader';
+import LedgerDrawer from '@/components/LedgerDrawer';
 import { EmptyState, ErrorState } from '@/components/States';
+import { Badge, Btn, Field, Input, PageHead, Select } from '@/ui/primitives';
+import { Dropdown, Modal, confirm } from '@/ui/overlay';
+import { toast } from '@/ui/toast';
+import { Icon } from '@/ui/icons';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { fmt } from '@/utils/format';
@@ -17,12 +18,11 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重�
 /** 角色徽章：文字 + 语义色，不靠颜色单独表意。 */
 function RoleBadge({ role }: { role: Role }) {
   const admin = role === 'admin';
-  return (
-    <span className={`gw-badge${admin ? ' tint' : ''}`} style={{ fontSize: 13 }}>
-      {admin ? '管理员' : '普通用户'}
-    </span>
-  );
+  return <Badge tone={admin ? 'brand-o' : 'slate'}>{admin ? '管理员' : '普通用户'}</Badge>;
 }
+
+/** 数值输入统一按字符串承接,空串 = 未填(校验时判必填)。 */
+const numOrNull = (v: string) => (v === '' ? null : Number(v));
 
 /** 新建用户弹窗(角色默认普通用户)。 */
 function CreateUserModal(props: {
@@ -31,51 +31,58 @@ function CreateUserModal(props: {
   onSubmit: (v: { username: string; password: string; role: Role }) => Promise<void>;
 }) {
   const { open, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ username: string; password: string; role: Role }>();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<Role>('user');
+  const [errs, setErrs] = useState<{ username?: string; password?: string }>({});
   const [saving, setSaving] = useState(false);
 
+  // destroyOnHidden 等价:每次打开都是干净表单
+  useEffect(() => {
+    if (open) { setUsername(''); setPassword(''); setRole('user'); setErrs({}); }
+  }, [open]);
+
   const submit = async () => {
-    const v = await form.validateFields();
+    // 校验规则逐条照搬原表单 rules(required + whitespace / min 8)
+    const e: typeof errs = {};
+    if (!username.trim()) e.username = '请输入用户名';
+    if (password.length < 8) e.password = '至少 8 位';
+    setErrs(e);
+    if (Object.keys(e).length > 0) return;
     setSaving(true);
     try {
-      await onSubmit({ username: v.username.trim(), password: v.password, role: v.role });
-      form.resetFields();
+      await onSubmit({ username: username.trim(), password, role });
+      setUsername(''); setPassword('');
     } catch (e) {
-      message.error(`创建失败:${errMsg(e)}`);
+      toast.err(`创建失败:${errMsg(e)}`);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal
-      title="新建用户"
-      open={open}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="创建"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+    <Modal open={open} onClose={onCancel} title="新建用户" width={440}
+      footer={
+        <>
+          <Btn onClick={onCancel}>取消</Btn>
+          <Btn variant="primary" loading={saving} onClick={submit}>创建</Btn>
+        </>
+      }
     >
-      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ role: 'user' }}>
-        <Form.Item name="username" label="用户名" rules={[{ required: true, whitespace: true, message: '请输入用户名' }]}>
-          <Input placeholder="例如:alice" maxLength={64} />
-        </Form.Item>
-        <Form.Item name="password" label="初始密码" rules={[{ required: true, min: 8, message: '至少 8 位' }]}>
-          <Input.Password placeholder="至少 8 位,告知用户后由其自行修改" autoComplete="new-password" />
-        </Form.Item>
-        <Form.Item name="role" label="角色">
-          <Select
-            options={[
-              { value: 'user', label: '普通用户(仅能管理自己的访问令牌)' },
-              { value: 'admin', label: '管理员(全部权限)' },
-            ]}
-          />
-        </Form.Item>
-      </Form>
+      <Field label="用户名" err={errs.username}>
+        <Input placeholder="例如:alice" maxLength={64} value={username} err={!!errs.username}
+          onChange={e => setUsername(e.target.value)} />
+      </Field>
+      <Field label="初始密码" err={errs.password}>
+        <Input type="password" autoComplete="new-password" placeholder="至少 8 位,告知用户后由其自行修改"
+          value={password} err={!!errs.password} onChange={e => setPassword(e.target.value)} />
+      </Field>
+      <Field label="角色">
+        <Select value={role} onChange={e => setRole(e.target.value as Role)}>
+          <option value="user">普通用户(仅能管理自己的访问令牌)</option>
+          <option value="admin">管理员(全部权限)</option>
+        </Select>
+      </Field>
     </Modal>
   );
 }
@@ -87,41 +94,40 @@ function ResetPasswordModal(props: {
   onSubmit: (id: number, newPassword: string) => Promise<void>;
 }) {
   const { user, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ newPassword: string }>();
+  const [newPassword, setNewPassword] = useState('');
+  const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => { if (user) { setNewPassword(''); setErr(null); } }, [user]);
+
   const submit = async () => {
-    const v = await form.validateFields();
     if (!user) return;
+    if (newPassword.length < 8) { setErr('至少 8 位'); return; }
+    setErr(null);
     setSaving(true);
     try {
-      await onSubmit(user.id, v.newPassword);
-      form.resetFields();
+      await onSubmit(user.id, newPassword);
+      setNewPassword('');
     } catch (e) {
-      message.error(`重置失败:${errMsg(e)}`);
+      toast.err(`重置失败:${errMsg(e)}`);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal
-      title={user ? `重置「${user.username}」的密码` : '重置密码'}
-      open={!!user}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="重置"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+    <Modal open={!!user} onClose={onCancel} title={user ? `重置「${user.username}」的密码` : '重置密码'} width={440}
+      footer={
+        <>
+          <Btn onClick={onCancel}>取消</Btn>
+          <Btn variant="primary" loading={saving} onClick={submit}>重置</Btn>
+        </>
+      }
     >
-      <Form form={form} layout="vertical" requiredMark={false} preserve={false}>
-        <Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 8, message: '至少 8 位' }]}>
-          <Input.Password autoComplete="new-password" />
-        </Form.Item>
-      </Form>
+      <Field label="新密码" err={err ?? undefined}>
+        <Input type="password" autoComplete="new-password" value={newPassword} err={!!err}
+          onChange={e => setNewPassword(e.target.value)} />
+      </Field>
     </Modal>
   );
 }
@@ -133,52 +139,51 @@ function TopupModal(props: {
   onSubmit: (id: number, amount: number, note?: string) => Promise<void>;
 }) {
   const { user, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ amount: number; note?: string }>();
+  const [amount, setAmount] = useState('100');
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => { if (user) { setAmount('100'); setNote(''); setErr(null); } }, [user]);
+
   const submit = async () => {
-    const v = await form.validateFields();
     if (!user) return;
+    const n = numOrNull(amount);
+    if (n === null || !Number.isFinite(n)) { setErr('请输入金额'); return; }
+    setErr(null);
     setSaving(true);
     try {
-      await onSubmit(user.id, v.amount, v.note?.trim() || undefined);
-      form.resetFields();
+      await onSubmit(user.id, n, note.trim() || undefined);
+      setNote('');
     } catch (e) {
-      message.error(`充值失败:${errMsg(e)}`);
+      toast.err(`充值失败:${errMsg(e)}`);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal
-      title={user ? `调整「${user.username}」的余额` : '调整余额'}
-      open={!!user}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="提交"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+    <Modal open={!!user} onClose={onCancel} title={user ? `调整「${user.username}」的余额` : '调整余额'} width={440}
+      footer={
+        <>
+          <Btn onClick={onCancel}>取消</Btn>
+          <Btn variant="primary" loading={saving} onClick={submit}>提交</Btn>
+        </>
+      }
     >
-      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ amount: 100 }}>
-        {user && (
-          <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
-            当前余额:<b className="gw-num" style={{ color: 'var(--gw-text)' }}>{fmt.usd(user.balanceUsd)}</b>
-          </div>
-        )}
-        <Form.Item
-          name="amount" label="金额(正=充值,负=扣减)"
-          rules={[{ required: true, message: '请输入金额' }]}
-        >
-          <InputNumber style={{ width: '100%' }} precision={2} step={100} placeholder="例如 100 或 -50" />
-        </Form.Item>
-        <Form.Item name="note" label="备注(可选)">
-          <Input placeholder="例如:微信转账 / 试用额度" maxLength={120} />
-        </Form.Item>
-      </Form>
+      {user && (
+        <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--t3)' }}>
+          当前余额:<b className="num" style={{ color: 'var(--t1)' }}>{fmt.usd(user.balanceUsd)}</b>
+        </div>
+      )}
+      <Field label="金额(正=充值,负=扣减)" err={err ?? undefined}>
+        <Input type="number" step={100} placeholder="例如 100 或 -50" value={amount} err={!!err}
+          onChange={e => setAmount(e.target.value)} />
+      </Field>
+      <Field label="备注(可选)">
+        <Input placeholder="例如:微信转账 / 试用额度" maxLength={120} value={note}
+          onChange={e => setNote(e.target.value)} />
+      </Field>
     </Modal>
   );
 }
@@ -190,202 +195,118 @@ function CeilingModal(props: {
   onSubmit: (id: number, quotaUsd: number, rpmLimit: number) => Promise<void>;
 }) {
   const { user, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ quotaUsd: number; rpmLimit: number }>();
+  const [quotaUsd, setQuotaUsd] = useState('0');
+  const [rpmLimit, setRpmLimit] = useState('0');
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => { if (user) { setQuotaUsd('0'); setRpmLimit('0'); } }, [user]);
+
   const submit = async () => {
-    const v = await form.validateFields();
     if (!user) return;
     setSaving(true);
     try {
-      await onSubmit(user.id, v.quotaUsd ?? 0, v.rpmLimit ?? 0);
-      form.resetFields();
+      await onSubmit(user.id, numOrNull(quotaUsd) ?? 0, numOrNull(rpmLimit) ?? 0);
     } catch (e) {
-      message.error(`保存失败:${errMsg(e)}`);
+      toast.err(`保存失败:${errMsg(e)}`);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal
-      title={user ? `设置「${user.username}」的令牌上限` : '令牌上限'}
-      open={!!user}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="保存"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+    <Modal open={!!user} onClose={onCancel} title={user ? `设置「${user.username}」的令牌上限` : '令牌上限'} width={440}
+      footer={
+        <>
+          <Btn onClick={onCancel}>取消</Btn>
+          <Btn variant="primary" loading={saving} onClick={submit}>保存</Btn>
+        </>
+      }
     >
-      <Form
-        form={form}
-        layout="vertical"
-        requiredMark={false}
-        preserve={false}
-        initialValues={{ quotaUsd: 0, rpmLimit: 0 }}
-      >
-        <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
-          该客户自助创建的令牌不得超过此上限(0 = 不限)。真正常住闸门是余额,这里是令牌子预算的天花板。
-        </div>
-        <Form.Item
-          name="quotaUsd" label="令牌额度上限"
-          extra="单位同计价币种;0 = 不限"
-        >
-          <InputNumber min={0} precision={2} step={10} style={{ width: '100%' }} placeholder="0 = 不限" />
-        </Form.Item>
-        <Form.Item name="rpmLimit" label="令牌 RPM 上限" extra="0 = 不限">
-          <InputNumber min={0} max={100000} style={{ width: '100%' }} placeholder="0 = 不限" />
-        </Form.Item>
-      </Form>
+      <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--t3)' }}>
+        该客户自助创建的令牌不得超过此上限(0 = 不限)。真正常住闸门是余额,这里是令牌子预算的天花板。
+      </div>
+      <Field label="令牌额度上限" hint="单位同计价币种;0 = 不限">
+        <Input type="number" min={0} step={10} placeholder="0 = 不限" value={quotaUsd}
+          onChange={e => setQuotaUsd(e.target.value)} />
+      </Field>
+      <Field label="令牌 RPM 上限" hint="0 = 不限">
+        <Input type="number" min={0} max={100000} placeholder="0 = 不限" value={rpmLimit}
+          onChange={e => setRpmLimit(e.target.value)} />
+      </Field>
     </Modal>
   );
 }
 
 export default function Users() {
-  const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const me = useSession(s => s.admin);
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserAccount | null>(null);
   const [topupUser, setTopupUser] = useState<UserAccount | null>(null);
   const [ceilingUser, setCeilingUser] = useState<UserAccount | null>(null);
+  const [ledgerUser, setLedgerUser] = useState<UserAccount | null>(null);
 
   const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] });
+
+  // 账变流水(管理员审计):打开抽屉时才拉取
+  const { data: ledgerLogs = [] } = useQuery({
+    queryKey: ['user-balance-logs', ledgerUser?.id],
+    queryFn: () => api.userBalanceLogs(ledgerUser!.id),
+    enabled: !!ledgerUser,
+  });
 
   const adminCount = users.filter(u => u.role === 'admin').length;
 
   const create = async (v: { username: string; password: string; role: Role }) => {
     await api.createUser(v);
-    message.success('用户已创建');
+    toast.ok('用户已创建');
     setCreating(false);
     refresh();
   };
 
   const resetPw = async (id: number, newPassword: string) => {
     await api.resetUserPassword(id, newPassword);
-    message.success('密码已重置');
+    toast.ok('密码已重置');
     setResetting(null);
   };
 
   const topup = async (id: number, amount: number, note?: string) => {
     await api.topupUser(id, amount, note);
-    message.success(amount >= 0 ? '已充值' : '已扣减');
+    toast.ok(amount >= 0 ? '已充值' : '已扣减');
     setTopupUser(null);
     refresh();
   };
 
   const saveCeiling = async (id: number, quotaUsd: number, rpmLimit: number) => {
     await api.setUserCeiling(id, quotaUsd, rpmLimit);
-    message.success('令牌上限已保存');
+    toast.ok('令牌上限已保存');
     setCeilingUser(null);
     refresh();
   };
 
   const remove = useMutation({
     mutationFn: (id: number) => api.deleteUser(id),
-    onSuccess: () => { message.success('已删除'); refresh(); },
-    onError: e => message.error(`删除失败:${errMsg(e)}`),
+    onSuccess: () => { toast.ok('已删除'); refresh(); },
+    onError: e => toast.err(`删除失败:${errMsg(e)}`),
   });
 
   const confirmDelete = (u: UserAccount) => {
-    modal.confirm({
+    confirm({
       title: `删除用户「${u.username}」?`,
-      content: `该用户名下 ${u.keyCount} 个访问令牌将一并删除且立即失效;历史日志中的令牌名称保留。`,
+      body: `该用户名下 ${u.keyCount} 个访问令牌将一并删除且立即失效;历史日志中的令牌名称保留。`,
       okText: '删除',
-      okButtonProps: { danger: true },
+      danger: true,
       cancelText: '取消',
-      onOk: () => remove.mutateAsync(u.id),
-    });
+    }).then(ok => { if (ok) remove.mutate(u.id); });
   };
 
-  const columns: ColumnsType<UserAccount> = [
-    { title: '用户名', dataIndex: 'username', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
-    { title: '角色', dataIndex: 'role', width: 96, render: v => <RoleBadge role={v} /> },
-    {
-      title: '余额', dataIndex: 'balanceUsd', width: 116, align: 'right',
-      render: (v: number, r) =>
-        r.role !== 'user' ? (
-          <span style={{ color: 'var(--gw-text-3)' }}>—</span>
-        ) : (
-          <span className="gw-num" style={{ color: v <= 0 ? 'var(--gw-err)' : undefined }}>{fmt.usd(v)}</span>
-        ),
-    },
-    {
-      title: '令牌上限', key: 'ceiling', width: 110, align: 'right',
-      render: (_, r) => {
-        if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
-        if (r.tokenQuotaCeiling <= 0 && r.tokenRpmCeiling <= 0) {
-          return <span style={{ color: 'var(--gw-text-3)' }}>不限</span>;
-        }
-        return (
-          <Tooltip title={`RPM 上限 ${r.tokenRpmCeiling > 0 ? r.tokenRpmCeiling : '不限'}`}>
-            <span className="gw-num">
-              {r.tokenQuotaCeiling > 0 ? fmt.usd(r.tokenQuotaCeiling) : 'RPM 限'}
-            </span>
-          </Tooltip>
-        );
-      },
-    },
-    { title: 'Key 数量', dataIndex: 'keyCount', width: 90, align: 'right', render: v => <span className="gw-num">{v}</span> },
-    {
-      title: '创建时间', dataIndex: 'createdAt', width: 150,
-      render: v => {
-        const d = dayjs(v);
-        return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
-      },
-    },
-    {
-      // 高频（充值/倍率）外露，低频（令牌上限/重置密码/删除）收进「更多」
-      title: '操作', align: 'right', width: 160,
-      render: (_, r) => {
-        const isSelf = r.id === me?.id;
-        const isLastAdmin = r.role === 'admin' && adminCount <= 1;
-        const isUser = r.role === 'user';
-        return (
-          <Space size={4}>
-            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无钱包'}
-              onClick={() => setTopupUser(r)}>
-              充值
-            </Button>
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  { key: 'ceiling', label: '令牌上限', disabled: !isUser },
-                  { key: 'password', label: '重置密码', disabled: isSelf },
-                  { type: 'divider' as const },
-                  { key: 'delete', label: '删除', danger: true, disabled: isSelf || isLastAdmin },
-                ],
-                onClick: ({ key, domEvent }) => {
-                  domEvent.stopPropagation();
-                  if (key === 'ceiling') setCeilingUser(r);
-                  else if (key === 'password') setResetting(r);
-                  else if (key === 'delete') confirmDelete(r);
-                },
-              }}
-            >
-              <Button
-                type="text" size="small" icon={<MoreOutlined />}
-                aria-label={`更多操作 ${r.username}`}
-                title={isLastAdmin ? '最后一个管理员不可删除' : undefined}
-              />
-            </Dropdown>
-          </Space>
-        );
-      },
-    },
-  ];
-
   return (
-    <div className="gw-page">
-      <PageHeader
+    <div>
+      <PageHead
         title="用户管理"
-        desc="账号与角色；普通用户只能管理自己的访问令牌"
-        extra={<Button type="primary" onClick={() => setCreating(true)}>新建用户</Button>}
+        sub="账号与角色；普通用户只能管理自己的访问令牌"
+        actions={<Btn variant="primary" onClick={() => setCreating(true)}>新建用户</Btn>}
       />
 
       <Blocks>
@@ -399,24 +320,103 @@ export default function Users() {
               />
             </div>
           ) : (
-            <Table<UserAccount>
-              rowKey="id"
-              size="middle"
-              loading={isLoading && users.length === 0}
-              dataSource={users}
-              columns={columns}
-              pagination={false}
-              tableLayout="fixed"
-              locale={{
-                emptyText: (
-                  <EmptyState
-                    title="还没有其他账号"
-                    desc="这里只有你自己。新建普通用户后，他们各自管理自己的访问令牌。"
-                    action={<Button size="small" type="primary" onClick={() => setCreating(true)}>新建用户</Button>}
-                  />
-                ),
-              }}
-            />
+            <div className="table-wrap" style={{ padding: '8px 6px 0' }}>
+              <table className="tb" style={{ tableLayout: 'fixed' }}>
+                <thead>
+                  <tr>
+                    <th>用户名</th>
+                    <th style={{ width: 96 }}>角色</th>
+                    <th className="right" style={{ width: 116 }}>余额</th>
+                    <th className="right" style={{ width: 110 }}>令牌上限</th>
+                    <th className="right" style={{ width: 90 }}>Key 数量</th>
+                    <th style={{ width: 150 }}>创建时间</th>
+                    {/* 高频（充值）外露，低频（账变/令牌上限/重置密码/删除）收进「更多」 */}
+                    <th className="right" style={{ width: 120 }}>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {isLoading && users.length === 0 ? (
+                    <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--t3)', padding: 24 }}>读取中…</td></tr>
+                  ) : users.length === 0 ? (
+                    <tr>
+                      <td colSpan={7}>
+                        <EmptyState
+                          title="还没有其他账号"
+                          desc="这里只有你自己。新建普通用户后，他们各自管理自己的访问令牌。"
+                          action={<Btn size="sm" variant="primary" onClick={() => setCreating(true)}>新建用户</Btn>}
+                        />
+                      </td>
+                    </tr>
+                  ) : (
+                    users.map(r => {
+                      const isSelf = r.id === me?.id;
+                      const isLastAdmin = r.role === 'admin' && adminCount <= 1;
+                      const isUser = r.role === 'user';
+                      // Dropdown 菜单项无 disabled 语义:不可用项压灰并在 onClick 里拦截
+                      const off = { color: 'var(--t3)', opacity: .55 } as const;
+                      return (
+                        <tr key={r.id}>
+                          <td><b style={{ fontWeight: 500, color: 'var(--t1)' }}>{r.username}</b></td>
+                          <td><RoleBadge role={r.role} /></td>
+                          <td className="right">
+                            {r.role !== 'user' ? (
+                              <span style={{ color: 'var(--t3)' }}>—</span>
+                            ) : (
+                              <span className="num" style={{ color: r.balanceUsd <= 0 ? 'var(--err)' : undefined }}>{fmt.usd(r.balanceUsd)}</span>
+                            )}
+                          </td>
+                          <td className="right">
+                            {r.role !== 'user' ? (
+                              <span style={{ color: 'var(--t3)' }}>—</span>
+                            ) : r.tokenQuotaCeiling <= 0 && r.tokenRpmCeiling <= 0 ? (
+                              <span style={{ color: 'var(--t3)' }}>不限</span>
+                            ) : (
+                              <span className="num" title={`RPM 上限 ${r.tokenRpmCeiling > 0 ? r.tokenRpmCeiling : '不限'}`}>
+                                {r.tokenQuotaCeiling > 0 ? fmt.usd(r.tokenQuotaCeiling) : 'RPM 限'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="right num">{r.keyCount}</td>
+                          <td>
+                            {(() => {
+                              const d = dayjs(r.createdAt);
+                              return <span className="num" style={{ color: 'var(--t3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : r.createdAt}</span>;
+                            })()}
+                          </td>
+                          <td className="right">
+                            <span className="taglist" style={{ justifyContent: 'flex-end' }}>
+                              <Btn size="sm" disabled={!isUser} title={isUser ? undefined : '管理员无钱包'}
+                                onClick={() => setTopupUser(r)}>
+                                充值
+                              </Btn>
+                              <Dropdown
+                                menu={[
+                                  { key: 'ledger', label: '账变流水', onClick: () => setLedgerUser(r) },
+                                  { key: 'ceiling', label: <span style={!isUser ? off : undefined}>令牌上限</span>, onClick: () => { if (isUser) setCeilingUser(r); } },
+                                  { key: 'password', label: <span style={isSelf ? off : undefined}>重置密码</span>, onClick: () => { if (!isSelf) setResetting(r); } },
+                                  { key: 'delete', label: <span style={isSelf || isLastAdmin ? off : undefined}>删除</span>, danger: true, onClick: () => { if (!isSelf && !isLastAdmin) confirmDelete(r); } },
+                                ]}
+                              >
+                                {() => (
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    aria-label={`更多操作 ${r.username}`}
+                                    title={isLastAdmin ? '最后一个管理员不可删除' : undefined}
+                                  >
+                                    <Icon n="more" />
+                                  </button>
+                                )}
+                              </Dropdown>
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
         </BlockCard>
       </Blocks>
@@ -425,6 +425,7 @@ export default function Users() {
       <ResetPasswordModal user={resetting} onCancel={() => setResetting(null)} onSubmit={resetPw} />
       <TopupModal user={topupUser} onCancel={() => setTopupUser(null)} onSubmit={topup} />
       <CeilingModal user={ceilingUser} onCancel={() => setCeilingUser(null)} onSubmit={saveCeiling} />
+      <LedgerDrawer open={!!ledgerUser} logs={ledgerLogs} onClose={() => setLedgerUser(null)} />
     </div>
   );
 }

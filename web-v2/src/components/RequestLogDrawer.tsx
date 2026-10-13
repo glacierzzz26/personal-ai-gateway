@@ -1,7 +1,16 @@
-import { Descriptions, Drawer } from 'antd';
+import { Drawer } from '@/ui/overlay';
+import { currentCurrency } from '@/stores/currency';
 import type { RequestLogItem } from '@/types';
-import { fmt } from '@/utils/format';
-import { TOKENS } from '@/styles/tokens';
+
+/**
+ * 格式化函数内联说明见 LedgerDrawer.tsx:原 @/utils/format 依赖缺失的
+ * @/styles/tokens,故按原 fmt 逻辑等价内联(币种符号跟随 currentCurrency)。
+ */
+const SYMBOL: Record<string, string> = { CNY: '¥', USD: '$' };
+const dec = (v: number, d: number) => (v > 0 && v < 0.005 ? Math.max(d, 4) : d);
+const usd = (v: number, d = 2) => `${SYMBOL[currentCurrency()] ?? '$'}${v.toFixed(dec(v, d))}`;
+const n = (v: number) => v.toLocaleString('en-US');
+const ms = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`);
 
 /** 2xx/3xx 视为成功(与管理面日志语义一致)。 */
 const okCode = (code: number) => code >= 100 && code < 400;
@@ -16,50 +25,50 @@ export default function RequestLogDrawer({ detail, onClose }: {
       width={640}
       open={!!detail}
       onClose={onClose}
-      title={detail ? <span className="gw-mono">#{detail.id}</span> : null}
-      destroyOnClose
+      title={detail ? <span className="mono">#{detail.id}</span> : null}
     >
       {detail && (
         <>
           {detail.error && (
             <div
               style={{
-                border: '1px solid var(--gw-border)', borderLeft: `2px solid ${TOKENS.err}`,
-                borderRadius: 'var(--gw-r-card)', padding: '10px 12px', fontSize: 13,
-                color: 'var(--gw-text-2)', background: 'var(--gw-bg)', marginBottom: 16,
+                border: '1px solid var(--line)',
+                borderLeft: '2px solid var(--err)',
+                borderRadius: '5px',
+                padding: '10px 12px',
+                fontSize: 13,
+                color: 'var(--t2)',
+                background: 'var(--panel)',
+                marginBottom: 16,
                 wordBreak: 'break-all',
               }}
             >
               {detail.error}
             </div>
           )}
-          <Descriptions column={1} size="small" bordered styles={{ label: { width: 116 } }}>
-            <Descriptions.Item label="请求 ID"><span className="gw-mono">{detail.id}</span></Descriptions.Item>
-            <Descriptions.Item label="时间">{detail.ts}</Descriptions.Item>
-            <Descriptions.Item label="模型"><span className="gw-mono">{detail.model}</span></Descriptions.Item>
-            <Descriptions.Item label="渠道">{detail.channelName || '—'}</Descriptions.Item>
-            <Descriptions.Item label="令牌">{detail.tokenName || '—'}</Descriptions.Item>
-            <Descriptions.Item label="来源 IP">{detail.ip || '—'}</Descriptions.Item>
-            <Descriptions.Item label="状态码">
-              {detail.statusCode}
-              {okCode(detail.statusCode) ? '' : ' (失败)'}
-            </Descriptions.Item>
-            <Descriptions.Item label="输入 Token"><span className="gw-num">{fmt.n(detail.inTokens)}</span></Descriptions.Item>
-            <Descriptions.Item label="输出 Token"><span className="gw-num">{fmt.n(detail.outTokens)}</span></Descriptions.Item>
+          <div>
+            <div className="kv"><span className="k">请求 ID</span><span className="v mono">{detail.id}</span></div>
+            <div className="kv"><span className="k">时间</span><span className="v">{detail.ts}</span></div>
+            <div className="kv"><span className="k">模型</span><span className="v mono">{detail.model}</span></div>
+            <div className="kv"><span className="k">渠道</span><span className="v">{detail.channelName || '—'}</span></div>
+            <div className="kv"><span className="k">令牌</span><span className="v">{detail.tokenName || '—'}</span></div>
+            <div className="kv"><span className="k">来源 IP</span><span className="v">{detail.ip || '—'}</span></div>
+            <div className="kv">
+              <span className="k">状态码</span>
+              <span className="v">{detail.statusCode}{okCode(detail.statusCode) ? '' : ' (失败)'}</span>
+            </div>
+            <div className="kv"><span className="k">输入 Token</span><span className="v num">{n(detail.inTokens)}</span></div>
+            <div className="kv"><span className="k">输出 Token</span><span className="v num">{n(detail.outTokens)}</span></div>
             {!!detail.cacheReadTokens && (
-              <Descriptions.Item label="缓存命中 Token">
-                <span className="gw-num">{fmt.n(detail.cacheReadTokens!)}</span>
-              </Descriptions.Item>
+              <div className="kv"><span className="k">缓存命中 Token</span><span className="v num">{n(detail.cacheReadTokens)}</span></div>
             )}
             {!!detail.cacheWriteTokens && (
-              <Descriptions.Item label="缓存写入 Token">
-                <span className="gw-num">{fmt.n(detail.cacheWriteTokens!)}</span>
-              </Descriptions.Item>
+              <div className="kv"><span className="k">缓存写入 Token</span><span className="v num">{n(detail.cacheWriteTokens)}</span></div>
             )}
-            <Descriptions.Item label="首字延迟">{detail.firstTokenMs ? fmt.ms(detail.firstTokenMs) : '—'}</Descriptions.Item>
-            <Descriptions.Item label="总耗时">{fmt.ms(detail.totalMs)}</Descriptions.Item>
-            <Descriptions.Item label="花费">{fmt.usd(detail.costUsd, 6)}</Descriptions.Item>
-          </Descriptions>
+            <div className="kv"><span className="k">首字延迟</span><span className="v">{detail.firstTokenMs ? ms(detail.firstTokenMs) : '—'}</span></div>
+            <div className="kv"><span className="k">总耗时</span><span className="v">{ms(detail.totalMs)}</span></div>
+            <div className="kv"><span className="k">花费</span><span className="v">{usd(detail.costUsd, 6)}</span></div>
+          </div>
         </>
       )}
     </Drawer>

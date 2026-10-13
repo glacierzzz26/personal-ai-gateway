@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import dayjs, { type Dayjs } from 'dayjs';
-import { DatePicker, Segmented } from 'antd';
+import { Seg, Btn, Input } from '@/ui/primitives';
 import type { StatRangeQuery } from '@/types';
 import { STAT_MAX_DAYS } from '@/types';
 
@@ -88,14 +89,29 @@ export default function RangePicker({
 }) {
   const active: PresetDays | 'custom' = value.days ?? 'custom';
 
+  const [cFrom, setCFrom] = useState('');
+  const [cTo, setCTo] = useState('');
+
+  /** 进入自定义态时,若当前值已是某个手选区间,回填到日期输入,避免清空。 */
+  useEffect(() => {
+    if (active === 'custom' && value.from && value.to) {
+      setCFrom(value.from.format('YYYY-MM-DD'));
+      setCTo(value.to.format('YYYY-MM-DD'));
+    }
+  }, [active, value.from, value.to]);
+
+  const maxDate = dayjs().format('YYYY-MM-DD');
+  const minDate = dayjs().subtract(STAT_MAX_DAYS - 1, 'day').format('YYYY-MM-DD');
+
   const pickPreset = (n: number) => {
     const [from, to] = presetBounds(n);
     onChange({ days: n as PresetDays, from, to });
   };
 
-  const pickCustom = (vals: [Dayjs | null, Dayjs | null] | null) => {
-    if (!vals || !vals[0] || !vals[1]) return;
-    const [from, to] = vals;
+  const applyCustom = () => {
+    if (!cFrom || !cTo) return;
+    const from = dayjs(cFrom);
+    const to = dayjs(cTo);
     const hit = snapPreset(from, to);
     if (hit) {
       pickPreset(hit);
@@ -106,26 +122,25 @@ export default function RangePicker({
 
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-      <Segmented
-        size={size}
-        value={active}
-        onChange={v => { if (v !== 'custom') pickPreset(Number(v)); }}
+      <Seg
+        sm={size === 'small'}
+        value={String(active)}
+        onChange={v => {
+          if (v !== 'custom') pickPreset(Number(v));
+        }}
         options={[
-          ...PRESETS.map(d => ({ value: d, label: `近 ${d} 天` })),
-          { value: 'custom', label: '自定义' },
+          ...PRESETS.map(d => ({ v: String(d), label: `近 ${d} 天` })),
+          { v: 'custom', label: '自定义' },
         ]}
       />
-      <DatePicker.RangePicker
-        size={size}
-        allowClear={false}
-        value={value.from && value.to ? [value.from, value.to] : null}
-        onChange={v => pickCustom(v)}
-        disabledDate={d => !!d && (d.isAfter(dayjs(), 'day') || d.isBefore(dayjs().subtract(STAT_MAX_DAYS - 1, 'day').startOf('day'), 'day'))}
-        presets={PRESETS.map(d => {
-          const [from, to] = presetBounds(d);
-          return { label: `近 ${d} 天`, value: [from, to] as [Dayjs, Dayjs] };
-        })}
-      />
+      {active === 'custom' && (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Input type="date" value={cFrom} max={maxDate} min={minDate} onChange={e => setCFrom(e.target.value)} style={{ width: 140 }} />
+          <span className="cell-sub">至</span>
+          <Input type="date" value={cTo} max={maxDate} min={minDate} onChange={e => setCTo(e.target.value)} style={{ width: 140 }} />
+          <Btn size="sm" variant="primary" onClick={applyCustom} disabled={!cFrom || !cTo}>应用</Btn>
+        </div>
+      )}
     </div>
   );
 }

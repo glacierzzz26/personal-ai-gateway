@@ -1,15 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Card, Col, Empty, Row, Segmented, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { useQuery } from '@tanstack/react-query';
+import { Card, Empty, Seg, Th } from '@/ui/primitives';
+import { api } from '@/services/api';
 import Chart from '@/components/Chart';
 import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
-import { useChartColors } from '@/hooks/useChartColors';
-import { api } from '@/services/api';
+import { useQuery } from '@tanstack/react-query';
 import { fmt } from '@/utils/format';
-import { TOKENS } from '@/styles/tokens';
-import type { EChartsOption } from 'echarts';
-import type { UsageDim, UsageRow } from '@/types';
+import type { UsageDim } from '@/types';
 
 const DIM_LABEL: Record<UsageDim, string> = { model: '按模型', channel: '按渠道', token: '按令牌' };
 const COL_LABEL: Record<UsageDim, string> = { model: '模型', channel: '渠道', token: '令牌' };
@@ -17,13 +13,15 @@ const COL_LABEL: Record<UsageDim, string> = { model: '模型', channel: '渠道'
 /** "2026-09-03" → "09-03" */
 const dayLabel = (ts: string) => ts.slice(5);
 
+type SortKey = 'requests' | 'costUsd';
+
 /** 用量维度钻取面板(原「用量统计」页核心):仅保留拆解部分,无独立页头/汇总卡,供 Dashboard 嵌入。 */
 export default function UsagePanel() {
-  const c = useChartColors();
   const [dim, setDim] = useState<UsageDim>('model');
   const [range, setRange] = useState(defaultRange);
   const rq = useMemo(() => toQuery(range), [range]);
   const rl = rangeLabel(range);
+  const [sort, setSort] = useState<{ key: SortKey | null; dir: 'asc' | 'desc' }>({ key: null, dir: 'desc' });
 
   const { data, isFetching } = useQuery({
     queryKey: ['usage', dim, rq],
@@ -49,139 +47,111 @@ export default function UsagePanel() {
 
   const maxCost = Math.max(...rows.map(r => r.costUsd), 1);
 
-  const barOption: EChartsOption = {
-    grid: { left: 44, right: 44, top: 34, bottom: 26 },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder,
-      textStyle: { color: c.text, fontSize: 12 },
-    },
-    legend: {
-      data: ['请求数', '花费'], right: 0, top: 0,
-      itemWidth: 8, itemHeight: 8, textStyle: { color: c.text, fontSize: 12 },
-    },
-    xAxis: {
-      type: 'category', data: series.map(d => dayLabel(d.ts)),
-      axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
-      axisLabel: { color: c.text, fontSize: 11, interval: 'auto' },
-    },
-    yAxis: [
-      {
-        type: 'value', splitLine: { lineStyle: { color: c.line } },
-        axisLabel: { color: c.text, fontSize: 11 },
-      },
-      {
-        type: 'value', splitLine: { show: false },
-        axisLabel: { color: c.text, fontSize: 11 },
-      },
-    ],
-    series: [
-      {
-        name: '请求数', type: 'bar', data: series.map(d => d.requests),
-        itemStyle: { color: c.primary, borderRadius: 3 }, barWidth: '45%',
-      },
-      {
-        name: '花费', type: 'line', yAxisIndex: 1, data: series.map(d => Number(d.costUsd.toFixed(4))),
-        showSymbol: false, lineStyle: { width: 1.8, color: c.warn }, itemStyle: { color: c.warn },
-      },
-    ],
-  };
+  const sortedRows = useMemo(() => {
+    if (!sort.key) return rows;
+    const arr = [...rows];
+    arr.sort((a, b) => (sort.dir === 'asc' ? a[sort.key!] - b[sort.key!] : b[sort.key!] - a[sort.key!]));
+    return arr;
+  }, [rows, sort]);
 
-  const columns: ColumnsType<UsageRow> = [
-    { title: COL_LABEL[dim], dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
-    {
-      title: '请求数', dataIndex: 'requests', align: 'right', sorter: (a, b) => a.requests - b.requests,
-      render: v => <span className="gw-num">{fmt.n(v)}</span>,
-    },
-    {
-      title: '输入 Token', dataIndex: 'inTokens', align: 'right',
-      render: v => <span className="gw-num">{fmt.k(v)}</span>,
-    },
-    {
-      title: '输出 Token', dataIndex: 'outTokens', align: 'right',
-      render: v => <span className="gw-num">{fmt.k(v)}</span>,
-    },
-    {
-      title: '花费', dataIndex: 'costUsd', align: 'right', sorter: (a, b) => a.costUsd - b.costUsd,
-      render: v => <span className="gw-num">{fmt.usd(v)}</span>,
-    },
-    {
-      title: '花费占比', key: 'share', width: 180,
-      render: (_, r) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div className="gw-bar" style={{ flex: 1 }} role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
-            <i style={{ width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)' }} />
-          </div>
-          <span className="gw-num" style={{ fontSize: 12, color: 'var(--gw-text-3)', width: 46 }}>
-            {totals.cost ? ((r.costUsd / totals.cost) * 100).toFixed(1) : '0.0'}%
-          </span>
-        </div>
-      ),
-    },
-    {
-      title: '错误率', dataIndex: 'errorRate', align: 'right',
-      /* 阈值与渠道/令牌侧统一：≥1% 视为需关注，≥0.5% 为观察区 */
-      render: v => (
-        <span className="gw-num" style={{ color: v > 0.01 ? TOKENS.err : v > 0.005 ? TOKENS.warn : undefined }}>
-          {fmt.pct(v)}
-        </span>
-      ),
-    },
+  const toggleSort = (k: SortKey) =>
+    setSort(prev => ({ key: k, dir: prev.key === k && prev.dir === 'desc' ? 'asc' : 'desc' }));
+
+  // 双轴(请求数 bar + 花费 line)→ 近似为单轴双 series。
+  const labels = series.map(d => dayLabel(d.ts));
+  const usageSeries = [
+    { name: '请求数', data: series.map(d => d.requests), color: 'var(--brand)' },
+    { name: '花费', data: series.map(d => Number((d.costUsd ?? 0).toFixed(4))), color: 'var(--warn)' },
   ];
+
+  const shareBar = (pct: number, color = 'var(--brand)') => (
+    <div style={{ flex: 1, height: 6, background: 'var(--panel-3)', border: '1px solid var(--line)', borderRadius: 2, overflow: 'hidden' }}>
+      <i style={{ display: 'block', height: '100%', width: `${pct}%`, background: color }} />
+    </div>
+  );
 
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
-          <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
+          <div className="cell-sub" style={{ marginTop: 4 }}>
             按 {COL_LABEL[dim]} × {rl} 聚合请求与成本
           </div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
           <RangePicker value={range} onChange={setRange} size="small" />
-          <Segmented
-            value={dim} onChange={v => setDim(v as UsageDim)}
-            options={(['model', 'channel', 'token'] as UsageDim[]).map(d => ({ value: d, label: DIM_LABEL[d] }))}
+          <Seg
+            value={dim}
+            onChange={v => setDim(v as UsageDim)}
+            options={(['model', 'channel', 'token'] as UsageDim[]).map(d => ({ v: d, label: DIM_LABEL[d] }))}
           />
         </div>
       </div>
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} xl={16}>
-          <Card title={`每日请求与花费(${rl})`}>
-            <Chart option={barOption} height={280} />
-          </Card>
-        </Col>
-        <Col xs={24} xl={8}>
-          <Card title="花费 Top 5">
-            {costRows.length === 0 ? (
-              <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: '24px 0' }} />
-            ) : (
-              costRows.slice(0, 5).map(r => (
-                <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, fontSize: 13 }}>
-                  <span className="gw-mono" style={{ width: 150, color: 'var(--gw-text-2)' }}>{r.name}</span>
-                  <div className="gw-bar" style={{ flex: 1 }} role="img" aria-label={`花费占比 ${((r.costUsd / maxCost) * 100).toFixed(0)}%`}>
-                    <i style={{ width: `${(r.costUsd / maxCost) * 100}%`, background: 'var(--gw-primary)' }} />
-                  </div>
-                  <span className="gw-num" style={{ width: 70, textAlign: 'right' }}>{fmt.usd(r.costUsd)}</span>
-                </div>
-              ))
-            )}
-          </Card>
-        </Col>
-      </Row>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}>
+        <Card title={`每日请求与花费(${rl})`} bodyClass="" style={{ flex: '2 1 360px', minWidth: 0 }}>
+          <Chart labels={labels} series={usageSeries} h={280} yFmt={fmt.k} tipFmt={fmt.n} />
+        </Card>
+        <Card title="花费 Top 5" bodyClass="" style={{ flex: '1 1 260px', minWidth: 0 }}>
+          {costRows.length === 0 ? (
+            <Empty icon="scroll" title="暂无数据" />
+          ) : (
+            costRows.slice(0, 5).map(r => (
+              <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, fontSize: 13 }}>
+                <span className="mono" style={{ width: 150, color: 'var(--t2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                {shareBar((r.costUsd / maxCost) * 100)}
+                <span className="num" style={{ width: 70, textAlign: 'right' }}>{fmt.usd(r.costUsd)}</span>
+              </div>
+            ))
+          )}
+        </Card>
+      </div>
 
       <Card>
-        <Table<UsageRow>
-          rowKey="name"
-          size="middle"
-          loading={isFetching && rows.length === 0}
-          dataSource={rows}
-          columns={columns}
-          pagination={false}
-          locale={{ emptyText: <Empty description={`所选时间范围内暂无${COL_LABEL[dim]}级别的用量记录`} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-        />
+        {isFetching && rows.length === 0 ? (
+          <div style={{ padding: '20px 0' }}><span className="sk" style={{ display: 'block', width: '100%', height: 200 }} /></div>
+        ) : sortedRows.length === 0 ? (
+          <Empty icon="table2" title={`所选时间范围内暂无${COL_LABEL[dim]}级别的用量记录`} />
+        ) : (
+          <div className="table-wrap">
+            <table className="tb">
+              <thead>
+                <tr>
+                  <th>{COL_LABEL[dim]}</th>
+                  <Th right sortable dir={sort.key === 'requests' ? sort.dir : null} onClick={() => toggleSort('requests')}>请求数</Th>
+                  <th className="right">输入 Token</th>
+                  <th className="right">输出 Token</th>
+                  <Th right sortable dir={sort.key === 'costUsd' ? sort.dir : null} onClick={() => toggleSort('costUsd')}>花费</Th>
+                  <th style={{ width: 180 }}>花费占比</th>
+                  <th className="right">错误率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedRows.map(r => (
+                  <tr key={r.name}>
+                    <td><span className="mono">{r.name}</span></td>
+                    <td className="right num">{fmt.n(r.requests)}</td>
+                    <td className="right num">{fmt.k(r.inTokens)}</td>
+                    <td className="right num">{fmt.k(r.outTokens)}</td>
+                    <td className="right num">{fmt.usd(r.costUsd)}</td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {shareBar((r.costUsd / maxCost) * 100)}
+                        <span className="num" style={{ fontSize: 12, color: 'var(--t3)', width: 46 }}>
+                          {totals.cost ? ((r.costUsd / totals.cost) * 100).toFixed(1) : '0.0'}%
+                        </span>
+                      </div>
+                    </td>
+                    <td className="right num" style={{ color: r.errorRate > 0.01 ? 'var(--err)' : r.errorRate > 0.005 ? 'var(--warn)' : undefined }}>
+                      {fmt.pct(r.errorRate)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     </>
   );

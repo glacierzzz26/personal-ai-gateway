@@ -1,15 +1,12 @@
 import { useState } from 'react';
-import { Button, Input, Select, Table, Tooltip } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import { Block as BlockCard, Blocks } from '@/components/Block';
-import PageHeader from '@/components/PageHeader';
 import RequestLogDrawer from '@/components/RequestLogDrawer';
 import StatusDot from '@/components/StatusDot';
 import { EmptyState, ErrorState, NoResultState } from '@/components/States';
-import { IconRefresh } from '@/components/icons';
+import { Badge, Btn, Input, PageHead, Pager, Select, badgeTone } from '@/ui/primitives';
 import { api } from '@/services/api';
-import { FAIL_LABEL, STATUS_CLIENT_CLOSED, classifyError, fmt } from '@/utils/format';
+import { STATUS_CLIENT_CLOSED, fmt, failBadge } from '@/utils/format';
 import type { LogFilters, RequestLogItem } from '@/types';
 
 const PAGE_SIZES = [20, 50, 100];
@@ -62,106 +59,91 @@ export default function Logs() {
     return (
       <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
         <StatusDot status="" text={r.error ? '失败' : String(v)} tone="err" />
-        {r.error && <span className="gw-badge">{FAIL_LABEL[classifyError(r.error)]}</span>}
+        {r.error && <Badge tone={badgeTone(failBadge(r.error).tone)}>{failBadge(r.error).label}</Badge>}
       </span>
     );
   };
 
-  const columns: ColumnsType<RequestLogItem> = [
-    {
-      title: '时间', dataIndex: 'ts', width: 138,
-      render: v => <span className="gw-mono">{v}</span>,
-    },
-    { title: '状态', dataIndex: 'statusCode', width: 88, render: statusCell },
-    {
-      title: '模型', dataIndex: 'model', ellipsis: true,
-      render: v => <Tooltip title={v}><span className="gw-mono">{v}</span></Tooltip>,
-    },
-    {
-      title: '渠道', dataIndex: 'channelName', width: 98, ellipsis: true,
-      render: v => v || <span style={{ color: 'var(--gw-text-3)' }}>—</span>,
-    },
-    {
-      title: '令牌', dataIndex: 'tokenName', width: 92, ellipsis: true,
-      render: v => <span style={{ color: 'var(--gw-text-3)' }}>{v || '—'}</span>,
-    },
-    { title: '输入', dataIndex: 'inTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '输出', dataIndex: 'outTokens', align: 'right', width: 78, render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    {
-      title: '缓存读', dataIndex: 'cacheReadTokens', align: 'right', width: 70,
-      render: v => (v ? <span className="gw-num">{fmt.k(v)}</span> : <span style={{ color: 'var(--gw-text-3)' }}>—</span>),
-    },
-    {
-      title: '缓存写', dataIndex: 'cacheWriteTokens', align: 'right', width: 70,
-      render: v => (v ? <span className="gw-num">{fmt.k(v)}</span> : <span style={{ color: 'var(--gw-text-3)' }}>—</span>),
-    },
-    { title: '首字', dataIndex: 'firstTokenMs', align: 'right', width: 70, render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span> },
-    { title: '总耗时', dataIndex: 'totalMs', align: 'right', width: 82, render: v => <span className="gw-num">{fmt.ms(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', width: 86, render: v => <span className="gw-num">{fmt.usd(v)}</span> },
-  ];
+  const loadingRows = isLoading || isFetching;
+  const loading = loadingRows && logs.length === 0;
 
   const errorText = error instanceof Error ? error.message : String(error ?? '加载失败');
 
+  const emptyNode = isError ? (
+    <ErrorState
+      title="日志加载失败"
+      desc={errorText}
+      onRetry={() => void refetch()}
+    />
+  ) : hasFilter ? (
+    <NoResultState
+      title="没有符合筛选条件的日志"
+      desc="当前模型 / 渠道 / 状态 / 关键字组合没有命中任何请求。"
+      action={<Btn size="sm" onClick={reset}>清除筛选</Btn>}
+    />
+  ) : (
+    <EmptyState
+      title="还没有请求日志"
+      desc="网关转发过请求后，这里会逐条列出耗时、Token 与花费。"
+    />
+  );
+
   return (
-    <div className="gw-page">
-      <PageHeader
+    <div>
+      <PageHead
         title="请求日志"
-        desc="逐条请求明细，筛选与分页均由服务端执行；499 客户端中断不计入失败率"
-        extra={
-          <Button icon={<IconRefresh />} loading={isFetching} onClick={() => void refetch()}>
+        sub="逐条请求明细，筛选与分页均由服务端执行；499 客户端中断不计入失败率"
+        actions={
+          <Btn icon="refresh" loading={isFetching} onClick={() => void refetch()}>
             刷新
-          </Button>
+          </Btn>
         }
       />
 
       <Blocks>
         <BlockCard>
-          <div className="gw-toolbar">
+          <div className="toolbar" style={{ padding: '12px 14px 0' }}>
             <Select
               style={{ width: 230 }}
-              value={filters.model}
-              onChange={v => applyFilter({ model: v })}
-              showSearch
-              allowClear
-              placeholder="全部模型"
-              options={modelList.map(m => ({ value: m.name, label: m.name }))}
-              filterOption={(input, o) => String(o?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-            />
+              value={filters.model ?? ''}
+              onChange={e => applyFilter({ model: e.target.value })}
+            >
+              <option value="">全部模型</option>
+              {modelList.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+            </Select>
             <Select
               style={{ width: 190 }}
-              value={filters.channel}
-              onChange={v => applyFilter({ channel: v })}
-              showSearch
-              allowClear
-              placeholder="全部渠道"
-              options={channelList.map(c => ({ value: c.name, label: c.name }))}
-              filterOption={(input, o) => String(o?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-            />
+              value={filters.channel ?? ''}
+              onChange={e => applyFilter({ channel: e.target.value })}
+            >
+              <option value="">全部渠道</option>
+              {channelList.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </Select>
             <Select
               style={{ width: 140 }}
-              value={filters.status || undefined}
-              onChange={v => applyFilter({ status: v ?? '' })}
-              placeholder="全部状态"
-              options={[
-                { value: 'ok', label: '成功' },
-                { value: 'error', label: '失败' },
-                { value: 'canceled', label: '中断 (499)' },
-              ]}
-            />
-            <Input.Search
-              allowClear
+              value={filters.status || ''}
+              onChange={e => applyFilter({ status: e.target.value as LogFilters['status'] })}
+            >
+              <option value="">全部状态</option>
+              <option value="ok">成功</option>
+              <option value="error">失败</option>
+              <option value="canceled">中断 (499)</option>
+            </Select>
+            {/* 关键字在回车 / 点「搜索」时提交,不逐键触发 */}
+            <Input
               placeholder="搜索模型 / 渠道 / 令牌 / IP / 错误"
               style={{ width: 260 }}
               value={kwInput}
               onChange={e => {
                 const val = e.target.value;
                 setKwInput(val);
-                // 点清除按钮时同步清掉已生效的关键词筛选
+                // 清空输入时同步清掉已生效的关键词筛选
                 if (!val && filters.kw) applyFilter({ kw: '' });
               }}
-              onSearch={v => applyFilter({ kw: v.trim() })}
+              onKeyDown={e => { if (e.key === 'Enter') applyFilter({ kw: kwInput.trim() }); }}
             />
-            <Button onClick={reset} disabled={!hasFilter && !kwInput}>重置</Button>
+            <Btn onClick={() => applyFilter({ kw: kwInput.trim() })}>搜索</Btn>
+            <Btn onClick={reset} disabled={!hasFilter && !kwInput}>重置</Btn>
             <span className="count">
               {hasFilter ? (
                 <>筛选出 <b>{fmt.n(total)}</b> 条日志</>
@@ -171,52 +153,75 @@ export default function Logs() {
             </span>
           </div>
 
-          <Table<RequestLogItem>
-            rowKey="id"
-            size="middle"
-            loading={(isLoading || isFetching) && logs.length === 0}
-            dataSource={logs}
-            columns={columns}
-            locale={{
-              emptyText: isError ? (
-                <ErrorState
-                  title="日志加载失败"
-                  desc={errorText}
-                  onRetry={() => void refetch()}
-                />
-              ) : hasFilter ? (
-                <NoResultState
-                  title="没有符合筛选条件的日志"
-                  desc="当前模型 / 渠道 / 状态 / 关键字组合没有命中任何请求。"
-                  action={<Button size="small" onClick={reset}>清除筛选</Button>}
-                />
-              ) : (
-                <EmptyState
-                  title="还没有请求日志"
-                  desc="网关转发过请求后，这里会逐条列出耗时、Token 与花费。"
-                />
-              ),
-            }}
-            onRow={r => ({
-              onClick: () => setDetail(r),
-              onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail(r); } },
-              tabIndex: 0,
-              style: { cursor: 'pointer' },
-            })}
-            pagination={{
-              current: page,
-              pageSize: size,
-              total,
-              showSizeChanger: true,
-              pageSizeOptions: PAGE_SIZES.map(String),
-              showTotal: t => `共 ${fmt.n(t)} 条`,
-              onChange: (p, ps) => {
+          <div className="table-wrap" style={{ padding: '8px 6px 0' }}>
+            <table className="tb" style={{ tableLayout: 'fixed' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: 138 }}>时间</th>
+                  <th style={{ width: 92 }}>状态</th>
+                  <th>模型</th>
+                  <th style={{ width: 98 }}>渠道</th>
+                  <th style={{ width: 92 }}>令牌</th>
+                  <th className="right" style={{ width: 78 }}>输入</th>
+                  <th className="right" style={{ width: 78 }}>输出</th>
+                  <th className="right" style={{ width: 70 }}>缓存读</th>
+                  <th className="right" style={{ width: 70 }}>缓存写</th>
+                  <th className="right" style={{ width: 70 }}>首字</th>
+                  <th className="right" style={{ width: 82 }}>总耗时</th>
+                  <th className="right" style={{ width: 86 }}>花费</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={12} style={{ textAlign: 'center', color: 'var(--t3)', padding: 24 }}>读取中…</td></tr>
+                ) : logs.length === 0 ? (
+                  <tr><td colSpan={12}>{emptyNode}</td></tr>
+                ) : (
+                  logs.map(r => (
+                    <tr
+                      key={r.id}
+                      className="clickable"
+                      tabIndex={0}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setDetail(r)}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetail(r); } }}
+                    >
+                      <td className="mono">{r.ts}</td>
+                      <td>{statusCell(r.statusCode, r)}</td>
+                      <td className="mono" title={r.model} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.model}</td>
+                      <td title={r.channelName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.channelName || <span style={{ color: 'var(--t3)' }}>—</span>}
+                      </td>
+                      <td title={r.tokenName} style={{ color: 'var(--t3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.tokenName || '—'}</td>
+                      <td className="right num">{fmt.k(r.inTokens)}</td>
+                      <td className="right num">{fmt.k(r.outTokens)}</td>
+                      <td className="right num">{r.cacheReadTokens ? fmt.k(r.cacheReadTokens) : <span style={{ color: 'var(--t3)' }}>—</span>}</td>
+                      <td className="right num">{r.cacheWriteTokens ? fmt.k(r.cacheWriteTokens) : <span style={{ color: 'var(--t3)' }}>—</span>}</td>
+                      <td className="right num">{r.firstTokenMs ? fmt.ms(r.firstTokenMs) : '—'}</td>
+                      <td className="right num">{fmt.ms(r.totalMs)}</td>
+                      <td className="right num">{r.costUsd ? fmt.usd(r.costUsd) : '—'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, padding: '4px 14px 10px' }}>
+            <Select
+              style={{ width: 108 }}
+              value={size}
+              onChange={e => {
+                const ps = Number(e.target.value);
                 // 切换 pageSize 时回到第 1 页,避免超出新分页范围
-                setPage(ps !== size ? 1 : p);
+                setPage(ps !== size ? 1 : page);
                 setSize(ps);
-              },
-            }}
-          />
+              }}
+            >
+              {PAGE_SIZES.map(s => <option key={s} value={s}>{s} 条/页</option>)}
+            </Select>
+            <Pager page={page} size={size} total={total} onPage={setPage} />
+          </div>
         </BlockCard>
       </Blocks>
 

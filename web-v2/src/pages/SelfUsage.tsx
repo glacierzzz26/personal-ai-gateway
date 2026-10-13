@@ -1,17 +1,12 @@
 import { useMemo, useState } from 'react';
-import { Card, Col, Row, Segmented, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import Chart from '@/components/Chart';
 import RangePicker, { defaultRange, rangeLabel, toQuery } from '@/components/RangePicker';
-import { Block as BlockCard, Blocks, BlockHead, MetricBlock } from '@/components/Block';
-import PageHeader from '@/components/PageHeader';
-import { EmptyState, ErrorState } from '@/components/States';
+import { Card, Kpi, Empty, SkLines, Btn, PageHead, Seg } from '@/ui/primitives';
 import { useChartColors } from '@/hooks/useChartColors';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { fmt } from '@/utils/format';
-import type { EChartsOption } from 'echarts';
 import type { UsageRow } from '@/types';
 
 /**
@@ -26,6 +21,9 @@ import type { UsageRow } from '@/types';
 
 /** "2026-09-03" → "09-03";小时桶 "2026-09-03 20" → "20:00" */
 const dayLabel = (ts: string) => (ts.length > 10 ? `${ts.slice(11)}:00` : ts.slice(5));
+
+const chartAxis = (v: number) =>
+  v >= 1000 ? `${(v / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(Math.round(v));
 
 export default function SelfUsage() {
   const me = useSession(s => s.admin);
@@ -56,122 +54,130 @@ export default function SelfUsage() {
     return { requests, inTokens, outTokens, cost };
   }, [rows]);
 
-  const barOption: EChartsOption = {
-    grid: { left: 44, right: 44, top: 34, bottom: 26 },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder,
-      textStyle: { color: c.text, fontSize: 12 },
-    },
-    legend: {
-      data: ['请求数', '花费'], right: 0, top: 0,
-      itemWidth: 8, itemHeight: 8, textStyle: { color: c.text, fontSize: 12 },
-    },
-    xAxis: {
-      type: 'category', data: series.map(d => dayLabel(d.ts)),
-      axisLine: { lineStyle: { color: c.line } }, axisTick: { show: false },
-      axisLabel: { color: c.text, fontSize: 11, interval: 'auto', rotate: 0, hideOverlap: true },
-    },
-    yAxis: [
-      { type: 'value', splitLine: { lineStyle: { color: c.line } }, axisLabel: { color: c.text, fontSize: 11 } },
-      { type: 'value', splitLine: { show: false }, axisLabel: { color: c.text, fontSize: 11 } },
-    ],
+  const chartData = {
+    labels: series.map(d => dayLabel(d.ts)),
     series: [
-      { name: '请求数', type: 'bar', data: series.map(d => d.requests), itemStyle: { color: c.primary, borderRadius: 3 }, barWidth: '45%' },
-      {
-        name: '花费', type: 'line', yAxisIndex: 1, data: series.map(d => Number((d.costUsd ?? 0).toFixed(4))),
-        showSymbol: false, lineStyle: { width: 1.8, color: c.warn }, itemStyle: { color: c.warn },
-      },
+      { name: '请求数', data: series.map(d => d.requests), color: c.primary, fill: false },
+      { name: '花费', data: series.map(d => Number((d.costUsd ?? 0).toFixed(4))), color: c.warn, fill: true },
     ],
+    yFmt: chartAxis,
+    tipFmt: (v: number) => fmt.usd(v),
   };
-
-  const usageColumns: ColumnsType<UsageRow> = [
-    { title: dim === 'model' ? '模型' : '令牌', dataIndex: 'name', render: v => <span className="gw-mono">{v}</span> },
-    { title: '请求数', dataIndex: 'requests', align: 'right', render: v => <span className="gw-num">{fmt.n(v)}</span> },
-    { title: '输入 Token', dataIndex: 'inTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '输出 Token', dataIndex: 'outTokens', align: 'right', render: v => <span className="gw-num">{fmt.k(v)}</span> },
-    { title: '花费', dataIndex: 'costUsd', align: 'right', render: v => <span className="gw-num">{fmt.usd(v ?? 0)}</span> },
-  ];
 
   return (
     <div className="gw-page">
-      <PageHeader
+      <PageHead
         title="自用统计"
-        desc={`${me?.username ?? ''} 自己名下流量的用量与花费（成本口径 · 含站主自用，不含客户）`}
-        extra={<RangePicker value={range} onChange={setRange} />}
+        sub={`${me?.username ?? ''} 自己名下流量的用量与花费（成本口径 · 含站主自用，不含客户）`}
+        actions={<RangePicker value={range} onChange={setRange} />}
       />
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={12} xl={6}>
-          <MetricBlock label={`${rl}请求`} value={fmt.n(totals.requests)} note="仅统计你自己名下令牌" />
-        </Col>
-        <Col xs={24} sm={12} xl={6}>
-          <MetricBlock
+      {/* 指标条 */}
+      <div className="grid g-12" style={{ gap: 10 }}>
+        <div className="c3">
+          <Kpi
+            label={`${rl}请求`}
+            value={fmt.n(totals.requests)}
+            foot={<span className="cell-sub" style={{ whiteSpace: 'normal' }}>仅统计你自己名下令牌</span>}
+          />
+        </div>
+        <div className="c3">
+          <Kpi
             label={`${rl}Token`}
             value={fmt.k(totals.inTokens + totals.outTokens)}
-            note={`入 ${fmt.k(totals.inTokens)} / 出 ${fmt.k(totals.outTokens)}`}
+            foot={<span className="cell-sub" style={{ whiteSpace: 'normal' }}>{`入 ${fmt.k(totals.inTokens)} / 出 ${fmt.k(totals.outTokens)}`}</span>}
           />
-        </Col>
-        <Col xs={24} sm={12} xl={6}>
-          <MetricBlock label={`${rl}花费`} value={fmt.usd(totals.cost)} note="你付上游的成本（非客户营收）" />
-        </Col>
-        <Col xs={24} sm={12} xl={6}>
-          <MetricBlock
+        </div>
+        <div className="c3">
+          <Kpi
+            label={`${rl}花费`}
+            value={fmt.usd(totals.cost)}
+            foot={<span className="cell-sub" style={{ whiteSpace: 'normal' }}>你付上游的成本（非客户营收）</span>}
+          />
+        </div>
+        <div className="c3">
+          <Kpi
             label="平均单请求"
             value={totals.requests ? fmt.usd(totals.cost / totals.requests) : '—'}
-            note="花费 ÷ 请求数"
-          />
-        </Col>
-      </Row>
-
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>用量拆解</div>
-          <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 4 }}>
-            按 {dim === 'model' ? '模型' : '令牌'} × {rl} 聚合请求与花费
-          </div>
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <Segmented
-            value={dim} onChange={v => setDim(v as 'model' | 'token')}
-            options={[{ value: 'model', label: '按模型' }, { value: 'token', label: '按令牌' }]}
+            foot={<span className="cell-sub" style={{ whiteSpace: 'normal' }}>花费 ÷ 请求数</span>}
           />
         </div>
       </div>
 
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={24}>
-          <Card title={`每日请求与花费(${rl})`}>
-            {usageQ.isError ? (
-              <ErrorState title="用量加载失败" desc="无法读取用量数据，请稍后重试。" onRetry={() => void usageQ.refetch()} />
-            ) : (
-              <Chart option={barOption} height={280} />
-            )}
-          </Card>
-        </Col>
-      </Row>
-
-      <Blocks>
-        <BlockCard>
-          <BlockHead title="用量明细" sub={`按${dim === 'model' ? '模型' : '令牌'}聚合`} />
-          <Table<UsageRow>
-            rowKey="name"
-            size="middle"
-            loading={usageQ.isFetching && rows.length === 0}
-            dataSource={rows}
-            columns={usageColumns}
-            pagination={false}
-            locale={{
-              emptyText: (
-                <EmptyState
-                  title="所选范围内暂无自用流量"
-                  desc="你自己名下的令牌发起调用后，这里会按模型 / 令牌汇总请求与花费（成本）。"
-                />
-              ),
-            }}
+      {/* 用量拆解标题 + 维度切换 */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, margin: '20px 0 16px', flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--t1)' }}>用量拆解</div>
+          <div className="cell-sub" style={{ marginTop: 4 }}>
+            按 {dim === 'model' ? '模型' : '令牌'} × {rl} 聚合请求与花费
+          </div>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <Seg
+            value={dim}
+            onChange={v => setDim(v as 'model' | 'token')}
+            options={[
+              { v: 'model', label: '按模型' },
+              { v: 'token', label: '按令牌' },
+            ]}
           />
-        </BlockCard>
-      </Blocks>
+        </div>
+      </div>
+
+      {/* 每日请求与花费曲线（成本口径） */}
+      <Card icon="activity" title={`每日请求与花费(${rl})`}>
+        {usageQ.isError ? (
+          <Empty icon="warn" title="用量加载失败">
+            无法读取用量数据，请稍后重试。
+            <Btn size="sm" style={{ marginTop: 12 }} onClick={() => void usageQ.refetch()}>重试</Btn>
+          </Empty>
+        ) : usageQ.isLoading && series.length === 0 ? (
+          <SkLines rows={['w80', 'w60', 'w80', 'w40']} />
+        ) : (
+          <Chart labels={chartData.labels} series={chartData.series} h={280} yFmt={chartData.yFmt} tipFmt={chartData.tipFmt} />
+        )}
+      </Card>
+
+      {/* 用量明细表 */}
+      <div style={{ marginTop: 12 }}>
+        <Card icon="table2" title="用量明细" note={`按${dim === 'model' ? '模型' : '令牌'}聚合`}>
+          {usageQ.isError ? (
+            <Empty icon="warn" title="用量加载失败">
+              无法读取用量数据，请稍后重试。
+              <Btn size="sm" style={{ marginTop: 12 }} onClick={() => void usageQ.refetch()}>重试</Btn>
+            </Empty>
+          ) : rows.length === 0 ? (
+            <Empty icon="box" title="所选范围内暂无自用流量">
+              你自己名下的令牌发起调用后，这里会按模型 / 令牌汇总请求与花费（成本）。
+            </Empty>
+          ) : (
+            <div className="table-wrap">
+              <table className="tb">
+                <thead>
+                  <tr>
+                    <th>{dim === 'model' ? '模型' : '令牌'}</th>
+                    <th className="right">请求数</th>
+                    <th className="right">输入 Token</th>
+                    <th className="right">输出 Token</th>
+                    <th className="right">花费</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r: UsageRow) => (
+                    <tr key={r.name}>
+                      <td className="strong mono">{r.name}</td>
+                      <td className="right mono">{fmt.n(r.requests)}</td>
+                      <td className="right mono">{fmt.k(r.inTokens)}</td>
+                      <td className="right mono">{fmt.k(r.outTokens)}</td>
+                      <td className="right mono">{fmt.usd(r.costUsd ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }
