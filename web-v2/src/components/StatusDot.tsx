@@ -1,5 +1,6 @@
+import clsx from 'clsx';
 import type { Tone } from '@/utils/format';
-import { STATUS, TONE_COLOR } from '@/utils/format';
+import { STATUS } from '@/utils/format';
 
 interface Props {
   status: string;
@@ -10,6 +11,8 @@ interface Props {
   children?: React.ReactNode;
 }
 
+const TONE_DOT: Record<Tone, string> = { ok: 'g', warn: 'a', err: 'r', aux: 's' };
+
 /**
  * 状态一律用「圆点 + 文字」，禁止彩色胶囊块。
  * 颜色只是辅助 —— 文字必须能独立表达状态（色盲/高对比场景）。
@@ -18,9 +21,9 @@ export default function StatusDot({ status, text, tone, children }: Props) {
   const s = STATUS[status];
   const t = tone ?? s?.tone ?? 'aux';
   return (
-    <span className="gw-st" style={{ fontSize: 13 }}>
-      <i className={`gw-dot ${t}`} style={{ background: TONE_COLOR[t] }} />
-      {text ?? s?.t ?? status}
+    <span className="hstack">
+      <span className={clsx('dot', TONE_DOT[t])} />
+      <span className="small">{text ?? s?.t ?? status}</span>
       {children}
     </span>
   );

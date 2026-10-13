@@ -1,12 +1,15 @@
 import { useState } from 'react';
-import { App, Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
 import { EmptyState, ErrorState } from '@/components/States';
+import { Badge, Button, Field, HStack, Input, Select, SkLines, Table } from '@/ui/primitives';
+import type { Column } from '@/ui/primitives';
+import { Icon } from '@/ui/icons';
+import { Dropdown, confirm } from '@/ui/overlay';
+import type { MenuItem } from '@/ui/overlay';
+import { message } from '@/ui/toast';
 import { api } from '@/services/api';
 import { useSession } from '@/stores/session';
 import { fmt } from '@/utils/format';
@@ -16,11 +19,42 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重�
 
 /** 角色徽章：文字 + 语义色，不靠颜色单独表意。 */
 function RoleBadge({ role }: { role: Role }) {
-  const admin = role === 'admin';
+  return role === 'admin' ? <Badge tone="brand">管理员</Badge> : <Badge tone="slate">普通用户</Badge>;
+}
+
+/** 弹窗外壳：自绘 `.overlay` + `.modal`，含标题栏与底部操作。 */
+function ModalShell({
+  title,
+  onClose,
+  foot,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  foot: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <span className={`gw-badge${admin ? ' tint' : ''}`} style={{ fontSize: 13 }}>
-      {admin ? '管理员' : '普通用户'}
-    </span>
+    <div
+      className="overlay"
+      style={{ zIndex: 70 }}
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal" style={{ maxWidth: 440 }}>
+        <div className="modal-head">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h3>{title}</h3>
+          </div>
+          <button className="icon-btn" onClick={onClose} aria-label="关闭">
+            <Icon name="x" size={13} />
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+        <div className="modal-foot">{foot}</div>
+      </div>
+    </div>
   );
 }
 
@@ -31,52 +65,84 @@ function CreateUserModal(props: {
   onSubmit: (v: { username: string; password: string; role: Role }) => Promise<void>;
 }) {
   const { open, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ username: string; password: string; role: Role }>();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<Role>('user');
+  const [errors, setErrors] = useState<{ username?: string; password?: string }>({});
   const [saving, setSaving] = useState(false);
 
+  if (!open) return null;
+
   const submit = async () => {
-    const v = await form.validateFields();
+    const e: typeof errors = {};
+    if (!username.trim()) e.username = '请输入用户名';
+    if (!password) e.password = '请输入初始密码';
+    else if (password.length < 8) e.password = '至少 8 位';
+    setErrors(e);
+    if (e.username || e.password) return;
+
     setSaving(true);
     try {
-      await onSubmit({ username: v.username.trim(), password: v.password, role: v.role });
-      form.resetFields();
-    } catch (e) {
-      message.error(`创建失败:${errMsg(e)}`);
+      await onSubmit({ username: username.trim(), password, role });
+      setUsername('');
+      setPassword('');
+      setRole('user');
+      setErrors({});
+    } catch (ex) {
+      message.error(`创建失败:${errMsg(ex)}`);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal
+    <ModalShell
       title="新建用户"
-      open={open}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="创建"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+      onClose={onCancel}
+      foot={
+        <>
+          <Button variant="secondary" onClick={onCancel}>取消</Button>
+          <Button variant="primary" loading={saving} onClick={() => void submit()}>创建</Button>
+        </>
+      }
     >
-      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ role: 'user' }}>
-        <Form.Item name="username" label="用户名" rules={[{ required: true, whitespace: true, message: '请输入用户名' }]}>
-          <Input placeholder="例如:alice" maxLength={64} />
-        </Form.Item>
-        <Form.Item name="password" label="初始密码" rules={[{ required: true, min: 8, message: '至少 8 位' }]}>
-          <Input.Password placeholder="至少 8 位,告知用户后由其自行修改" autoComplete="new-password" />
-        </Form.Item>
-        <Form.Item name="role" label="角色">
+      <div className="stack">
+        <Field label="用户名" error={errors.username}>
+          <Input
+            value={username}
+            invalid={!!errors.username}
+            maxLength={64}
+            placeholder="例如:alice"
+            onChange={e => {
+              setUsername(e.target.value);
+              if (errors.username) setErrors(s => ({ ...s, username: undefined }));
+            }}
+          />
+        </Field>
+        <Field label="初始密码" error={errors.password} hint={errors.password ? undefined : '至少 8 位,告知用户后由其自行修改'}>
+          <Input
+            type="password"
+            value={password}
+            invalid={!!errors.password}
+            autoComplete="new-password"
+            onChange={e => {
+              setPassword(e.target.value);
+              if (errors.password) setErrors(s => ({ ...s, password: undefined }));
+            }}
+          />
+        </Field>
+        <Field label="角色">
           <Select
+            value={role}
+            onChange={e => setRole(e.target.value as Role)}
             options={[
               { value: 'user', label: '普通用户(仅能管理自己的访问令牌)' },
               { value: 'admin', label: '管理员(全部权限)' },
             ]}
           />
-        </Form.Item>
-      </Form>
-    </Modal>
+        </Field>
+      </div>
+    </ModalShell>
   );
 }
 
@@ -87,17 +153,19 @@ function ResetPasswordModal(props: {
   onSubmit: (id: number, newPassword: string) => Promise<void>;
 }) {
   const { user, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ newPassword: string }>();
+  const [pw, setPw] = useState('');
+  const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
 
+  if (!user) return null;
+
   const submit = async () => {
-    const v = await form.validateFields();
-    if (!user) return;
+    if (!pw) return setError('请输入新密码');
+    if (pw.length < 8) return setError('至少 8 位');
     setSaving(true);
     try {
-      await onSubmit(user.id, v.newPassword);
-      form.resetFields();
+      await onSubmit(user.id, pw);
+      setPw('');
     } catch (e) {
       message.error(`重置失败:${errMsg(e)}`);
     } finally {
@@ -106,23 +174,29 @@ function ResetPasswordModal(props: {
   };
 
   return (
-    <Modal
-      title={user ? `重置「${user.username}」的密码` : '重置密码'}
-      open={!!user}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="重置"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+    <ModalShell
+      title={`重置「${user.username}」的密码`}
+      onClose={onCancel}
+      foot={
+        <>
+          <Button variant="secondary" onClick={onCancel}>取消</Button>
+          <Button variant="primary" loading={saving} onClick={() => void submit()}>重置</Button>
+        </>
+      }
     >
-      <Form form={form} layout="vertical" requiredMark={false} preserve={false}>
-        <Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 8, message: '至少 8 位' }]}>
-          <Input.Password autoComplete="new-password" />
-        </Form.Item>
-      </Form>
-    </Modal>
+      <Field label="新密码" error={error} hint={error ? undefined : '至少 8 位'}>
+        <Input
+          type="password"
+          value={pw}
+          invalid={!!error}
+          autoComplete="new-password"
+          onChange={e => {
+            setPw(e.target.value);
+            if (error) setError(undefined);
+          }}
+        />
+      </Field>
+    </ModalShell>
   );
 }
 
@@ -133,17 +207,21 @@ function TopupModal(props: {
   onSubmit: (id: number, amount: number, note?: string) => Promise<void>;
 }) {
   const { user, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ amount: number; note?: string }>();
+  const [amount, setAmount] = useState('100');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
 
+  if (!user) return null;
+
   const submit = async () => {
-    const v = await form.validateFields();
-    if (!user) return;
+    const v = Number(amount);
+    if (amount.trim() === '' || !Number.isFinite(v)) return setError('请输入金额');
     setSaving(true);
     try {
-      await onSubmit(user.id, v.amount, v.note?.trim() || undefined);
-      form.resetFields();
+      await onSubmit(user.id, v, note.trim() || undefined);
+      setAmount('100');
+      setNote('');
     } catch (e) {
       message.error(`充值失败:${errMsg(e)}`);
     } finally {
@@ -152,34 +230,38 @@ function TopupModal(props: {
   };
 
   return (
-    <Modal
-      title={user ? `调整「${user.username}」的余额` : '调整余额'}
-      open={!!user}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="提交"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+    <ModalShell
+      title={`调整「${user.username}」的余额`}
+      onClose={onCancel}
+      foot={
+        <>
+          <Button variant="secondary" onClick={onCancel}>取消</Button>
+          <Button variant="primary" loading={saving} onClick={() => void submit()}>提交</Button>
+        </>
+      }
     >
-      <Form form={form} layout="vertical" requiredMark={false} preserve={false} initialValues={{ amount: 100 }}>
-        {user && (
-          <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
-            当前余额:<b className="gw-num" style={{ color: 'var(--gw-text)' }}>{fmt.usd(user.balanceUsd)}</b>
-          </div>
-        )}
-        <Form.Item
-          name="amount" label="金额(正=充值,负=扣减)"
-          rules={[{ required: true, message: '请输入金额' }]}
-        >
-          <InputNumber style={{ width: '100%' }} precision={2} step={100} placeholder="例如 100 或 -50" />
-        </Form.Item>
-        <Form.Item name="note" label="备注(可选)">
-          <Input placeholder="例如:微信转账 / 试用额度" maxLength={120} />
-        </Form.Item>
-      </Form>
-    </Modal>
+      <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--t3)' }}>
+        当前余额:<b className="num" style={{ color: 'var(--t1)' }}>{fmt.usd(user.balanceUsd)}</b>
+      </div>
+      <div className="stack">
+        <Field label="金额(正=充值,负=扣减)" error={error}>
+          <Input
+            type="number"
+            step={100}
+            value={amount}
+            invalid={!!error}
+            placeholder="例如 100 或 -50"
+            onChange={e => {
+              setAmount(e.target.value);
+              if (error) setError(undefined);
+            }}
+          />
+        </Field>
+        <Field label="备注(可选)">
+          <Input value={note} maxLength={120} placeholder="例如:微信转账 / 试用额度" onChange={e => setNote(e.target.value)} />
+        </Field>
+      </div>
+    </ModalShell>
   );
 }
 
@@ -190,17 +272,20 @@ function CeilingModal(props: {
   onSubmit: (id: number, quotaUsd: number, rpmLimit: number) => Promise<void>;
 }) {
   const { user, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<{ quotaUsd: number; rpmLimit: number }>();
+  const [quotaUsd, setQuotaUsd] = useState('0');
+  const [rpmLimit, setRpmLimit] = useState('0');
   const [saving, setSaving] = useState(false);
 
+  if (!user) return null;
+
   const submit = async () => {
-    const v = await form.validateFields();
-    if (!user) return;
+    const q = Number(quotaUsd);
+    const r = Number(rpmLimit);
     setSaving(true);
     try {
-      await onSubmit(user.id, v.quotaUsd ?? 0, v.rpmLimit ?? 0);
-      form.resetFields();
+      await onSubmit(user.id, Number.isFinite(q) ? q : 0, Number.isFinite(r) ? r : 0);
+      setQuotaUsd('0');
+      setRpmLimit('0');
     } catch (e) {
       message.error(`保存失败:${errMsg(e)}`);
     } finally {
@@ -209,50 +294,38 @@ function CeilingModal(props: {
   };
 
   return (
-    <Modal
-      title={user ? `设置「${user.username}」的令牌上限` : '令牌上限'}
-      open={!!user}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText="保存"
-      cancelText="取消"
-      destroyOnHidden
-      width={440}
+    <ModalShell
+      title={`设置「${user.username}」的令牌上限`}
+      onClose={onCancel}
+      foot={
+        <>
+          <Button variant="secondary" onClick={onCancel}>取消</Button>
+          <Button variant="primary" loading={saving} onClick={() => void submit()}>保存</Button>
+        </>
+      }
     >
-      <Form
-        form={form}
-        layout="vertical"
-        requiredMark={false}
-        preserve={false}
-        initialValues={{ quotaUsd: 0, rpmLimit: 0 }}
-      >
-        <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--gw-text-3)' }}>
-          该客户自助创建的令牌不得超过此上限(0 = 不限)。真正常住闸门是余额,这里是令牌子预算的天花板。
-        </div>
-        <Form.Item
-          name="quotaUsd" label="令牌额度上限"
-          extra="单位同计价币种;0 = 不限"
-        >
-          <InputNumber min={0} precision={2} step={10} style={{ width: '100%' }} placeholder="0 = 不限" />
-        </Form.Item>
-        <Form.Item name="rpmLimit" label="令牌 RPM 上限" extra="0 = 不限">
-          <InputNumber min={0} max={100000} style={{ width: '100%' }} placeholder="0 = 不限" />
-        </Form.Item>
-      </Form>
-    </Modal>
+      <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--t3)' }}>
+        该客户自助创建的令牌不得超过此上限(0 = 不限)。真正常住闸门是余额,这里是令牌子预算的天花板。
+      </div>
+      <div className="stack">
+        <Field label="令牌额度上限" hint="单位同计价币种;0 = 不限">
+          <Input type="number" min={0} step={10} value={quotaUsd} placeholder="0 = 不限" onChange={e => setQuotaUsd(e.target.value)} />
+        </Field>
+        <Field label="令牌 RPM 上限" hint="0 = 不限">
+          <Input type="number" min={0} max={100000} value={rpmLimit} placeholder="0 = 不限" onChange={e => setRpmLimit(e.target.value)} />
+        </Field>
+      </div>
+    </ModalShell>
   );
 }
 
 export default function Users() {
-  const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const me = useSession(s => s.admin);
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserAccount | null>(null);
   const [topupUser, setTopupUser] = useState<UserAccount | null>(null);
   const [ceilingUser, setCeilingUser] = useState<UserAccount | null>(null);
-
   const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: ['users'], queryFn: api.getUsers });
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] });
 
@@ -291,101 +364,100 @@ export default function Users() {
     onError: e => message.error(`删除失败:${errMsg(e)}`),
   });
 
-  const confirmDelete = (u: UserAccount) => {
-    modal.confirm({
+  const confirmDelete = async (u: UserAccount) => {
+    const ok = await confirm({
       title: `删除用户「${u.username}」?`,
       content: `该用户名下 ${u.keyCount} 个访问令牌将一并删除且立即失效;历史日志中的令牌名称保留。`,
       okText: '删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: () => remove.mutateAsync(u.id),
+      danger: true,
     });
+    if (ok) remove.mutate(u.id);
   };
 
-  const columns: ColumnsType<UserAccount> = [
-    { title: '用户名', dataIndex: 'username', render: v => <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b> },
-    { title: '角色', dataIndex: 'role', width: 96, render: v => <RoleBadge role={v} /> },
+  const columns: Column<UserAccount>[] = [
+    { key: 'username', title: '用户名', render: r => <span className="strong">{r.username}</span> },
+    { key: 'role', title: '角色', width: 96, render: r => <RoleBadge role={r.role} /> },
     {
-      title: '余额', dataIndex: 'balanceUsd', width: 116, align: 'right',
-      render: (v: number, r) =>
+      key: 'balanceUsd',
+      title: '余额',
+      width: 116,
+      align: 'right',
+      render: r =>
         r.role !== 'user' ? (
-          <span style={{ color: 'var(--gw-text-3)' }}>—</span>
+          <span className="muted">—</span>
         ) : (
-          <span className="gw-num" style={{ color: v <= 0 ? 'var(--gw-err)' : undefined }}>{fmt.usd(v)}</span>
+          <span className="num" style={{ color: r.balanceUsd <= 0 ? 'var(--err)' : undefined }}>{fmt.usd(r.balanceUsd)}</span>
         ),
     },
     {
-      title: '令牌上限', key: 'ceiling', width: 110, align: 'right',
-      render: (_, r) => {
-        if (r.role !== 'user') return <span style={{ color: 'var(--gw-text-3)' }}>—</span>;
+      key: 'ceiling',
+      title: '令牌上限',
+      width: 110,
+      align: 'right',
+      render: r => {
+        if (r.role !== 'user') return <span className="muted">—</span>;
         if (r.tokenQuotaCeiling <= 0 && r.tokenRpmCeiling <= 0) {
-          return <span style={{ color: 'var(--gw-text-3)' }}>不限</span>;
+          return <span className="muted">不限</span>;
         }
         return (
-          <Tooltip title={`RPM 上限 ${r.tokenRpmCeiling > 0 ? r.tokenRpmCeiling : '不限'}`}>
-            <span className="gw-num">
-              {r.tokenQuotaCeiling > 0 ? fmt.usd(r.tokenQuotaCeiling) : 'RPM 限'}
-            </span>
-          </Tooltip>
+          <span className="num" title={`RPM 上限 ${r.tokenRpmCeiling > 0 ? r.tokenRpmCeiling : '不限'}`}>
+            {r.tokenQuotaCeiling > 0 ? fmt.usd(r.tokenQuotaCeiling) : 'RPM 限'}
+          </span>
         );
       },
     },
-    { title: 'Key 数量', dataIndex: 'keyCount', width: 90, align: 'right', render: v => <span className="gw-num">{v}</span> },
+    { key: 'keyCount', title: 'Key 数量', width: 90, align: 'right', render: r => <span className="num">{r.keyCount}</span> },
     {
-      title: '创建时间', dataIndex: 'createdAt', width: 150,
-      render: v => {
-        const d = dayjs(v);
-        return <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : v}</span>;
+      key: 'createdAt',
+      title: '创建时间',
+      width: 150,
+      render: r => {
+        const d = dayjs(r.createdAt);
+        return <span className="num muted">{d.isValid() ? d.format('YYYY-MM-DD HH:mm') : r.createdAt}</span>;
       },
     },
     {
-      // 高频（充值/倍率）外露，低频（令牌上限/重置密码/删除）收进「更多」
-      title: '操作', align: 'right', width: 160,
-      render: (_, r) => {
+      // 高频（充值）外露，低频（令牌上限/重置密码/删除）收进「更多」
+      key: 'actions',
+      title: '操作',
+      align: 'right',
+      width: 160,
+      render: r => {
         const isSelf = r.id === me?.id;
         const isLastAdmin = r.role === 'admin' && adminCount <= 1;
         const isUser = r.role === 'user';
+        const items: MenuItem[] = [
+          ...(isUser ? [{ label: '令牌上限', icon: 'sliders' as const, onClick: () => setCeilingUser(r) }] : []),
+          ...(!isSelf ? [{ label: '重置密码', icon: 'key' as const, onClick: () => setResetting(r) }] : []),
+          ...(!isSelf && !isLastAdmin ? [{ sep: true as const }, { label: '删除', icon: 'x' as const, danger: true, onClick: () => void confirmDelete(r) }] : []),
+        ];
         return (
-          <Space size={4}>
-            <Button size="small" disabled={!isUser} title={isUser ? undefined : '管理员无钱包'}
-              onClick={() => setTopupUser(r)}>
+          <HStack gap={4} style={{ justifyContent: 'flex-end' }}>
+            <Button
+              size="sm"
+              disabled={!isUser}
+              title={isUser ? undefined : '管理员无钱包'}
+              onClick={() => setTopupUser(r)}
+            >
               充值
             </Button>
             <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  { key: 'ceiling', label: '令牌上限', disabled: !isUser },
-                  { key: 'password', label: '重置密码', disabled: isSelf },
-                  { type: 'divider' as const },
-                  { key: 'delete', label: '删除', danger: true, disabled: isSelf || isLastAdmin },
-                ],
-                onClick: ({ key, domEvent }) => {
-                  domEvent.stopPropagation();
-                  if (key === 'ceiling') setCeilingUser(r);
-                  else if (key === 'password') setResetting(r);
-                  else if (key === 'delete') confirmDelete(r);
-                },
-              }}
-            >
-              <Button
-                type="text" size="small" icon={<MoreOutlined />}
-                aria-label={`更多操作 ${r.username}`}
-                title={isLastAdmin ? '最后一个管理员不可删除' : undefined}
-              />
-            </Dropdown>
-          </Space>
+              ariaLabel={`更多操作 ${r.username}`}
+              title={isLastAdmin ? '最后一个管理员不可删除' : undefined}
+              items={items}
+            />
+          </HStack>
         );
       },
     },
   ];
 
   return (
-    <div className="gw-page">
+    <>
       <PageHeader
         title="用户管理"
         desc="账号与角色；普通用户只能管理自己的访问令牌"
-        extra={<Button type="primary" onClick={() => setCreating(true)}>新建用户</Button>}
+        extra={<Button variant="primary" onClick={() => setCreating(true)}>新建用户</Button>}
       />
 
       <Blocks>
@@ -398,25 +470,18 @@ export default function Users() {
                 onRetry={() => void refetch()}
               />
             </div>
-          ) : (
-            <Table<UserAccount>
-              rowKey="id"
-              size="middle"
-              loading={isLoading && users.length === 0}
-              dataSource={users}
-              columns={columns}
-              pagination={false}
-              tableLayout="fixed"
-              locale={{
-                emptyText: (
-                  <EmptyState
-                    title="还没有其他账号"
-                    desc="这里只有你自己。新建普通用户后，他们各自管理自己的访问令牌。"
-                    action={<Button size="small" type="primary" onClick={() => setCreating(true)}>新建用户</Button>}
-                  />
-                ),
-              }}
+          ) : isLoading && users.length === 0 ? (
+            <div style={{ padding: 14 }}>
+              <SkLines rows={['', 'w80', 'w60', 'w80']} />
+            </div>
+          ) : users.length === 0 ? (
+            <EmptyState
+              title="还没有其他账号"
+              desc="这里只有你自己。新建普通用户后，他们各自管理自己的访问令牌。"
+              action={<Button size="sm" variant="primary" onClick={() => setCreating(true)}>新建用户</Button>}
             />
+          ) : (
+            <Table<UserAccount> columns={columns} rows={users} rowKey={r => r.id} />
           )}
         </BlockCard>
       </Blocks>
@@ -425,6 +490,6 @@ export default function Users() {
       <ResetPasswordModal user={resetting} onCancel={() => setResetting(null)} onSubmit={resetPw} />
       <TopupModal user={topupUser} onCancel={() => setTopupUser(null)} onSubmit={topup} />
       <CeilingModal user={ceilingUser} onCancel={() => setCeilingUser(null)} onSubmit={saveCeiling} />
-    </div>
+    </>
   );
 }

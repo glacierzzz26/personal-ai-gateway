@@ -11,8 +11,8 @@ export default function ProviderMark({ name, size = 20, fallback }: Props) {
   return (
     <span
       style={{
-        width: size, height: size, flex: `0 0 ${size}px`, borderRadius: 'var(--gw-r-badge)',
-        background: 'var(--gw-bg)', color: 'var(--gw-text-2)',
+        width: size, height: size, flex: `0 0 ${size}px`, borderRadius: 3,
+        background: 'var(--panel-3)', color: 'var(--t2)', border: '1px solid var(--line)',
         fontSize: mark.length > 1 ? 9 : size <= 20 ? 11 : 13, fontWeight: 600,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}

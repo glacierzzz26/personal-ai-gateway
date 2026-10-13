@@ -1,5 +1,6 @@
-import { Empty, Modal, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { Empty, Table } from '@/ui/primitives';
+import type { Column } from '@/ui/primitives';
+import { Modal } from '@/ui/overlay';
 import { fmt } from '@/utils/format';
 import type { ModelCatalogItem } from '@/types';
 import { bestPrice } from './ModelCard';
@@ -45,21 +46,21 @@ export default function CompareModal({ open, models, onClose }: Props) {
     { ...build(m => m.offers.map(o => o.channelName).join('、') || '—'), label: '供给来源' },
   ];
 
-  const attrColumns: ColumnsType<AttrRow> = [
+  const attrColumns: Column<AttrRow>[] = [
     {
-      title: '属性', dataIndex: 'label', width: 110, ellipsis: true,
-      render: v => <span style={{ color: 'var(--gw-text-2)' }}>{v}</span>,
+      key: 'label', title: '属性', width: 110,
+      render: r => <span style={{ color: 'var(--t2)' }}>{r.label}</span>,
     },
     ...models.map((m, i) => ({
-      title: <span className="gw-mono">{m.name}</span>,
       key: `m${m.id}`,
-      render: (_: unknown, r: AttrRow) => (
+      title: <span className="mono">{m.name}</span>,
+      render: (r: AttrRow) => (
         <span
-          className="gw-num"
+          className="num"
           style={{
             display: 'block',
             padding: '0 4px',
-            background: r.diff ? 'var(--gw-fill)' : undefined,
+            background: r.diff ? 'var(--hover)' : undefined,
             borderRadius: r.diff ? 4 : undefined,
           }}
         >
@@ -83,85 +84,58 @@ export default function CompareModal({ open, models, onClose }: Props) {
     })),
   );
 
-  const offerColumns: ColumnsType<OfferRow> = [
-    {
-      title: '模型', dataIndex: 'modelName', ellipsis: true,
-      render: v => <span className="gw-mono">{v}</span>,
-    },
-    {
-      title: '渠道', dataIndex: 'channelName', ellipsis: true,
-      render: v => <b style={{ fontWeight: 500 }}>{v}</b>,
-    },
-    { title: '供应商', dataIndex: 'provider' },
-    {
-      title: '输入价', dataIndex: 'inputPriceUsd', align: 'right',
-      render: v => <span className="gw-num">{fmt.price(v)}</span>,
-    },
-    {
-      title: '输出价', dataIndex: 'outputPriceUsd', align: 'right',
-      render: v => <span className="gw-num">{fmt.price(v)}</span>,
-    },
-    {
-      title: '缓存读价', dataIndex: 'cacheReadPriceUsd', align: 'right',
-      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
-    },
-    {
-      title: '缓存写价', dataIndex: 'cacheWritePriceUsd', align: 'right',
-      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
-    },
-    {
-      title: '延迟', dataIndex: 'latencyMs', align: 'right',
-      render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span>,
-    },
-    {
-      title: '成功率', dataIndex: 'successRate', align: 'right',
-      render: v => <span className="gw-num">{fmt.pct(v, 2)}</span>,
-    },
+  const offerColumns: Column<OfferRow>[] = [
+    { key: 'modelName', title: '模型', render: r => <span className="mono">{r.modelName}</span> },
+    { key: 'channelName', title: '渠道', render: r => <b style={{ fontWeight: 500 }}>{r.channelName}</b> },
+    { key: 'provider', title: '供应商', render: r => r.provider },
+    { key: 'inputPriceUsd', title: '输入价', align: 'right', render: r => <span className="num">{fmt.price(r.inputPriceUsd)}</span> },
+    { key: 'outputPriceUsd', title: '输出价', align: 'right', render: r => <span className="num">{fmt.price(r.outputPriceUsd)}</span> },
+    { key: 'cacheReadPriceUsd', title: '缓存读价', align: 'right', render: r => <span className="num">{r.cacheReadPriceUsd ? fmt.price(r.cacheReadPriceUsd) : '—'}</span> },
+    { key: 'cacheWritePriceUsd', title: '缓存写价', align: 'right', render: r => <span className="num">{r.cacheWritePriceUsd ? fmt.price(r.cacheWritePriceUsd) : '—'}</span> },
+    { key: 'latencyMs', title: '延迟', align: 'right', render: r => <span className="num">{r.latencyMs ? fmt.ms(r.latencyMs) : '—'}</span> },
+    { key: 'successRate', title: '成功率', align: 'right', render: r => <span className="num">{fmt.pct(r.successRate, 2)}</span> },
   ];
 
+  if (!open) return null;
+
   return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      width={Math.min(1100, 620 + models.length * 130)}
-      title={`模型对比 · ${models.length} 个`}
-    >
-      <Table<AttrRow>
-        rowKey="label"
-        size="middle"
-        dataSource={attrRows}
-        columns={attrColumns}
-        pagination={false}
-      />
-
-      <div
-        style={{
-          marginTop: 20, fontSize: 14, fontWeight: 600,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}
+    <div className="overlay" style={{ zIndex: 70 }}>
+      <Modal
+        title={`模型对比 · ${models.length} 个`}
+        width={Math.min(1100, 620 + models.length * 130)}
+        onClose={onClose}
       >
-        <span>按供给源报价</span>
-        <span style={{ fontSize: 12, color: 'var(--gw-text-3)', fontWeight: 400 }}>
-          单位：每百万 tokens（仅列已启用的供给源）
-        </span>
-      </div>
-      {offerRows.length ? (
-        <Table<OfferRow>
-          rowKey={(r, i) => `${r.modelName}-${r.channelName}-${i}`}
-          size="middle"
-          style={{ marginTop: 10 }}
-          dataSource={offerRows}
-          columns={offerColumns}
-          pagination={false}
-        />
-      ) : (
-        <Empty style={{ padding: '24px 0' }} description="所选模型均未启用供给源" />
-      )}
+        <Table<AttrRow> columns={attrColumns} rows={attrRows} rowKey={r => r.label} />
 
-      <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 12 }}>
-        上方表格同一行内数值不同时以浅色底标注，便于快速定位差异。
-      </div>
-    </Modal>
+        <div
+          style={{
+            marginTop: 20, fontSize: 14, fontWeight: 600,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}
+        >
+          <span>按供给源报价</span>
+          <span style={{ fontSize: 12, color: 'var(--t3)', fontWeight: 400 }}>
+            单位：每百万 tokens（仅列已启用的供给源）
+          </span>
+        </div>
+        {offerRows.length ? (
+          <div style={{ marginTop: 10 }}>
+            <Table<OfferRow>
+              columns={offerColumns}
+              rows={offerRows}
+              rowKey={(r, i) => `${r.modelName}-${r.channelName}-${i}`}
+            />
+          </div>
+        ) : (
+          <div style={{ padding: '24px 0' }}>
+            <Empty icon="box" title="所选模型均未启用供给源" />
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: 'var(--t3)', marginTop: 12 }}>
+          上方表格同一行内数值不同时以浅色底标注，便于快速定位差异。
+        </div>
+      </Modal>
+    </div>
   );
 }

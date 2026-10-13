@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { App, Button, DatePicker, Dropdown, Form, Input, Modal, Select, Space, Switch, Table, Tooltip } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { MoreOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import dayjs, { type Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
 import { Block as BlockCard, Blocks } from '@/components/Block';
 import PageHeader from '@/components/PageHeader';
-import { EmptyState, ErrorState } from '@/components/States';
+import { EmptyState, ErrorState, SkLines } from '@/components/States';
+import { Badge, Button, Field, Input, Select, Switch, Textarea } from '@/ui/primitives';
+import { Menu, Modal, confirm } from '@/ui/overlay';
+import { message } from '@/ui/toast';
+import { Icon } from '@/ui/icons';
 import { api } from '@/services/api';
 import { fmt, TONE_COLOR } from '@/utils/format';
 import type { Tone } from '@/utils/format';
@@ -14,22 +15,15 @@ import type { AnnouncementDraft, AnnouncementItem, AnnouncementLevel } from '@/t
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : '请稍后重试');
 
-const LEVEL_META: Record<AnnouncementLevel, { tone: Tone; label: string }> = {
-  info: { tone: 'aux', label: '通知' },
-  warn: { tone: 'warn', label: '注意' },
-  danger: { tone: 'err', label: '重要' },
+/** 级别 → 语义色 + 文字 + 左条 severity 类(.alert-item.sev-*)。 */
+const LEVEL_META: Record<AnnouncementLevel, { tone: Tone; label: string; sev: string; badge: 'brand' | 'amber' | 'red' }> = {
+  info: { tone: 'aux', label: '通知', sev: 'sev-info', badge: 'brand' },
+  warn: { tone: 'warn', label: '注意', sev: 'sev-warn', badge: 'amber' },
+  danger: { tone: 'err', label: '重要', sev: 'sev-error', badge: 'red' },
 };
 
-/** 级别徽章:色点 + 文字(不靠颜色单独表意)。 */
-function LevelBadge({ level }: { level: AnnouncementLevel }) {
-  const m = LEVEL_META[level] ?? LEVEL_META.info;
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: TONE_COLOR[m.tone] }}>
-      <i className={`gw-dot ${m.tone}`} />
-      {m.label}
-    </span>
-  );
-}
+/** Tone → 状态圆点类(.dot.g/.a/.r/.s)。 */
+const TONE_DOT: Record<Tone, string> = { ok: 'g', warn: 'a', err: 'r', aux: 's' };
 
 /** 生效态:停用 / 已过期 / 定时未到 / 生效中(与后端 PendingAnnouncement 同一判定口径)。 */
 function statusOf(a: AnnouncementItem): { tone: Tone; label: string } {
@@ -40,52 +34,44 @@ function statusOf(a: AnnouncementItem): { tone: Tone; label: string } {
   return { tone: 'ok', label: '生效中' };
 }
 
-interface FormValues {
-  title: string;
-  body: string;
-  level: AnnouncementLevel;
-  enabled: boolean;
-  publishAt?: Dayjs | null;
-  expiresAt?: Dayjs | null;
-}
+/** ISO ↔ <input type="datetime-local"> 本地串互转(留空 = 未设置)。 */
+const toLocalInput = (iso?: string | null): string => (iso ? dayjs(iso).format('YYYY-MM-DDTHH:mm') : '');
+const fromLocalInput = (v: string): string | null => (v ? dayjs(v).toISOString() : null);
 
-/** 新建/编辑公告弹窗。 */
+const fmtTime = (iso?: string | null) => (iso ? dayjs(iso).format('MM-DD HH:mm') : '');
+
+/** 新建 / 编辑公告弹窗(受控,无 antd Form)。initial 非空即编辑。 */
 function AnnouncementModal(props: {
   initial: AnnouncementItem | null;
-  open: boolean;
   onCancel: () => void;
   onSubmit: (v: AnnouncementDraft) => Promise<void>;
 }) {
-  const { initial, open, onCancel, onSubmit } = props;
-  const { message } = App.useApp();
-  const [form] = Form.useForm<FormValues>();
+  const { initial, onCancel, onSubmit } = props;
+  const [title, setTitle] = useState(initial?.title ?? '');
+  const [body, setBody] = useState(initial?.body ?? '');
+  const [level, setLevel] = useState<AnnouncementLevel>(initial?.level ?? 'info');
+  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [publishAt, setPublishAt] = useState(toLocalInput(initial?.publishAt));
+  const [expiresAt, setExpiresAt] = useState(toLocalInput(initial?.expiresAt));
+  const [errs, setErrs] = useState<{ title?: string; body?: string }>({});
   const [saving, setSaving] = useState(false);
 
-  // 新建/编辑共用:initial 非空即编辑。默认值随 initial 水合(key 变化会重挂载)。
-  const initialValues: Partial<FormValues> = initial
-    ? {
-        title: initial.title,
-        body: initial.body,
-        level: initial.level,
-        enabled: initial.enabled,
-        publishAt: initial.publishAt ? dayjs(initial.publishAt) : null,
-        expiresAt: initial.expiresAt ? dayjs(initial.expiresAt) : null,
-      }
-    : { level: 'info', enabled: true };
-
   const submit = async () => {
-    const v = await form.validateFields();
+    const next: { title?: string; body?: string } = {};
+    if (!title.trim()) next.title = '请输入标题';
+    if (!body.trim()) next.body = '请输入正文';
+    setErrs(next);
+    if (Object.keys(next).length) return;
     setSaving(true);
     try {
       await onSubmit({
-        title: v.title.trim(),
-        body: v.body.trim(),
-        level: v.level,
-        enabled: v.enabled,
-        publishAt: v.publishAt ? v.publishAt.toISOString() : null,
-        expiresAt: v.expiresAt ? v.expiresAt.toISOString() : null,
+        title: title.trim(),
+        body: body.trim(),
+        level,
+        enabled,
+        publishAt: fromLocalInput(publishAt),
+        expiresAt: fromLocalInput(expiresAt),
       });
-      form.resetFields();
     } catch (e) {
       message.error(`保存失败:${errMsg(e)}`);
     } finally {
@@ -94,62 +80,62 @@ function AnnouncementModal(props: {
   };
 
   return (
-    <Modal
-      title={initial ? '编辑公告' : '发布公告'}
-      open={open}
-      onCancel={onCancel}
-      onOk={submit}
-      confirmLoading={saving}
-      okText={initial ? '保存' : '发布'}
-      cancelText="取消"
-      destroyOnHidden
-      width={560}
-    >
-      <Form
-        form={form}
-        layout="vertical"
-        requiredMark={false}
-        preserve={false}
-        initialValues={initialValues}
+    <div className="overlay" style={{ zIndex: 70 }}>
+      <Modal
+        title={initial ? '编辑公告' : '发布公告'}
+        width={560}
+        onClose={onCancel}
+        footer={
+          <>
+            <Button variant="secondary" onClick={onCancel}>
+              取消
+            </Button>
+            <Button variant="primary" loading={saving} onClick={() => void submit()}>
+              {initial ? '保存' : '发布'}
+            </Button>
+          </>
+        }
       >
-        <Form.Item name="title" label="标题" rules={[{ required: true, whitespace: true, message: '请输入标题' }]}>
-          <Input placeholder="例如:系统维护通知" maxLength={120} />
-        </Form.Item>
-        <Form.Item name="body" label="正文" rules={[{ required: true, whitespace: true, message: '请输入正文' }]}>
-          <Input.TextArea rows={5} placeholder="公告内容，支持换行" maxLength={2000} showCount />
-        </Form.Item>
-        <Space size={16} style={{ display: 'flex' }} align="start">
-          <Form.Item name="level" label="级别" style={{ width: 160 }}>
+        <Field label="标题" error={errs.title}>
+          <Input value={title} maxLength={120} placeholder="例如:系统维护通知" onChange={e => setTitle(e.target.value)} />
+        </Field>
+        <Field label="正文" error={errs.body}>
+          <Textarea value={body} rows={5} maxLength={2000} placeholder="公告内容，支持换行" onChange={e => setBody(e.target.value)} />
+        </Field>
+        <div className="field-row">
+          <Field label="级别">
             <Select
+              value={level}
+              onChange={e => setLevel(e.target.value as AnnouncementLevel)}
               options={[
                 { value: 'info', label: '通知' },
                 { value: 'warn', label: '注意' },
                 { value: 'danger', label: '重要' },
               ]}
             />
-          </Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked" extra="停用后立即不再对任何用户弹出">
-            <Switch />
-          </Form.Item>
-        </Space>
-        <Space size={16} style={{ display: 'flex' }} align="start">
-          <Form.Item name="publishAt" label="定时发布" extra="留空 = 立即发布" style={{ flex: 1 }}>
-            <DatePicker showTime style={{ width: '100%' }} placeholder="立即发布" />
-          </Form.Item>
-          <Form.Item name="expiresAt" label="过期时间" extra="留空 = 永不过期" style={{ flex: 1 }}>
-            <DatePicker showTime style={{ width: '100%' }} placeholder="永不过期" />
-          </Form.Item>
-        </Space>
-      </Form>
-    </Modal>
+          </Field>
+          <Field label="启用" hint="停用后立即不再对任何用户弹出">
+            <Switch checked={enabled} onChange={setEnabled} />
+          </Field>
+        </div>
+        <div className="field-row">
+          <Field label="定时发布" hint="留空 = 立即发布">
+            <Input type="datetime-local" value={publishAt} onChange={e => setPublishAt(e.target.value)} />
+          </Field>
+          <Field label="过期时间" hint="留空 = 永不过期">
+            <Input type="datetime-local" value={expiresAt} onChange={e => setExpiresAt(e.target.value)} />
+          </Field>
+        </div>
+      </Modal>
+    </div>
   );
 }
 
 export default function Announcements() {
-  const { message, modal } = App.useApp();
   const qc = useQueryClient();
   const [editing, setEditing] = useState<AnnouncementItem | null>(null);
   const [creating, setCreating] = useState(false);
+  const [menuId, setMenuId] = useState<number | null>(null);
 
   const { data = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['announcements'],
@@ -173,87 +159,36 @@ export default function Announcements() {
 
   const remove = useMutation({
     mutationFn: (id: number) => api.deleteAnnouncement(id),
-    onSuccess: () => { message.success('已删除'); refresh(); },
+    onSuccess: () => {
+      message.success('已删除');
+      refresh();
+    },
     onError: e => message.error(`删除失败:${errMsg(e)}`),
   });
 
   const confirmDelete = (a: AnnouncementItem) => {
-    modal.confirm({
+    void confirm({
       title: `删除公告「${a.title}」?`,
       content: '删除后该公告不再对任何用户弹出，相关「已读」记录一并清除。',
       okText: '删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: () => remove.mutateAsync(a.id),
+      danger: true,
+    }).then(ok => {
+      if (ok) remove.mutate(a.id);
     });
   };
 
-  const columns: ColumnsType<AnnouncementItem> = [
-    {
-      // 唯一的弹性列:不设 width + ellipsis + Tooltip,吸收剩余宽度,表格不溢出
-      title: '标题', dataIndex: 'title', ellipsis: true,
-      render: (v: string, r) => (
-        <Tooltip title={v}>
-          <b style={{ fontWeight: 500, color: 'var(--gw-text)' }}>{v}</b>
-          <span style={{ color: 'var(--gw-text-3)', marginLeft: 8 }}>{r.body.slice(0, 24)}</span>
-        </Tooltip>
-      ),
-    },
-    { title: '级别', dataIndex: 'level', width: 90, render: v => <LevelBadge level={v} /> },
-    { title: '状态', key: 'status', width: 96, render: (_, r) => { const s = statusOf(r); return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <i className={`gw-dot ${s.tone}`} />
-        {s.label}
-      </span>
-    ); } },
-    {
-      title: '定时发布', dataIndex: 'publishAt', width: 132,
-      render: v => v ? <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{dayjs(v).format('MM-DD HH:mm')}</span>
-        : <span style={{ color: 'var(--gw-text-3)' }}>立即</span>,
-    },
-    {
-      title: '过期', dataIndex: 'expiresAt', width: 132,
-      render: v => v ? <span className="gw-num" style={{ color: 'var(--gw-text-3)' }}>{dayjs(v).format('MM-DD HH:mm')}</span>
-        : <span style={{ color: 'var(--gw-text-3)' }}>永不</span>,
-    },
-    {
-      title: '已读', key: 'read', width: 96, align: 'right',
-      render: (_, r) => (
-        <Tooltip title={`${r.readCount ?? 0} / ${r.userTotal ?? 0} 名普通用户已确认`}>
-          <span className="gw-num">{fmt.n(r.readCount ?? 0)}/{fmt.n(r.userTotal ?? 0)}</span>
-        </Tooltip>
-      ),
-    },
-    {
-      title: '操作', align: 'right', width: 72,
-      render: (_, r) => (
-        <Dropdown
-          trigger={['click']}
-          menu={{
-            items: [
-              { key: 'edit', label: '编辑' },
-              { type: 'divider' as const },
-              { key: 'delete', label: '删除', danger: true },
-            ],
-            onClick: ({ key, domEvent }) => {
-              domEvent.stopPropagation();
-              if (key === 'edit') setEditing(r);
-              else if (key === 'delete') confirmDelete(r);
-            },
-          }}
-        >
-          <Button type="text" size="small" icon={<MoreOutlined />} aria-label={`更多操作 ${r.title}`} />
-        </Dropdown>
-      ),
-    },
-  ];
+  const modalOpen = creating || !!editing;
 
   return (
-    <div className="gw-page">
+    <>
       <PageHeader
         title="公告管理"
         desc="发布后所有登录用户会在弹窗中看到；点「我已知晓」后该公告不再对其显示"
-        extra={<Button type="primary" onClick={() => setCreating(true)}>发布公告</Button>}
+        extra={
+          <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
+            发布公告
+          </Button>
+        }
       />
 
       <Blocks>
@@ -266,35 +201,83 @@ export default function Announcements() {
                 onRetry={() => void refetch()}
               />
             </div>
-          ) : (
-            <Table<AnnouncementItem>
-              rowKey="id"
-              size="middle"
-              loading={isLoading && data.length === 0}
-              dataSource={data}
-              columns={columns}
-              pagination={false}
-              locale={{
-                emptyText: (
-                  <EmptyState
-                    title="还没有公告"
-                    desc="发布一条公告，所有登录用户在进入后台时会看到弹窗。"
-                    action={<Button size="small" type="primary" onClick={() => setCreating(true)}>发布公告</Button>}
-                  />
-                ),
-              }}
+          ) : isLoading && data.length === 0 ? (
+            <div style={{ padding: 14 }}>
+              <SkLines rows={['w80', 'w60', 'w80']} />
+            </div>
+          ) : data.length === 0 ? (
+            <EmptyState
+              title="还没有公告"
+              desc="发布一条公告，所有登录用户在进入后台时会看到弹窗。"
+              action={
+                <Button size="sm" variant="primary" onClick={() => setCreating(true)}>
+                  发布公告
+                </Button>
+              }
             />
+          ) : (
+            <div className="stack-sm">
+              {data.map(a => {
+                const meta = LEVEL_META[a.level] ?? LEVEL_META.info;
+                const st = statusOf(a);
+                return (
+                  <div key={a.id} className={`alert-item ${meta.sev}`}>
+                    <div className="alert-body">
+                      <div className="alert-title">
+                        <Badge tone={meta.badge}>{meta.label}</Badge>
+                        {a.title}
+                      </div>
+                      <div className="alert-text">{a.body}</div>
+                      <div className="alert-meta">
+                        <span className="hstack" style={{ gap: 5, color: TONE_COLOR[st.tone] }}>
+                          <i className={`dot ${TONE_DOT[st.tone]}`} />
+                          {st.label}
+                        </span>
+                        <span>{a.publishAt ? `${fmtTime(a.publishAt)} 发布` : '立即发布'}</span>
+                        <span>{a.expiresAt ? `${fmtTime(a.expiresAt)} 过期` : '永不过期'}</span>
+                        <span className="num">
+                          已读 {fmt.n(a.readCount ?? 0)}/{fmt.n(a.userTotal ?? 0)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="rel">
+                      <button
+                        className="icon-btn"
+                        aria-label={`更多操作 ${a.title}`}
+                        onClick={() => setMenuId(m => (m === a.id ? null : a.id))}
+                      >
+                        <Icon name="dots" size={15} />
+                      </button>
+                      {menuId === a.id && (
+                        <Menu
+                          onClose={() => setMenuId(null)}
+                          items={[
+                            { label: '编辑', icon: 'sliders', onClick: () => setEditing(a) },
+                            { sep: true },
+                            { label: '删除', icon: 'trash', danger: true, onClick: () => confirmDelete(a) },
+                          ]}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </BlockCard>
       </Blocks>
 
-      <AnnouncementModal
-        key={editing?.id ?? 'new'}
-        initial={editing}
-        open={creating || !!editing}
-        onCancel={() => { setCreating(false); setEditing(null); }}
-        onSubmit={v => (editing ? save(editing.id, v) : create(v))}
-      />
-    </div>
+      {modalOpen && (
+        <AnnouncementModal
+          key={editing?.id ?? 'new'}
+          initial={editing}
+          onCancel={() => {
+            setCreating(false);
+            setEditing(null);
+          }}
+          onSubmit={v => (editing ? save(editing.id, v) : create(v))}
+        />
+      )}
+    </>
   );
 }

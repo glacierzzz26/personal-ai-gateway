@@ -2,7 +2,7 @@
 
 一个 Go 写的**个人** AI 网关:多厂商模型(官方 API、OpenAI 兼容中转、聚合订阅)收敛到一个出口。
 一个「模型」可挂多家「渠道」供给源;请求按模型目录 + 报价 + 路由规则 + 渠道健康**真实选路转发**;
-统一记账、故障自动降级、令牌(额度/RPM/有效期/允许模型)管控;带账号登录的 Web 管理台(React 18 + antd v5)
+统一记账、故障自动降级、令牌(额度/RPM/有效期/允许模型)管控;带账号登录的 Web 管理台(React 18,自绘设计系统·暗/亮双主题)
 对网关做全 CRUD。数据全在 PostgreSQL。
 
 > 定位:个人 / 少量渠道。设计追求简单、可观测、可演进,不追求企业级。
@@ -56,7 +56,7 @@ internal/pricing 官方价来源:commandcode 单页锚点(**唯一来源**,openc
                 (CC GOAT / opencode Go,派生按模型成本系数)+ 厂商登记表 + 手工录入 + 分时选价
 internal/proxy  relay 转发 + translate(anthropic↔openai 双向,流式状态机 + usage 权威计数)+ probe/ping
 internal/server 管理面 CRUD handler(会话)+ 模型面(令牌)+ 静态托管 web-v2/dist(SPA 回退)
-web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist 产物 gitignore
+web-v2/         管理台前端源码(React18+react-query;自绘设计系统,去 antd/echarts,暗/亮双主题,手绘 SVG 图表);dist 产物 gitignore
 ```
 
 ## 3. 数据模型(PostgreSQL;单基线 DDL + 版本化增量步骤,schema_migrations)
@@ -535,14 +535,22 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
   不作为运行时数据。`providers` 现为 **21 家**(issue #27 扩容至 20 家;Mistral 原由已删除的 zen 来源引入,枚举保留,与 `domain.Providers` 逐字对齐),
   增删须同步 `constants.ts` 与 `types/index.ts` 的联合类型。渠道的展示名/徽标统一走 `utils/channel.ts` 的 `channelLabel`/`channelMark`
   (有厂商显示厂商,聚合渠道回落渠道类型),勿在页面里直接渲染 `ch.provider`(为空会显示空白)。
-- **antd 表格列宽**:一律 `tableLayout="fixed"`(见 `styles/tokens.ts`)。fixed 下**没有 `width` 的列会吃掉
-  全部剩余宽度**,故除「刻意当弹性列」外每列都要给 width(令牌表首列曾留空 → 宽屏时列极宽、名字只占左边
-  一小段,窄屏又被压成省略号)。单元格内容(`render`)默认**不被裁剪** —— antd 只给 `overflow-wrap`,
-  仅配 `ellipsis` 的列才加 `overflow:hidden`(见 `antd/es/table/style/index.js` + `ellipsis.js`),
-  所以**长内容列必须显式收口**:优先「拼成单一文本 + `ellipsis:{showTitle:false}` + `<Tooltip>` 给全文」
-  (令牌表「可用模型」列;旧版用 `flexWrap` 徽标,单个长模型名会溢出画到右边「额度使用」列、挡住进度条),
-  或自套 `overflow:hidden` 容器。别指望 `gw-table` 那套 `td{overflow:hidden}`(它只作用于 Dashboard
-  自建的 `<table>`,管不到 antd `<Table>`)。
+- **自绘设计系统(去 antd/echarts)**:渲染层不依赖任何 UI 组件库。设计令牌与组件样式在 `styles/prototype.css`
+  (**逐字移植**自 `web-v2/prototype-webv2.html` 与 `prototype-webv2-user.html`),`<html data-theme="dark|light">`
+  切换暗/亮双主题(两套令牌独立校准);字体为系统栈 + `JetBrains Mono`(无 Inter)。
+- **`src/ui/` 原语**:`primitives.tsx`(Button/Card/CardHead/Kpi/Badge/Tag/Note/Strip/Li/Seg/Switch/Checkbox/
+  Field/Input/Select/Textarea/Empty/Sk/Pager/Table/PricePair/PriceRow/Caps/Meter/KV/Copyable 等)、
+  `overlay.tsx`(单一覆盖层:Modal/Drawer/`confirm`/portal `Dropdown`)、`toast.tsx`(antd `message` 的同名替身)、
+  `icons.tsx`(线性图标集,stroke 1.5)、`theme.ts`(zustand 主题 store)。
+- **覆盖层与层级**:Modal/Drawer/`confirm` 走同一浅栈(`OverlayHost`,z-index 从 **100** 起,可「抽屉上再开确认框」);
+  `toast-root` z-index **1000**(恒在最上);表格行内「更多」用 portal `Dropdown`(fixed 定位,绕开
+  `.table-wrap{overflow-x:auto}` 对绝对定位 `.menu` 的裁剪 —— 页内流式的 `.rel`+`Menu` 只可用于卡片/列表,别放进 `.tb` 表格)。
+- **主题默认**:登录前/会话恢复前为 **暗色**;会话恢复后,若用户从未手动切换过(`localStorage` 无 `gw-theme`),
+  按角色取默认(admin→暗、user→亮);手动切换后一律以 `localStorage['gw-theme']` 为准。
+- **表格列宽**:自绘 `Table`(`.tb` + `.table-wrap{overflow-x:auto}`)不设 `width` 的列吃弹性;长内容列
+  显式收口(优先「拼成单一文本 + 原生 `title=` 给全文」),避免把相邻列挤出去。
+- **图表**:手绘 SVG(`components/Chart.tsx`,移植原型 `chartSvg`+`niceMax`+十字准星 tooltip),配色走 CSS 变量
+  (`var(--brand)`/`var(--warn)`/`var(--err)`/`var(--chart-*)`),随主题即时切换;**不再依赖 echarts**。
 - **发布版本展示**:侧栏底部渲染**发布版本**(`AppLayout.tsx` footer),取自既有的 `GET /healthz` 的
   `version` 字段(由构建期 `APP_VERSION`/`-ldflags` 注入,形如 `v0.0.0-4de1cde`),不再写死
   `个人网关 · v2`(v2 是技术分代、不表意)。**降级**:`version` 缺失(本地 `go run` 未注入、或网关
