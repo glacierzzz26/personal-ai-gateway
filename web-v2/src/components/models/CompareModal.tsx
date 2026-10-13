@@ -1,5 +1,5 @@
-import { Empty, Modal, Table } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { Btn, Copyable, Empty } from '@/ui/primitives';
+import { Modal } from '@/ui/overlay';
 import { fmt } from '@/utils/format';
 import type { ModelCatalogItem } from '@/types';
 import { bestPrice } from './ModelCard';
@@ -45,30 +45,6 @@ export default function CompareModal({ open, models, onClose }: Props) {
     { ...build(m => m.offers.map(o => o.channelName).join('、') || '—'), label: '供给来源' },
   ];
 
-  const attrColumns: ColumnsType<AttrRow> = [
-    {
-      title: '属性', dataIndex: 'label', width: 110, ellipsis: true,
-      render: v => <span style={{ color: 'var(--gw-text-2)' }}>{v}</span>,
-    },
-    ...models.map((m, i) => ({
-      title: <span className="gw-mono">{m.name}</span>,
-      key: `m${m.id}`,
-      render: (_: unknown, r: AttrRow) => (
-        <span
-          className="gw-num"
-          style={{
-            display: 'block',
-            padding: '0 4px',
-            background: r.diff ? 'var(--gw-fill)' : undefined,
-            borderRadius: r.diff ? 4 : undefined,
-          }}
-        >
-          {r.values[i]}
-        </span>
-      ),
-    })),
-  ];
-
   const offerRows: OfferRow[] = models.flatMap(m =>
     m.offers.filter(o => o.enabled).map(o => ({
       modelName: m.name,
@@ -83,83 +59,83 @@ export default function CompareModal({ open, models, onClose }: Props) {
     })),
   );
 
-  const offerColumns: ColumnsType<OfferRow> = [
-    {
-      title: '模型', dataIndex: 'modelName', ellipsis: true,
-      render: v => <span className="gw-mono">{v}</span>,
-    },
-    {
-      title: '渠道', dataIndex: 'channelName', ellipsis: true,
-      render: v => <b style={{ fontWeight: 500 }}>{v}</b>,
-    },
-    { title: '供应商', dataIndex: 'provider' },
-    {
-      title: '输入价', dataIndex: 'inputPriceUsd', align: 'right',
-      render: v => <span className="gw-num">{fmt.price(v)}</span>,
-    },
-    {
-      title: '输出价', dataIndex: 'outputPriceUsd', align: 'right',
-      render: v => <span className="gw-num">{fmt.price(v)}</span>,
-    },
-    {
-      title: '缓存读价', dataIndex: 'cacheReadPriceUsd', align: 'right',
-      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
-    },
-    {
-      title: '缓存写价', dataIndex: 'cacheWritePriceUsd', align: 'right',
-      render: v => <span className="gw-num">{v ? fmt.price(v) : '—'}</span>,
-    },
-    {
-      title: '延迟', dataIndex: 'latencyMs', align: 'right',
-      render: v => <span className="gw-num">{v ? fmt.ms(v) : '—'}</span>,
-    },
-    {
-      title: '成功率', dataIndex: 'successRate', align: 'right',
-      render: v => <span className="gw-num">{fmt.pct(v, 2)}</span>,
-    },
-  ];
-
   return (
     <Modal
       open={open}
-      onCancel={onClose}
-      footer={null}
-      width={Math.min(1100, 620 + models.length * 130)}
+      onClose={onClose}
       title={`模型对比 · ${models.length} 个`}
+      width={Math.min(1100, 620 + models.length * 130)}
+      footer={<Btn onClick={onClose}>关闭</Btn>}
     >
-      <Table<AttrRow>
-        rowKey="label"
-        size="middle"
-        dataSource={attrRows}
-        columns={attrColumns}
-        pagination={false}
-      />
+      <div className="table-wrap" style={{ overflowX: 'auto' }}>
+        <table className="tb">
+          <thead>
+            <tr>
+              <th>属性</th>
+              {models.map(m => (
+                <th key={m.id} className="right">{<Copyable text={m.name}>{m.name}</Copyable>}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {attrRows.map(r => (
+              <tr key={r.label}>
+                <td className="cell-sub">{r.label}</td>
+                {r.values.map((v, i) => (
+                  <td key={i} className="right" style={r.diff ? { background: 'var(--panel-3)' } : undefined}>
+                    <span className="num">{v}</span>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      <div
-        style={{
-          marginTop: 20, fontSize: 14, fontWeight: 600,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}
-      >
+      <div style={{ marginTop: 20, fontSize: 14, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span>按供给源报价</span>
-        <span style={{ fontSize: 12, color: 'var(--gw-text-3)', fontWeight: 400 }}>
+        <span style={{ fontSize: 12, color: 'var(--t3)', fontWeight: 400 }}>
           单位：每百万 tokens（仅列已启用的供给源）
         </span>
       </div>
       {offerRows.length ? (
-        <Table<OfferRow>
-          rowKey={(r, i) => `${r.modelName}-${r.channelName}-${i}`}
-          size="middle"
-          style={{ marginTop: 10 }}
-          dataSource={offerRows}
-          columns={offerColumns}
-          pagination={false}
-        />
+        <div className="table-wrap" style={{ marginTop: 10, overflowX: 'auto' }}>
+          <table className="tb">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>渠道</th>
+                <th>供应商</th>
+                <th className="right">输入价</th>
+                <th className="right">输出价</th>
+                <th className="right">缓存读价</th>
+                <th className="right">缓存写价</th>
+                <th className="right">延迟</th>
+                <th className="right">成功率</th>
+              </tr>
+            </thead>
+            <tbody>
+              {offerRows.map((r, i) => (
+                <tr key={i}>
+                  <td className="mono strong">{r.modelName}</td>
+                  <td><b style={{ fontWeight: 500 }}>{r.channelName}</b></td>
+                  <td>{r.provider}</td>
+                  <td className="right num">{fmt.price(r.inputPriceUsd)}</td>
+                  <td className="right num">{fmt.price(r.outputPriceUsd)}</td>
+                  <td className="right num">{r.cacheReadPriceUsd ? fmt.price(r.cacheReadPriceUsd) : '—'}</td>
+                  <td className="right num">{r.cacheWritePriceUsd ? fmt.price(r.cacheWritePriceUsd) : '—'}</td>
+                  <td className="right num">{r.latencyMs ? fmt.ms(r.latencyMs) : '—'}</td>
+                  <td className="right num">{fmt.pct(r.successRate, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
-        <Empty style={{ padding: '24px 0' }} description="所选模型均未启用供给源" />
+        <Empty title="所选模型均未启用供给源" />
       )}
 
-      <div style={{ fontSize: 12, color: 'var(--gw-text-3)', marginTop: 12 }}>
+      <div className="cell-sub" style={{ fontSize: 12, marginTop: 12 }}>
         上方表格同一行内数值不同时以浅色底标注，便于快速定位差异。
       </div>
     </Modal>

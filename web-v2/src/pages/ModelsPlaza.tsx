@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Input, Select, Tooltip } from 'antd';
 import { useQuery } from '@tanstack/react-query';
-import { Block as BlockCard, Blocks } from '@/components/Block';
-import PageHeader from '@/components/PageHeader';
-import { EmptyState, ErrorState, NoResultState } from '@/components/States';
+import { Btn, Copyable, Empty, Input, PageHead, Seg } from '@/ui/primitives';
 import { api } from '@/services/api';
 import { useCurrency } from '@/stores/currency';
 import { capabilities } from '@/constants';
@@ -43,33 +40,14 @@ function PricePair({ tag, input, output, currency, muted }: {
 }) {
   const sym = currency === 'USD' ? '$' : '¥';
   const n = (v: number) => `${sym}${v.toFixed(v > 0 && v < 0.005 ? 4 : 2)}`;
-  const inColor = muted ? 'var(--gw-text-3)' : 'var(--gw-primary)';
-  const outColor = muted ? 'var(--gw-text-3)' : 'var(--gw-text)';
+  const inColor = muted ? 'var(--t3)' : 'var(--brand)';
+  const outColor = muted ? 'var(--t3)' : 'var(--t1)';
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, fontSize: 13 }}>
-      {tag && <span style={{ color: 'var(--gw-text-3)', fontSize: 11 }}>{tag}</span>}
-      <span
-        className="gw-num"
-        style={{
-          color: inColor,
-          fontWeight: muted ? 400 : 500,
-          fontSize: muted ? 13 : 15,
-          textDecoration: muted ? 'line-through' : undefined,
-        }}
-      >
-        {n(input)}
-      </span>
-      <span style={{ color: 'var(--gw-text-3)' }}>/</span>
-      <span
-        className="gw-num"
-        style={{
-          color: outColor,
-          fontWeight: muted ? 400 : 500,
-          textDecoration: muted ? 'line-through' : undefined,
-        }}
-      >
-        {n(output)}
-      </span>
+    <span className={`ppair${muted ? ' muted' : ''}`}>
+      {tag && <span className="ptag">{tag}</span>}
+      <span className="pin" style={{ color: inColor }}>{n(input)}</span>
+      <span className="psep">/</span>
+      <span className="pout" style={{ color: outColor }}>{n(output)}</span>
     </span>
   );
 }
@@ -91,12 +69,12 @@ function PriceRow({ label, muted, off, peak }: {
 }) {
   if (!off && !peak) return null;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 10, fontSize: 13, flexWrap: 'wrap' }}>
-      <span style={{ color: 'var(--gw-text-3)', minWidth: 52 }}>{label}</span>
+    <div className="prow">
+      <span className="plabel">{label}</span>
       {/* 高峰在前(与展示面的档位顺序一致);单档模型无档位标签 */}
       {peak && <PricePair tag="高峰" input={peak.input} output={peak.output} currency={peak.currency} muted={muted} />}
       {off && <PricePair tag={peak ? '空闲' : undefined} input={off.input} output={off.output} currency={off.currency} muted={muted} />}
-    </span>
+    </div>
   );
 }
 
@@ -104,24 +82,18 @@ function ModelCard({ m }: { m: UserModelItem }) {
   const r = m.retail;
   const o = m.official;
   return (
-    <Card
-      className="gw-mcard"
-      style={{ cursor: 'default' }}
-      styles={{ body: { padding: 16, display: 'flex', flexDirection: 'column', gap: 11, height: '100%' } }}
-    >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <span className="gw-mono" style={{ fontSize: 14, fontWeight: 500, wordBreak: 'break-all', minWidth: 0 }}>
-          {m.name}
+    <div className="mcard">
+      <div className="mc-top">
+        <span className="mc-name">
+          <Copyable text={m.name}>{m.name}</Copyable>
         </span>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--gw-text-3)', flex: '0 0 auto' }}>
-          {fmt.ctx(m.contextWindow)} 上下文
-        </span>
+        <span className="mc-ctx">{fmt.ctx(m.contextWindow)} 上下文</span>
       </div>
 
-      <div>
+      <div className="taglist">
         {m.capabilities.length
-          ? m.capabilities.map(c => <span className="gw-badge" key={c}>{CAP_LABEL[c] ?? c}</span>)
-          : <span style={{ color: 'var(--gw-text-3)', fontSize: 13 }}>—</span>}
+          ? m.capabilities.map(c => <span key={c} className="tag">{CAP_LABEL[c] ?? c}</span>)
+          : <span className="muted small">—</span>}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -147,24 +119,18 @@ function ModelCard({ m }: { m: UserModelItem }) {
                 : undefined}
             />
             {m.peakVaries && m.peakHours && (
-              <Tooltip title={`高峰时段:${m.peakHours}。其余时间为空闲价`}>
-                <span style={{ fontSize: 11, color: 'var(--gw-text-3)' }}>
-                  高峰时段 {m.peakHours.slice(0, 40)}{m.peakHours.length > 40 ? '…' : ''}
-                </span>
-              </Tooltip>
+              <span className="cell-sub" style={{ fontSize: 11 }}>
+                高峰时段 {m.peakHours.slice(0, 40)}{m.peakHours.length > 40 ? '…' : ''}
+              </span>
             )}
           </>
         ) : (
-          <Tooltip title={m.priceNote}>
-            <span style={{ fontSize: 13, color: 'var(--gw-warn)' }}>价格待定</span>
-          </Tooltip>
+          <span className="muted" style={{ fontSize: 13 }} title={m.priceNote}>价格待定</span>
         )}
       </div>
 
-      <div style={{ fontSize: 11, color: 'var(--gw-text-3)', borderTop: '1px solid var(--gw-border)', paddingTop: 9 }}>
-        输入 / 输出 · 每百万 tokens
-      </div>
-    </Card>
+      <div className="mc-foot">输入 / 输出 · 每百万 tokens</div>
+    </div>
   );
 }
 
@@ -208,85 +174,76 @@ export default function ModelsPlaza() {
   const clearFilters = () => { setKw(''); setCap(''); setCtx(''); };
 
   return (
-    <div className="gw-page">
-      <PageHeader
-        title="模型广场"
-        desc="本站可用的模型与售价（输入 / 输出，每百万 tokens）"
-      />
+    <div>
+      <PageHead title="模型广场" sub="本站可用的模型与售价（输入 / 输出，每百万 tokens）" />
 
-      <Blocks>
-        <BlockCard>
-          <div className="gw-toolbar">
-            <Input.Search
-              allowClear
-              placeholder="搜索模型名"
-              style={{ width: 240 }}
-              value={kw}
-              onChange={e => setKw(e.target.value)}
+      <div className="card">
+        <div className="toolbar" style={{ padding: '12px 14px 0' }}>
+          <div className="hstack wrap" style={{ gap: 10 }}>
+            <Input value={kw} placeholder="搜索模型名" onChange={e => setKw(e.target.value)} style={{ width: 200 }} />
+            <Seg
+              value={cap}
+              onChange={v => setCap(v as '' | Capability)}
+              options={[{ v: '', label: '全部能力' }, ...capabilities.map(x => ({ v: x as string, label: CAP_LABEL[x] ?? x }))]}
             />
-            <Select
-              style={{ width: 140 }} value={cap} onChange={setCap}
-              options={[{ value: '', label: '全部能力' }, ...capabilities.map(x => ({ value: x, label: CAP_LABEL[x] ?? x }))]}
-            />
-            <Select
-              style={{ width: 150 }} value={ctx} onChange={setCtx}
+            <Seg
+              value={ctx}
+              onChange={setCtx}
               options={[
-                { value: '', label: '上下文不限' },
-                { value: 's', label: '< 32K' },
-                { value: 'm', label: '32K – 128K' },
-                { value: 'l', label: '> 128K' },
+                { v: '', label: '上下文不限' },
+                { v: 's', label: '< 32K' },
+                { v: 'm', label: '32K–128K' },
+                { v: 'l', label: '> 128K' },
               ]}
             />
-            <Select
-              style={{ width: 140 }} value={sort} onChange={setSort}
+            <Seg
+              value={sort}
+              onChange={setSort}
               options={[
-                { value: 'retail', label: '按本站价' },
-                { value: 'official', label: '按官方价' },
-                { value: 'ctx', label: '按上下文' },
-                { value: 'name', label: '按名称' },
+                { v: 'retail', label: '按本站价' },
+                { v: 'official', label: '按官方价' },
+                { v: 'ctx', label: '按上下文' },
+                { v: 'name', label: '按名称' },
               ]}
             />
-            <span className="count">
-              {filtering ? <>筛选出 <b>{list.length}</b> / {models.length} 个模型</> : <>共 <b>{models.length}</b> 个模型</>}
-            </span>
+          </div>
+          <span className="cell-sub">
+            {filtering ? <>筛选出 <b>{list.length}</b> / {models.length} 个模型</> : <>共 <b>{models.length}</b> 个模型</>}
+          </span>
+        </div>
+
+        <div style={{ padding: '16px 20px' }}>
+          <div className="cell-sub" style={{ marginBottom: 16 }}>
+            本站价为实付口径；划线价为厂商官方挂牌价，供对比参考
           </div>
 
-          <div style={{ padding: '16px 20px' }}>
-            <div style={{ fontSize: 13.5, color: 'var(--gw-text-3)', marginBottom: 16 }}>
-              本站价为实付口径；划线价为厂商官方挂牌价，供对比参考
+          {isLoading && models.length === 0 ? (
+            <div className="mc-grid">
+              {[0, 1, 2, 3].map(i => <div key={i} className="sk" style={{ height: 190, borderRadius: 5 }} />)}
             </div>
-
-            {isLoading && models.length === 0 ? (
-              <div className="gw-grid-cards">
-                {[0, 1, 2, 3].map(i => <div className="gw-sk-metric" key={i} style={{ height: 190 }} />)}
-              </div>
-            ) : list.length === 0 ? (
-              isError ? (
-                <ErrorState
-                  title="模型列表加载失败"
-                  desc="无法读取可用模型，请稍后重试。"
-                  onRetry={() => void refetch()}
-                />
-              ) : models.length === 0 ? (
-                <EmptyState
-                  title="暂无可用的模型"
-                  desc="管理员尚未上架模型，或你的账号还未被授权任何模型。"
-                />
-              ) : (
-                <NoResultState
-                  title="没有符合条件的模型"
-                  desc="当前筛选（关键字 / 能力 / 上下文）没有命中。"
-                  action={<Button size="small" onClick={clearFilters}>清除筛选</Button>}
-                />
-              )
+          ) : list.length === 0 ? (
+            isError ? (
+              <Empty title="模型列表加载失败">
+                <p>无法读取可用模型，请稍后重试。</p>
+                <Btn size="sm" onClick={() => void refetch()}>重试</Btn>
+              </Empty>
+            ) : models.length === 0 ? (
+              <Empty title="暂无可用的模型">
+                <p>管理员尚未上架模型，或你的账号还未被授权任何模型。</p>
+              </Empty>
             ) : (
-              <div className="gw-grid-cards">
-                {list.map(m => <ModelCard key={m.name} m={m} />)}
-              </div>
-            )}
-          </div>
-        </BlockCard>
-      </Blocks>
+              <Empty title="没有符合条件的模型">
+                <p>当前筛选（关键字 / 能力 / 上下文）没有命中。</p>
+                <Btn size="sm" onClick={clearFilters}>清除筛选</Btn>
+              </Empty>
+            )
+          ) : (
+            <div className="mc-grid">
+              {list.map(m => <ModelCard key={m.name} m={m} />)}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
