@@ -39,14 +39,22 @@ type relayConfig struct {
 	// StreamIdleTimeout 流式中途静默窗口的下限(见 minStreamIdle);
 	// 独立成字段以便测试缩短窗口,生产恒为 minStreamIdle。
 	StreamIdleTimeout time.Duration
+	// UserAgent opencode 出站专用 UA(文档要求客户端自报身份,别用通用 Go-http-client)。
+	UserAgent string
 }
 
-func NewRelay(st *store.Store) *Relay {
+// NewRelay 建出站执行器。version 供 opencode 出站 UA 用(空则回退纯名)。
+func NewRelay(st *store.Store, version string) *Relay {
+	ua := "personal-ai-gateway"
+	if version != "" {
+		ua += "/" + version
+	}
 	return &Relay{
 		st: st,
 		cfg: relayConfig{
 			DialTimeout:       10 * time.Second,
 			StreamIdleTimeout: minStreamIdle,
+			UserAgent:         ua,
 		},
 		clients: map[clientKey]*http.Client{},
 	}
@@ -132,20 +140,24 @@ func apiRoot(base string) string {
 
 // outboundReq 一条候选的出站请求参数(密文已解密)。
 type outboundReq struct {
-	URL        string
-	Proto      string // 出站协议
-	Method     string
-	Body       []byte
-	APIKey     string
-	Stream     bool
-	QueryParam map[string]string // 少量 provider 补参(如 Azure api-version)
+	URL         string
+	Proto       string // 出站协议
+	Method      string
+	Body        []byte
+	APIKey      string
+	Stream      bool
+	QueryParam  map[string]string  // 少量 provider 补参(如 Azure api-version)
+	ChannelType domain.ChannelType // 出站渠道类型;opencode 时补会话头(见 setOutboundHeaders)
+	SessionID   string             // 会话标识(见 session.go);仅 opencode 出站写进 header
 }
 
 // buildOutbound 依据入站协议/操作与候选渠道拼出站请求。
 // look 供 a2o 回填上一轮的 reasoning_content(同协议透传与 o2a 不使用,可传 nil)。
 // originModel 非空时把请求体的 model 改写成渠道侧真实模型名(统一名重命名场景),
 // 同协议与跨协议路径都生效。
-func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool, look translate.ReasoningLookup, originModel string) (*outboundReq, error) {
+// sessionID 为该请求的会话标识(见 session.go),带上后由 setOutboundHeaders 决定是否写进
+// opencode 出站头。
+func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool, look translate.ReasoningLookup, originModel, sessionID string) (*outboundReq, error) {
 	key, err := secret.Decrypt(ch.APIKeyCipher)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt channel key: %w", err)
@@ -156,7 +168,10 @@ func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []by
 		}
 	}
 	base := apiRoot(ch.BaseURL)
-	req := &outboundReq{APIKey: key, Proto: outProto, Stream: stream, Method: http.MethodPost}
+	req := &outboundReq{
+		APIKey: key, Proto: outProto, Stream: stream, Method: http.MethodPost,
+		ChannelType: ch.ChannelType, SessionID: sessionID,
+	}
 	if inProto == outProto {
 		req.Body = body // 同协议 fast path:原样透传
 	} else {
@@ -197,7 +212,7 @@ func replaceBodyModel(body []byte, model string) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-func setOutboundHeaders(h http.Header, req *outboundReq) {
+func (r *Relay) setOutboundHeaders(h http.Header, req *outboundReq) {
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "application/json")
 	if req.Proto == ProtoAnthropic {
@@ -208,6 +223,15 @@ func setOutboundHeaders(h http.Header, req *outboundReq) {
 	}
 	if req.Stream {
 		h.Set("Accept", "text/event-stream")
+	}
+	// opencode 渠道专属:必带会话头(上游据此路由 + 命中提示词缓存,缺失即 400),
+	// 并自报身份 UA(文档要求客户端别用通用 Go-http-client)。门控集中在此 ——
+	// 「什么该发给 opencode 上游」单点定义,绝不泄漏到其它上游。
+	if req.ChannelType == domain.ChannelTypeOpenCode {
+		if req.SessionID != "" { // 空串不写:上游把「空但存在」的头仍视为缺失
+			h.Set(headerOpenCodeSession, req.SessionID)
+		}
+		h.Set("User-Agent", r.cfg.UserAgent)
 	}
 }
 
@@ -242,7 +266,7 @@ func (r *Relay) doNonStream(ctx context.Context, client *http.Client, req *outbo
 	if err != nil {
 		return nil, err
 	}
-	setOutboundHeaders(httpReq.Header, req)
+	r.setOutboundHeaders(httpReq.Header, req)
 	t0 := time.Now()
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -376,7 +400,7 @@ func (r *Relay) doStream(ctx context.Context, client *http.Client, req *outbound
 	if err != nil {
 		return nil, err
 	}
-	setOutboundHeaders(httpReq.Header, req)
+	r.setOutboundHeaders(httpReq.Header, req)
 	t0 := time.Now()
 	resp, err := client.Do(httpReq)
 	if err != nil {

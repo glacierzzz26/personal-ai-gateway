@@ -144,6 +144,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
    **一旦开始回 2xx 流即不可换上游**(failover 窗口 = 首字节前)。
    出站 client 按 (proxy, skipTLS, 请求超时) 三元组缓存复用 Transport(连接池不再每请求重建);
    该超时只作**响应头阶段**硬上限(`ResponseHeaderTimeout`),流式拿到响应头后交给看门狗。
+   出站头策略集中在 `setOutboundHeaders`;**仅对 `channel_type=opencode` 的渠道**注入会话头
+   `x-opencode-session`(缺失即上游 400,取值见 §5.9)与专用 UA,不泄漏到其它上游。
 4. **流式超时口径**(见 §5.1)。
 5. 记账:cost = 命中 offer 单价 × token(**四价**各计一项:in/out/cache_read/cache_write;缓存写价缺失
    回落该时刻生效的输入价,见 §5.7);流式以结束块权威计数(流被中断时用已嗅探到的部分 + 输入估算兜底);
@@ -512,6 +514,32 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
 
 **不做的事:** 不因零价**自动停用**存量供给源(存量可能是正常运行、只是刚巧没绑官方价);闸门只挡
 **状态迁移**(启用那一步),存量原样保留,靠读接口置灰引导人工补价。
+
+### 5.9 opencode 出站会话头(`x-opencode-session`)
+
+**问题。** opencode Go 渠道(`channel_type=opencode`,base `https://opencode.ai/zen/go/v1`)要求客户端
+**每个对话**在 `x-opencode-session` 里带一个**稳定**会话 ID —— 上游据此做路由与**提示词缓存**,缺失即
+直接回 **400**(`Request is missing x-opencode-session and cannot be routed efficiently`)。旧 `setOutboundHeaders`
+出站只设固定的几个头(Content-Type / Accept / 鉴权 / stream),**把客户端带来的会话头整个丢掉** → 该渠道 400。
+
+**取值优先级链(`resolveSessionID`,入站解析一次、随请求缓存)。** 依次取,命中即止:
+
+1. 入站 `x-opencode-session` —— 来自 opencode 生态的客户端,**原样透传**;
+2. 入站 `X-Claude-Code-Session-Id` —— Claude Code 每会话稳定、跨会话互异的 UUID v4;
+3. 入站体 `metadata.user_id`(内嵌 JSON 字符串,二次 `Unmarshal` 取其中 `.session_id`)—— 头缺失时的兜底;
+4. **兜底**:由 `token.sha256`(令牌查找哈希,非明文 key,不可猜)派生一个**确定性 UUID 形状**串,
+   保证任何客户端都能被路由。
+
+前三级任一命中即返回 —— Claude Code 恒命中 2/3,兜底极少触发。`metadata.user_id` 的解析对
+缺失/类型不符/任一层失败**一律返回空串**,绝不让它使请求失败(畸形 metadata 不 400、不 panic)。
+
+**门控集中在 `setOutboundHeaders` 一处**(「什么该发给 opencode 上游」单点定义):仅当
+`channel_type=opencode` 时写 `x-opencode-session`(值非空才写 —— 上游把「空但存在」的头仍视为缺失)与
+专用 `User-Agent`(opencode 文档要求客户端自报身份,不用通用 `Go-http-client/1.1`);其它渠道一概不碰,
+不向第三方上游泄漏该头。
+
+**局限(刻意取舍)。** 兜底 ID 是 **per-token** 而非 per-conversation —— 同一令牌的多个对话共用一条路由。
+这是「宁可粗也别 400」的选择;因 Claude Code 恒命中 2/3,影响面很小。
 
 ## 6. 管理 REST 契约(v2;会话鉴权)
 

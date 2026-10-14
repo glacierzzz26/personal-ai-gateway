@@ -92,7 +92,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 - `internal/secret` AES-GCM 渠道密钥(主密钥 `GW_MASTER_KEY` 或 `key_dir` 下 `gateway.master.key` 0600)
 - `internal/engine` 选路决策:候选(启用供给源 ∩ 未熔断渠道 ∩ 命中规则)→ 策略排序 → 重试/兜底
 - `internal/pricing` 官方价来源:commandcode 单页锚点(**唯一来源**,opencode zen 来源已于 v16 删除,见 DESIGN §5.6)+ **订阅计划页**(CC GOAT / opencode Go,按模型派生成本系数,见 DESIGN §5.6.1)+ 厂商登记表 + 手工录入 + 分时选价;来源页新增未知厂商时容错(免费行豁免、付费行跳过并计入 `unmappedSkipped`,不整批硬错)
-- `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账)
+- `internal/proxy` 转发内核 + 跨协议翻译(anthropic ↔ openai,流式 + usage 记账;opencode 渠道出站注入 `x-opencode-session` 会话头,见 DESIGN §5.9)
 - `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生;空闲 1h + 7 天绝对上限,滑动续期)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管
 - `web-v2/` 管理台前端源码(React 18 + antd v5 + react-query + echarts)

@@ -15,7 +15,7 @@ import (
 // 同时断言 scope 标注(模型级→"model" / 厂商级→"vendor" / 都没有→"")。
 func TestCostRatioThreeTier(t *testing.T) {
 	st := storetest.Open(t)
-	gw := NewGateway(st, engine.New(st), NewRelay(st))
+	gw := NewGateway(st, engine.New(st), NewRelay(st, "test"))
 
 	en := true
 	ch, err := st.CreateChannel(domain.ChannelInput{

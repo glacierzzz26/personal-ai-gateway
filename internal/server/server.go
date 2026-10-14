@@ -47,7 +47,7 @@ type Server struct {
 
 func New(cfg config.Config, st *store.Store) *Server {
 	eng := engine.New(st)
-	rl := proxy.NewRelay(st)
+	rl := proxy.NewRelay(st, cfg.Version)
 	gw := proxy.NewGateway(st, eng, rl)
 	return &Server{
 		cfg: cfg, st: st, log: slog.Default(),

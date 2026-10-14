@@ -14,3 +14,12 @@ const (
 	OpChat        = "chat"
 	OpCountTokens = "count_tokens"
 )
+
+// opencode 出站会话头相关名。http.Header.Set 会把名规范成 MIME 形态
+// (X-Opencode-Session),HTTP 头名大小写不敏感,上游按名取不受影响。
+const (
+	// headerOpenCodeSession opencode Go 出站必带:上游据此路由 + 命中提示词缓存,缺失即 400。
+	headerOpenCodeSession = "x-opencode-session"
+	// headerClaudeSession Claude Code 每会话稳定、跨会话互异的 UUID(v4)。
+	headerClaudeSession = "X-Claude-Code-Session-Id"
+)
