@@ -541,6 +541,27 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
 **局限(刻意取舍)。** 兜底 ID 是 **per-token** 而非 per-conversation —— 同一令牌的多个对话共用一条路由。
 这是「宁可粗也别 400」的选择;因 Claude Code 恒命中 2/3,影响面很小。
 
+### 5.10 commandcode 上游瞬态 400 的重试(可重试状态码扩展)
+
+**问题。** commandcode 上游(`api.commandcode.ai`)在**并发压力**下会把**完全合法**的请求随机判成
+**400**,响应为泛化的 `{"message":"invalid request error trace_id: <hex>"}`。实测(同一失败体重放):
+顺序约 5%、8 并发可达约 20% 的请求被这样误判,且同一 body 重放可在 200/400 间**任意翻转** —— 与请求
+内容**无关**,纯上游侧瞬态。它既不是 429 也不是 5xx,旧 `retryableHTTP` 会直接 `break`,把这类本可自愈
+的请求当硬失败回给客户端(表现为 Claude Code 偶发 `API Error: 400 invalid request error`)。
+
+**判据(单一真源 `retryableUpstream`)。** 在 `retryableHTTP` 之上,额外把
+**(渠道类型 = commandcode) ∧ (状态 = 400) ∧ (响应体含字面量 `invalid request error`)** 判为可重试。
+该字面量是 commandcode 泛化包装的**空格形态**;请求自身真有问题时它回的是**带成因**的 400
+(如 `Too small: expected number to be >0`、`Model "..." is not supported on this endpoint.`、
+`INVALID_REQUEST_BODY`),**不含**此字面量 —— 故不会误重试确定性错误。
+
+**非流与流式两条转发路径**共用该判据(`forwardOnceNonStream` / `forwardStream`);可重试即走既有的
+`plan.Retry` 轮次(`attemptSequence`,同一候选渠道重复),默认 `max_retries=2`,故单次瞬态 400 基本
+必被救回。改动只影响「哪些状态码值得重试」,不动选路/计费/日志语义。
+
+**不做的事:** 不对 commandcode 的**所有** 400 一刀切重试(会拖慢真·坏请求的失败路径);不引入针对该上游的
+并发闸门(重试已足够,且并发限流会抬高常态延迟)——若日后观测到重试仍大面积失败,再评估并发限流。
+
 ## 6. 管理 REST 契约(v2;会话鉴权)
 
 | 方法与路径 | 作用 |
