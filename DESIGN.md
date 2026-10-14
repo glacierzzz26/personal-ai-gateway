@@ -47,7 +47,7 @@ cmd/gateway     组装 config → 主密钥(secret)→ store(迁移)→ server
 internal/config listen/db_dsn/key_dir/web_dir/tls;业务数据不进配置
 internal/domain v2 实体 DTO(JSON tag,兼 API body 与展示字段)
 internal/secret AES-GCM(渠道 api_key);主密钥 GW_MASTER_KEY 或 key_dir 下 gateway.master.key(0600)
-internal/store  PostgreSQL(单基线 DDL + v15 起增量步骤,schemaVersion=16;源码 SQL 写 `?`,驱动边界重绑为 `$n`);
+internal/store  PostgreSQL(单基线 DDL + v15 起增量步骤,schemaVersion=18;源码 SQL 写 `?`,驱动边界重绑为 `$n`);
                 channels/models/model_offers/official_prices/channel_vendor_costs/channel_model_cost_ratios/
                 rules/tokens/admins/users/request_logs/settings 仓库;时区聚合(ts 存 UTC,桶/本地化按 tz_offset_min 换算)
 internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
@@ -336,6 +336,22 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
 > **仅当** CC 确有该连字符孪生行(存在性守卫,避免误伤 CC 自身就用点号的 `qwen3.6-plus`);随后
 > `DELETE FROM official_prices WHERE source='opencode'`。两条语句均幂等。
 
+> ⚠️ **绑定口径归位(v18 迁移,含数据)。** v16 只折了**已绑定行**的点号(且要求 CC 有该厂商的连字符孪生);
+> 两类病根仍留着:① **模型名末段带点号**者(`deepseek/deepseek-v4.1-flash`)在自动回填里折不出连字符 slug,
+> 与官方价名对不上 → **永不绑定**;② 已绑到**陈旧 slug** 的行(如 id 17/20 绑着遗留的 `deepseek-flash`,
+> 非 CC 现行页价),因绑定**非空**,自动回填(只碰双空行)**永不纠正**。两者都让计费按 `plan.OfficialModelName`
+> 点查系数/官方价时落空 → 成本静默按 1.0(前端模型抽屉显示「系数未设」)。故:
+> - **回填匹配折点号**(Go 侧 `officialSlugKey`,`internal/store/official_bindings.go`):在 `canonicalModelKey`
+>   之上再把 `.` 折成 `-`,**两侧都折**——既能命中连字符 slug,又保住 CC 自身就用点号的 slug(`qwen3.6-plus`);
+>   写回时仍存 **verbatim 的 `official_prices.model_name`**,保持「绑定 = 一条真实官方价名」不变式。之后新渠道/新模型
+>   的自动绑定不再漏点号名。**刻意不改 `canonicalModelKey`**——它带 `rawBare` 闸门,服务渠道同步归并语义
+>   (见 `models.go` 的 `GetModelByCanonical`);在它里折点号会让带点号的裸名不再被当作「裸名」,反而拆出重复模型。
+> - **迁移归位**(`schemaSteps[18]`):模型名末段(`regexp_replace(name,'^.*/','')`)小写、点号折连字符后
+>   **唯一致命中**一条 commandcode 官方价行、且当前绑定与之不同 → 改绑(含补绑双空行)。**只折模型名侧**,
+>   写回 `c.model_name`,与 Go 侧折两侧的**刻意不对称**(SQL 只动非空陈旧 + 双空行,最保守)。幂等:改绑后
+>   `official_model_name = c.model_name`,再跑不再命中。安全:同 slug 多厂商跳过(交人工);无 CC 命中的(如模型
+>   `deepseek-flash` 本身)不动。
+
 > ℹ️ **来源判定不再按渠道类型。** `PriceSourceForChannelType` 已删除;`resolveBilling` / `CostQuote` 一律用
 > `domain.PriceSourceCommandCode`。`official_prices.source` 列与唯一键保留(单来源,留路 + 保住消歧语义)。
 
@@ -417,6 +433,8 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
   匹配不到模型 → 静默回落 1.0(不折扣)。CC 的 slug 本无点号,归一对其是 no-op —— 两来源因此**共用同一套
   「连字符 = 官方价口径」的键**。旧的「各渠道按自身来源 slug 键控、不跨源混用」口径**已废**(它与「绑定是模型级
   单值」相矛盾,正是 opencode 系数绑不上模型的病根);存量点号行由 **v17 迁移**归一/清理。
+  同一「连字符 = 官方价口径」也扩到了**绑定侧**:官方价自动回填的匹配键 `officialSlugKey` 同样折点号(两侧都折),
+  否则带点号的模型名永远绑不上连字符 slug(见 §5.6 的 v18 归位);存量陈旧/未绑定甩由 **v18 迁移**归位。
 - **额度单元格取现价**(`planCreditsOfCell`):折扣行形如
   `<button><s>$20</s><span>$40</span>…</button>`,`<s>` 是原值、裸值才是现额度;故按节点走并**跳过删除线**,
   不复用 `ccParsePrice`(它刻意不递归进 `<button>`)。
@@ -618,7 +636,7 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
 ## 9. 迁移与留档
 
 - **存储 = PostgreSQL(单一真源,无双驱动)**。SQLite 整体退役;表结构由一份**单基线 DDL**
-  (`internal/store/schema.go` 的 `baselinePG`)一次建出,`schemaVersion = 16`:首启建 `schema_migrations`
+  (`internal/store/schema.go` 的 `baselinePG`)一次建出,`schemaVersion = 18`:首启建 `schema_migrations`
   并播入版本 16,SQLite 时期的 14 步历史迁移(m0001..m0014)**不重放**。
 - 为什么是单基线而非把 14 步逐条 port 到 PG:生产/测试库都走**整库搬运**(见下),PG 侧没有历史要重放;
   忠实重建 m0011 的 LIKE 回填、m0014 的表重建只是无谓 churn。故 `baselinePG` 直接建出「当前终态」的表。
@@ -627,7 +645,7 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
   两条路都**单事务**;缺步骤(`schemaSteps[v]` 未登记)即**硬错**,不静默跳版。为什么加增量:直接 bump 版本会让
   旧库重跑基线 → `CREATE TABLE admins` 冲突。**新库的终态表必须同时反映在 `baselinePG` 与对应 `schemaSteps[v]`。**
 - **版本号语义不变**:`SchemaVersion()`(`/healthz` 的 `schema` 字段)与 `upgrade.sh` 的降级护栏照旧用它;
-  新迁移一律追加式(当前头 `schemaVersion = 16`,`deploy/scripts/lib-version.sh` 的 `gw_schema_head` 自动读出)。
+  新迁移一律追加式(当前头 `schemaVersion = 18`,`deploy/scripts/lib-version.sh` 的 `gw_schema_head` 自动读出)。
 - **类型映射(刻意最小改动)**:时间戳/`ts` 仍 `text`(UTC RFC3339Nano,**不转 `timestamptz`**);
   布尔仍 `bigint` 0/1(**不转 `boolean`**);JSON 仍 `text`(**不转 `jsonb`**);金额 `REAL` → `double precision`
   (**不用 `numeric`** —— numeric 扫不进 `*float64`);所有整数列 `bigint`;自增主键 →
