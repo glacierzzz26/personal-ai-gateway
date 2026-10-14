@@ -95,6 +95,31 @@ func TestModelUpdateKeepsBindingAndFields(t *testing.T) {
 	}
 }
 
+// TestBackfillFoldsDotsInModelName 模型名末段带点号、官方价 slug 用连字符:折点号后应命中绑定。
+// 计费按官方价 slug 的连字符口径点查(见 officialSlugKey);带点号的模型名若不折点号,永远绑不上
+// → 系数/官方价全落空、成本静默按 1.0。双来源同厂商 —— 与既有归并语义正交。
+func TestBackfillFoldsDotsInModelName(t *testing.T) {
+	st := newTestStore(t)
+	if _, err := st.UpsertOfficialPrice(domain.OfficialPriceRow{
+		Provider: domain.ProviderZhipu, ModelName: "glm-5-3-flash",
+		Currency: domain.CurrencyCNY, InputPrice: 1, OutputPrice: 2,
+	}); err != nil {
+		t.Fatalf("upsert official price: %v", err)
+	}
+	m, err := st.CreateModel(domain.ModelInput{Name: "z-ai/glm-5.3-flash"})
+	mustNoErr(t, err, "create model")
+
+	fills, err := st.BackfillOfficialBindings(false)
+	mustNoErr(t, err, "backfill")
+	if len(fills) != 1 || fills[0].OfficialName != "glm-5-3-flash" {
+		t.Fatalf("点号名应折点号命中连字符官方价, got %+v", fills)
+	}
+	got, _ := st.GetModel(m.ID)
+	if got.OfficialVendor != domain.ProviderZhipu || got.OfficialModelName != "glm-5-3-flash" {
+		t.Errorf("绑定 = %s/%s, want 智谱/glm-5-3-flash", got.OfficialVendor, got.OfficialModelName)
+	}
+}
+
 // TestBackfillDualSourceSameSlugNotAmbiguous 双来源同厂商同 slug **不**构成回填歧义 ——
 // 歧义判据是**厂商**,两行同 provider 只算一个键,故仍能唯一回填。
 func TestBackfillDualSourceSameSlugNotAmbiguous(t *testing.T) {

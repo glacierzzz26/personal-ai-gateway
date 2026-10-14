@@ -37,7 +37,8 @@
 > 派生键**归一为连字符**(opencode 页的点号 slug `.`→`-`,与官方价绑定 `models.official_model_name` / 计费的
 > `plan.OfficialModelName` 同口径),否则计费点查不到、成本静默按 1.0 计;**人工覆盖行 `source=manual` 不被覆盖也不被删**,
 > 已下线的旧 plan 行随同步 prune。查不到模型级时可退回厂商级 `channel_vendor_costs.ratio`(手工兜底)。
-> 详见 DESIGN §5.6.1。
+> v18 又把**绑定侧**归到同一口径:官方价自动回填的匹配键折点号(`officialSlugKey`),并把存量陈旧/未绑定的
+> 点号名模型(migrate 到正确连字符 slug)一并归位 —— 否则点号名模型永不绑定、成本静默按 1.0。详见 DESIGN §5.6.1。
 
 - **倍率**:`settings.price_multiplier`(全局默认);`model_offers.rate_override`(可空,单模型覆盖)—— 仿现有 `override_price` 套路。本期只做全局,单模型字段留而不用。
 - **毛利** = 本站价 − 成本,**只在管理面**出现,绝不出现在用户面。

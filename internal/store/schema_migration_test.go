@@ -195,3 +195,97 @@ func TestMigrateFromV16NormalizesModelRatioSlugs(t *testing.T) {
 		t.Errorf("重开后连字符键应仍在: err %v", e)
 	}
 }
+
+// TestMigrateFromV17RebindsFoldedOfficialBindings v17 → v18 的官方价绑定归位:
+// 模型名末段带点号者折点号后唯一命中一条 commandcode 官方价行 → 改绑(含补绑双空行);
+// 已绑到陈旧 slug 的同样改绑;已正确的 / 无 CC 孪生的 / 同 slug 多厂商歧义的不动。
+// 这是「点号名模型永远绑不上连字符官方价 → 成本系数/官方价点查全落空」的数据修复。
+func TestMigrateFromV17RebindsFoldedOfficialBindings(t *testing.T) {
+	dsn := pgtest.SchemaDSN(t)
+
+	st, err := Open(dsn)
+	mustNoErr(t, err, "first open")
+
+	putCC := func(p domain.Provider, model string) {
+		t.Helper()
+		q := mkOfficialPrice(p, model, "https://example.test/c", 1, 2)
+		q.Source, q.Currency, q.BillingShape = domain.PriceSourceCommandCode, domain.CurrencyUSD, domain.ShapeFlat
+		_, e := st.UpsertOfficialPrice(q)
+		mustNoErr(t, e, "upsert cc "+model)
+	}
+	putCC(domain.ProviderDeepSeek, "deepseek-v4-flash")
+	putCC(domain.ProviderDeepSeek, "deepseek-v4-1-flash")
+	putCC(domain.ProviderZhipu, "glm-5-3-flash")
+	putCC(domain.ProviderQwen, "flash-x")  // 同 slug 两厂商 → 歧义
+	putCC(domain.ProviderZhipu, "flash-x") //
+
+	insModel := func(name, vendor, off string) {
+		t.Helper()
+		now := nowRFC3339()
+		_, e := st.db.Exec(`INSERT INTO models (name, official_vendor, official_model_name, created_at, updated_at)
+			VALUES (?,?,?,?,?)`, name, vendor, off, now, now)
+		mustNoErr(t, e, "insert model "+name)
+	}
+	insModel("deepseek/deepseek-v4.1-flash", string(domain.ProviderDeepSeek), "deepseek-flash") // 陈旧 → 改绑
+	insModel("deepseek/deepseek-v4-flash", string(domain.ProviderDeepSeek), "deepseek-flash")   // 陈旧 → 改绑
+	insModel("deepseek-flash", string(domain.ProviderDeepSeek), "deepseek-flash")               // 无 CC 孪生 → 不动
+	insModel("x/deepseek-v4-flash", string(domain.ProviderDeepSeek), "deepseek-v4-flash")       // 已正确 → 不动
+	insModel("z-ai/glm-5.3-flash", "", "")                                                      // 双空 → 补绑
+	insModel("vendor/flash-x", string(domain.ProviderQwen), "old-slug")                         // 歧义 → 不动
+
+	// 打回 v17:让 step 18 重跑。
+	if _, err := st.db.Exec(`DELETE FROM schema_migrations`); err != nil {
+		t.Fatalf("clear version: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (17, ?)`, nowRFC3339()); err != nil {
+		t.Fatalf("set v17: %v", err)
+	}
+	mustNoErr(t, st.Close(), "close")
+
+	st2, err := Open(dsn)
+	mustNoErr(t, err, "reopen")
+	defer st2.Close()
+	sv, _ := st2.SchemaVersion()
+	mustEqual(t, sv, schemaVersion, "升级后 = schemaVersion")
+
+	binding := func(s *Store, name string) (string, string) {
+		t.Helper()
+		var v, o string
+		mustNoErr(t, s.db.QueryRow(`SELECT official_vendor, official_model_name FROM models WHERE name=?`, name).Scan(&v, &o), "read binding "+name)
+		return v, o
+	}
+	if _, o := binding(st2, "deepseek/deepseek-v4.1-flash"); o != "deepseek-v4-1-flash" {
+		t.Errorf("点号名+陈旧 slug 应改绑 deepseek-v4-1-flash: got %q", o)
+	}
+	if _, o := binding(st2, "deepseek/deepseek-v4-flash"); o != "deepseek-v4-flash" {
+		t.Errorf("点号名+陈旧 slug 应改绑 deepseek-v4-flash: got %q", o)
+	}
+	if _, o := binding(st2, "deepseek-flash"); o != "deepseek-flash" {
+		t.Errorf("无 CC 孪生的行不该被动: got %q", o)
+	}
+	if _, o := binding(st2, "x/deepseek-v4-flash"); o != "deepseek-v4-flash" {
+		t.Errorf("已正确的行不该被动: got %q", o)
+	}
+	if v, o := binding(st2, "z-ai/glm-5.3-flash"); o != "glm-5-3-flash" || v != string(domain.ProviderZhipu) {
+		t.Errorf("双空行应补绑 glm-5-3-flash/智谱: got %q/%q", v, o)
+	}
+	if _, o := binding(st2, "vendor/flash-x"); o != "old-slug" {
+		t.Errorf("同 slug 多厂商歧义不该被动: got %q", o)
+	}
+	// 无点号、无 CC 孪生的模型 deepseek-flash:再确认 vendor 也没被改。
+	if v, _ := binding(st2, "deepseek-flash"); v != string(domain.ProviderDeepSeek) {
+		t.Errorf("deepseek-flash 的 vendor 不该被动: got %q", v)
+	}
+
+	// 幂等:再开一次不再动。
+	mustNoErr(t, st2.Close(), "close2")
+	st3, err := Open(dsn)
+	mustNoErr(t, err, "third open")
+	defer st3.Close()
+	if _, o := binding(st3, "deepseek/deepseek-v4.1-flash"); o != "deepseek-v4-1-flash" {
+		t.Errorf("重开后仍应保持 deepseek-v4-1-flash: got %q", o)
+	}
+	if _, o := binding(st3, "z-ai/glm-5.3-flash"); o != "glm-5-3-flash" {
+		t.Errorf("重开后仍应保持 glm-5-3-flash: got %q", o)
+	}
+}
