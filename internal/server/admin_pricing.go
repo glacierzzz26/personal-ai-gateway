@@ -143,8 +143,9 @@ func providerCounts(m map[domain.Provider]int) []domain.ProviderCount {
 // 「Monthly credits / Monthly limit」即站主订阅买到的额度,系数 = 订阅价 ÷ 该模型额度。
 // 逐来源独立成败(单点网络抖动不该让两个来源的系数都白更);ErrType="fetch_failed"。
 //
-// 落库走 store.UpsertPlanRatios(source='plan'):**人工覆盖行(source='manual')不被覆盖** ——
-// 自动派生只是默认值,站主手改过的必须留住。
+// 落库走 store.SyncPlanRatios(source='plan'):**人工覆盖行(source='manual')不被覆盖** ——
+// 自动派生只是默认值,站主手改过的必须留住;同时**同步(prune)**该渠道不再出现的旧 plan 行
+// (slug 口径改版 / 模型下线留下的死键),见 store 注释。
 func (s *Server) fetchPlans(ctx context.Context) (domain.PlanFetchResult, int, string, error) {
 	out := domain.PlanFetchResult{Sources: []domain.PlanSourceResult{}}
 	settings, err := s.st.GetSettings()
@@ -204,7 +205,7 @@ func (s *Server) fetchPlans(ctx context.Context) (domain.PlanFetchResult, int, s
 
 		ratioMap := pricing.PlanAllowanceMap(allows)
 		for _, ch := range chans {
-			n, werr := s.st.UpsertPlanRatios(ch.ID, ratioMap)
+			n, werr := s.st.SyncPlanRatios(ch.ID, ratioMap)
 			if werr != nil {
 				sr.Error, sr.ErrorType = werr.Error(), "store_error"
 				if firstErr == nil {

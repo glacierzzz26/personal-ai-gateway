@@ -85,8 +85,9 @@ func TestParseCCGoat(t *testing.T) {
 // opencode Go:第一张 Monthly limit(=Go 档)43 行,其中若干模型峰谷/分档各占两行(额度相同)
 // → 去重后 30 个 slug;2 个 Free 行。订阅价 $10;DeepSeek V4.1 Flash $80 → ratio 0.125。
 //
-// 注意 opencode 的 Model ID 用点("deepseek-v4.1-flash"),与 CC 的连字符 slug("deepseek-v4-1-flash")
-// 不同 —— 各渠道按其自身官方价来源的 slug 键控系数,不跨源混用。
+// opencode 的 Model ID 用点(页面原文 "deepseek-v4.1-flash"),但**落库键一律归一为连字符**
+// (planSlugCanonical 点号→连字符),与官方价绑定 / 计费 plan.OfficialModelName 同口径
+// (deepseek-v4-1-flash)—— 不归一则该渠道派生的系数永远匹配不到模型,成本静默按 1.0 计。
 func TestParseOCGo(t *testing.T) {
 	bySlug, price := planBySlug(t, ocGoFixture, parseOCGo)
 	if price != 10 {
@@ -99,10 +100,10 @@ func TestParseOCGo(t *testing.T) {
 		slug    string
 		credits float64
 	}{
-		{"deepseek-v4.1-flash", 80},
-		{"glm-5.3-flash", 60},
-		{"glm-5.3", 15},
-		{"grok-4.7", 15}, // 峰谷分档两行同名同额度 → 去重后仍在
+		{"deepseek-v4-1-flash", 80}, // 页面 "deepseek-v4.1-flash" → 归一
+		{"glm-5-3-flash", 60},       // 页面 "glm-5.3-flash" → 归一
+		{"glm-5-3", 15},             // 页面 "glm-5.3" → 归一
+		{"grok-4-7", 15},            // 页面 "grok-4.7" 峰谷分档两行同名同额度 → 去重后仍在 → 归一
 	} {
 		r, ok := bySlug[tc.slug]
 		if !ok {
@@ -113,7 +114,11 @@ func TestParseOCGo(t *testing.T) {
 			t.Errorf("%s credits = %v, want %v", tc.slug, r.CreditsUSD, tc.credits)
 		}
 	}
-	if r := bySlug["deepseek-v4.1-flash"]; !approx(10/r.CreditsUSD, 0.125) {
+	// 归一后与 CC 口径一致:连字符键可被 plan.OfficialModelName 点查到。
+	if _, ok := bySlug["deepseek-v4.1-flash"]; ok {
+		t.Error("点号 slug 不该出现在归一后的键里")
+	}
+	if r := bySlug["deepseek-v4-1-flash"]; !approx(10/r.CreditsUSD, 0.125) {
 		t.Errorf("deepseek ratio = %v, want 0.125", 10/r.CreditsUSD)
 	}
 }

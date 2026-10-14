@@ -97,8 +97,10 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
   为什么单列一张表而不并进 `channels`:渠道 PATCH 是整体覆盖语义,系数混进去会被「改个渠道名」误清空。
 - `channel_model_cost_ratios(channel_id FK, model_name, ratio, source, note, …, UNIQUE(channel_id, model_name))`
   — **模型级**成本系数(v15 新增),计费三级口径的**最高优先层**。`model_name` 取 `official_prices.model_name`
-  (canonical slug),与计费的 `plan.OfficialModelName` 对齐;`source` 区分 `plan`(订阅计划页自动派生)与
-  `manual`(人工覆盖)。自动写入**不覆盖** `manual` 行(`ON CONFLICT … WHERE source <> 'manual'`)。
+  (canonical slug;**订阅页的点号 slug 落库前归一为连字符** `.`→`-`,见 §5.6.1),与计费的 `plan.OfficialModelName`
+  对齐;`source` 区分 `plan`(订阅计划页自动派生)与
+  `manual`(人工覆盖)。自动写入**不覆盖** `manual` 行(`ON CONFLICT … WHERE source <> 'manual'`),
+  且同步(prune)清除本渠道不再出现的旧 plan 行。
   与厂商级的关系:**模型级 > 厂商级 > 1.0**(见 §5.6「订阅计划来源」)。
 - `settings(k PK, v)` — 网关参数 + `tz_offset_min`(默认 +480 Asia/Shanghai)+ `public_base_url`(生成配置用)。
 
@@ -408,23 +410,31 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
   第一列为 `Go` 的一行取 `$10/month`。`ratio = 订阅价 ÷ 该模型额度`。
 - **显示名 → slug**:CC 从估算表(`Model | Context | Intelligence`,`/models/<slug>` href + truncate span)
   建映射;opencode 从 `Model | Model ID` 表建映射(显示名先剥括号后缀 `(Off-Peak)`/`(≤ 256K tokens)`)。
-  落库键 `model_name` = slug,与 `official_prices.model_name` / 计费的 `plan.OfficialModelName` 对齐。
-- **两源 slug 口径不同**:CC 用连字符(`deepseek-v4-1-flash`),opencode 用点号(`deepseek-v4.1-flash`)。
-  各渠道按**自身来源**的 slug 键控系数,不跨源混用。
+- **slug 一律归一为连字符(官方价口径)**:opencode 的 Model ID 用**点号**(`deepseek-v4.1-flash`、`qwen3.8-max`),
+  而官方价绑定(`models.official_model_name`,来自 commandcode)与计费的 `plan.OfficialModelName` 用**连字符**
+  (`deepseek-v4-1-flash`、`qwen3-8-max`)。故落库前经 `planSlugCanonical` 把点号折成连字符(`.` → `-`)。
+  **不归一 = 计费点查不到系数**:计费按 `plan.OfficialModelName` 点查 `channel_model_cost_ratios`,点号键永远
+  匹配不到模型 → 静默回落 1.0(不折扣)。CC 的 slug 本无点号,归一对其是 no-op —— 两来源因此**共用同一套
+  「连字符 = 官方价口径」的键**。旧的「各渠道按自身来源 slug 键控、不跨源混用」口径**已废**(它与「绑定是模型级
+  单值」相矛盾,正是 opencode 系数绑不上模型的病根);存量点号行由 **v17 迁移**归一/清理。
 - **额度单元格取现价**(`planCreditsOfCell`):折扣行形如
   `<button><s>$20</s><span>$40</span>…</button>`,`<s>` 是原值、裸值才是现额度;故按节点走并**跳过删除线**,
   不复用 `ccParsePrice`(它刻意不递归进 `<button>`)。
 - **跳过并上报(非静默)**:免费/不限额/破折号 → `skippedFree`;显示名映射不到 slug → `skippedUnmapped`。
 - **护栏照搬官方价红线**:绝对行数地板(`< 10`)+ 相对地板(本次 < 上次落库行数的 80%)+ **可落库行为 0 即硬失败**;
   结构异常(行列表数不符)硬失败。宁可抓不到,也不落可疑值。
-- **落库语义**:`UpsertPlanRatios` 批量写 `source='plan'`,**人工覆盖行 `source='manual'` 不被覆盖**
-  (`ON CONFLICT … WHERE source <> 'manual'`)—— 自动值只是默认,站主手改过的必须留住。
+- **落库语义**:`SyncPlanRatios` **同步**该渠道的 `source='plan'` 行 —— 先 upsert 本次派生的模型,再 **prune**
+  掉本渠道不再出现的旧 plan 行(slug 口径改版 / 模型下线留下的「死键」,语义同官方价抓取的来源对账)。
+  **人工覆盖行 `source='manual'` 既不被覆盖也不被删**(`ON CONFLICT … WHERE source <> 'manual'`)——
+  自动值只是默认,站主手改过的必须留住。空派生集是 no-op(绝不当作「全删」)。
 - **逐来源独立成败**:单点网络抖动不该让两个来源的系数都白更;端点 `POST /official-prices/fetch-plans`,
   批量刷新 `POST /official-prices/refresh` 在 CC/opencode 之后跑计划来源第三块(计划失败不淹没官方价抓取)。
 
 **计费三级口径**(`internal/proxy/billing.go` 的 `costRatio`,成本 = 官方价 × 系数):
 ① **模型级** `channel_model_cost_ratios`(本小节自动派生 / 人工覆盖)> ② **厂商级** `channel_vendor_costs`(兜底)
-> ③ **1.0**(不折扣)。`CostQuote.ratioScope` 回标来源层级(`model`/`vendor`/空),供前端标注。
+> ③ **1.0**(不折扣)。模型级**点查键 = `plan.OfficialModelName`**(= `models.official_model_name`,连字符口径),
+> 故派生方必须把 slug 归一到同一口径(见上「slug 一律归一为连字符」)。`CostQuote.ratioScope` 回标来源层级
+>(`model`/`vendor`/空),供前端标注。
 
 ### 5.7 缓存写计费(cache_creation,m0013)
 
@@ -507,7 +517,7 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
 | `GET /official-prices/vendors` | 厂商登记表(`{provider, sourceUrl, manualOnly, manualCurrency}`);驱动抓取/手工录入入口与门禁 |
 | `POST /official-prices/fetch` `{provider}` · `POST /official-prices/manual` | 按厂商抓取(逐厂商路径,当前全部 ManualOnly)/ 手工录入(来源 URL 必填,缺省币种按厂商落地) |
 | `POST /official-prices/fetch-commandcode` | **官方价唯一来源**(issue #27;v16 起单来源):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, unmappedSkipped}`(`unmappedSkipped` = 付费但未登记厂商、被跳过的行) |
-| `POST /official-prices/fetch-plans` | **订阅计划来源**(见 §5.6.1):抓 CC GOAT / opencode Go 两个 $10 档订阅页,按模型派生成本系数写入匹配 `channel_type` 的渠道(`source=plan`,不覆盖 `manual`);回 `{sources:[{channelType, sourceUrl, contentSha256, planPriceUsd, totalRows, priced, written, channelsTouched, skippedFree, skippedUnmapped, error}]}`,逐来源独立成败 |
+| `POST /official-prices/fetch-plans` | **订阅计划来源**(见 §5.6.1):抓 CC GOAT / opencode Go 两个 $10 档订阅页,按模型派生成本系数(点号 slug 归一为连字符)**同步**匹配 `channel_type` 的渠道(`source=plan`;不覆盖 `manual`,并 prune 该渠道陈旧的 plan 行);回 `{sources:[{channelType, sourceUrl, contentSha256, planPriceUsd, totalRows, priced, written, channelsTouched, skippedFree, skippedUnmapped, error}]}`,逐来源独立成败 |
 | `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点(**破坏性**对账),再抓订阅计划页派生系数,再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, plans, plansError, totalUpserted, totalRemoved}`。超时 120s |
 | `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写四价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
 | `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |

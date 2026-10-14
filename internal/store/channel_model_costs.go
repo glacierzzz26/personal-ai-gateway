@@ -128,12 +128,16 @@ func (s *Store) ReplaceChannelModelCostRatios(channelID int64, rows []domain.Mod
 	return tx.Commit()
 }
 
-// UpsertPlanRatios 订阅计划页**批量**写入某渠道的模型级系数(source=plan)。
+// SyncPlanRatios 订阅计划页**批量同步**某渠道的模型级系数(source=plan)。
 //
-// 人工行(source=manual)不被覆盖:`ON CONFLICT … DO UPDATE … WHERE source <> 'manual'` ——
-// 自动派生只是「默认值」,站主手工改过的那几条必须留住(否则每次抓取都会把手填值冲掉)。
-// 返回实际写入/更新的行数。
-func (s *Store) UpsertPlanRatios(channelID int64, ratios map[string]float64) (int, error) {
+// 语义是「同步」而非「只增」:先把 map 里的模型 upsert 进去,再**删掉本渠道不再出现的旧 plan 行**
+// (slug 口径改版 / 模型从订阅页下线时,旧键会变成计费点查不到的「死键」,留着既误导管理面、
+// 又让成本静默按 1.0 计)。人工行(source=manual)从不被覆盖、也从不被删。
+//
+// 人工行不被覆盖:`ON CONFLICT … DO UPDATE … WHERE source <> 'manual'` —— 自动派生只是「默认值」,
+// 站主手工改过的那几条必须留住(否则每次抓取都会把手填值冲掉)。
+// 返回实际写入/更新的行数(不含删除数)。
+func (s *Store) SyncPlanRatios(channelID int64, ratios map[string]float64) (int, error) {
 	if channelID <= 0 {
 		return 0, fmt.Errorf("渠道 ID 非法: %d", channelID)
 	}
@@ -163,6 +167,34 @@ func (s *Store) UpsertPlanRatios(channelID int64, ratios map[string]float64) (in
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			written++
+		}
+	}
+	// prune:本渠道现有非 manual 行里,凡不在本次派生集合内的即「旧键」,删掉。
+	// 先读后删(同事务内不边遍历边改),行数有限(单渠道数十行)。
+	rows, err := tx.Query(`SELECT model_name FROM channel_model_cost_ratios
+		WHERE channel_id = ? AND source <> 'manual'`, channelID)
+	if err != nil {
+		return 0, fmt.Errorf("list plan ratios for prune: %w", err)
+	}
+	var stale []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if _, keep := ratios[name]; !keep {
+			stale = append(stale, name)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, name := range stale {
+		if _, err := tx.Exec(`DELETE FROM channel_model_cost_ratios
+			WHERE channel_id = ? AND model_name = ? AND source <> 'manual'`, channelID, name); err != nil {
+			return 0, fmt.Errorf("prune stale plan ratio %s: %w", name, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

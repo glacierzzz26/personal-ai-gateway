@@ -111,9 +111,9 @@ func TestReplaceChannelModelCostRatios(t *testing.T) {
 	}
 }
 
-// TestUpsertPlanRatiosDoesNotOverwriteManual 订阅页自动派生**不得覆盖人工行** ——
-// 自动值只是默认,站主手改过的必须留住;非人工行(plan/无)则可更新。
-func TestUpsertPlanRatiosDoesNotOverwriteManual(t *testing.T) {
+// TestSyncPlanRatiosDoesNotOverwriteManual 订阅页自动派生**不得覆盖人工行**,且**同步清除旧 plan 行** ——
+// 自动值只是默认,站主手改过的必须留住;非人工行(plan/无)则可更新;不再出现的旧 plan 行被删。
+func TestSyncPlanRatiosDoesNotOverwriteManual(t *testing.T) {
 	st := newTestStore(t)
 	chID := mkChannel(t, st, "cc")
 
@@ -121,13 +121,15 @@ func TestUpsertPlanRatiosDoesNotOverwriteManual(t *testing.T) {
 	mustNoErr(t, st.SetChannelModelCostRatio(chID, "manual-model", 0.05, "manual", "手改"), "seed manual")
 	// ② 旧 plan 行(上次抓取写入)。
 	mustNoErr(t, st.SetChannelModelCostRatio(chID, "plan-model", 0.9, "plan", ""), "seed plan")
+	// ③ 已从订阅页下线的旧 plan 行(本次派生的 map 里没有 → 应被 prune)。
+	mustNoErr(t, st.SetChannelModelCostRatio(chID, "stale-model", 0.9, "plan", ""), "seed stale")
 
-	written, err := st.UpsertPlanRatios(chID, map[string]float64{
+	written, err := st.SyncPlanRatios(chID, map[string]float64{
 		"manual-model": 1.0 / 6.0,  // 不得覆盖
 		"plan-model":   1.0 / 8.0,  // 应更新
 		"new-model":    1.0 / 15.0, // 应新增
 	})
-	mustNoErr(t, err, "upsert plan")
+	mustNoErr(t, err, "sync plan")
 	mustEqual(t, written, 2, "写入行数:plan 更新 + new 新增,manual 被挡下")
 
 	// 人工行纹丝不动。
@@ -144,6 +146,8 @@ func TestUpsertPlanRatiosDoesNotOverwriteManual(t *testing.T) {
 	if got, _ := st.ChannelModelRatio(chID, "plan-model"); got != 1.0/8.0 {
 		t.Errorf("plan 行未更新: %v, want 0.125", got)
 	}
+	// 旧 plan 行被 prune。
+	mustErrIs(t, func() error { _, e := st.ChannelModelRatio(chID, "stale-model"); return e }(), ErrNotFound, "stale plan 行应被删")
 	// 新行已落库,source=plan。
 	var src string
 	mustNoErr(t, st.db.QueryRow(`SELECT source FROM channel_model_cost_ratios WHERE channel_id=? AND model_name=?`,
@@ -156,10 +160,12 @@ func TestUpsertPlanRatiosDoesNotOverwriteManual(t *testing.T) {
 	nManual, _ := st.CountChannelModelRatiosBySource(chID, "manual")
 	mustEqual(t, nManual, 1, "manual 计数")
 
-	// 空 map 是 no-op,不报错也不写。
-	w, err := st.UpsertPlanRatios(chID, nil)
-	mustNoErr(t, err, "empty upsert")
+	// 空 map 是 no-op,不报错也不写、更不 prune(防御:空集绝不当作「全删」)。
+	w, err := st.SyncPlanRatios(chID, nil)
+	mustNoErr(t, err, "empty sync")
 	mustEqual(t, w, 0, "空 map 写入 0 行")
+	nPlan, _ = st.CountChannelModelRatiosBySource(chID, "plan")
+	mustEqual(t, nPlan, 2, "空 map 不得 prune 现有 plan 行")
 }
 
 // TestModelRatioScopedPerChannel 同一模型在不同渠道可有不同系数(CC 1/6 vs opencode 1/8)。
@@ -169,17 +175,17 @@ func TestModelRatioScopedPerChannel(t *testing.T) {
 	oc := mkChannel(t, st, "oc")
 
 	mustNoErr(t, st.SetChannelModelCostRatio(cc, "deepseek-v4-1-flash", 1.0/6.0, "plan", ""), "cc ratio")
-	mustNoErr(t, st.SetChannelModelCostRatio(oc, "deepseek-v4.1-flash", 1.0/8.0, "plan", ""), "oc ratio")
+	mustNoErr(t, st.SetChannelModelCostRatio(oc, "deepseek-v4-1-flash", 1.0/8.0, "plan", ""), "oc ratio")
 
 	if got, _ := st.ChannelModelRatio(cc, "deepseek-v4-1-flash"); got != 1.0/6.0 {
 		t.Errorf("cc ratio = %v", got)
 	}
-	if got, _ := st.ChannelModelRatio(oc, "deepseek-v4.1-flash"); got != 1.0/8.0 {
+	if got, _ := st.ChannelModelRatio(oc, "deepseek-v4-1-flash"); got != 1.0/8.0 {
 		t.Errorf("oc ratio = %v", got)
 	}
 	// 删除一个渠道的系数不影响另一个。
 	mustNoErr(t, st.DeleteChannelModelCostRatio(cc, "deepseek-v4-1-flash"), "delete cc")
-	if got, _ := st.ChannelModelRatio(oc, "deepseek-v4.1-flash"); got != 1.0/8.0 {
+	if got, _ := st.ChannelModelRatio(oc, "deepseek-v4-1-flash"); got != 1.0/8.0 {
 		t.Errorf("oc ratio 应不受影响, got %v", got)
 	}
 }
