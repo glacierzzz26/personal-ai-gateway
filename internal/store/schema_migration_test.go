@@ -99,9 +99,9 @@ func TestMigrateFromV15RebindsZenAndDropsZenRows(t *testing.T) {
 			VALUES (?,?,?,?,?)`, name, vendor, off, now, now)
 		mustNoErr(t, e, "insert model "+name)
 	}
-	insModel("gpt-5.6-sol", string(domain.ProviderOpenAI), "gpt-5.6-sol")        // ①改绑
-	insModel("Qwen/Qwen3.6-Plus", string(domain.ProviderQwen), "qwen3.6-plus")  // ②不动
-	insModel("orphan-1", string(domain.ProviderOpenAI), "gpt-9.9-x")            // ③不动
+	insModel("gpt-5.6-sol", string(domain.ProviderOpenAI), "gpt-5.6-sol")      // ①改绑
+	insModel("Qwen/Qwen3.6-Plus", string(domain.ProviderQwen), "qwen3.6-plus") // ②不动
+	insModel("orphan-1", string(domain.ProviderOpenAI), "gpt-9.9-x")           // ③不动
 
 	// 打回 v15:让 step 16 重跑。
 	if _, err := st.db.Exec(`DELETE FROM schema_migrations`); err != nil {
@@ -133,4 +133,65 @@ func TestMigrateFromV15RebindsZenAndDropsZenRows(t *testing.T) {
 	mustNoErr(t, st2.db.QueryRow(`SELECT COUNT(*) FROM official_prices WHERE source='commandcode'`).Scan(&cc), "count cc")
 	mustEqual(t, zen, 0, "opencode 行被清")
 	mustEqual(t, cc, 2, "commandcode 行保留")
+}
+
+// TestMigrateFromV16NormalizesModelRatioSlugs v16 → v17 的模型级系数键归一(点号 → 连字符):
+// 遗留的点号 model_name 与官方价绑定口径对齐;已成连字符孪生的点号行被删(保留权威连字符行);
+// 无点号的行不动。这是「opencode 渠道的派生系数因点号键点查不到模型、成本静默按 1.0 计」的数据修复。
+func TestMigrateFromV16NormalizesModelRatioSlugs(t *testing.T) {
+	dsn := pgtest.SchemaDSN(t)
+
+	st, err := Open(dsn)
+	mustNoErr(t, err, "first open")
+	chID := mkChannel(t, st, "oc")
+
+	// ① 遗留点号行,无连字符孪生 → 应被改名为连字符。
+	mustNoErr(t, st.SetChannelModelCostRatio(chID, "deepseek-v4.1-flash", 0.125, "plan", ""), "seed dot")
+	// ② 点号行 + 已存在的连字符孪生 → 点号行应被删,连字符行保留。
+	mustNoErr(t, st.SetChannelModelCostRatio(chID, "glm-5.3", 0.2, "plan", ""), "seed dot twin")
+	mustNoErr(t, st.SetChannelModelCostRatio(chID, "glm-5-3", 0.3, "plan", ""), "seed hyphen twin")
+	// ③ 无点号行 → 不动。
+	mustNoErr(t, st.SetChannelModelCostRatio(chID, "kimi-k3", 0.5, "plan", ""), "seed plain")
+
+	// 打回 v16:让 step 17 重跑。
+	if _, err := st.db.Exec(`DELETE FROM schema_migrations`); err != nil {
+		t.Fatalf("clear version: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (16, ?)`, nowRFC3339()); err != nil {
+		t.Fatalf("set v16: %v", err)
+	}
+	mustNoErr(t, st.Close(), "close")
+
+	st2, err := Open(dsn)
+	mustNoErr(t, err, "reopen")
+	defer st2.Close()
+	sv, _ := st2.SchemaVersion()
+	mustEqual(t, sv, schemaVersion, "升级后 = schemaVersion")
+
+	// ① 点号 → 连字符(值保留)。
+	if got, e := st2.ChannelModelRatio(chID, "deepseek-v4-1-flash"); e != nil || got != 0.125 {
+		t.Errorf("① 点号行应改名为连字符且值不变: got %v, err %v", got, e)
+	}
+	if _, e := st2.ChannelModelRatio(chID, "deepseek-v4.1-flash"); e == nil {
+		t.Error("① 旧点号键应已不存在")
+	}
+	// ② 点号孪生被删,连字符行保留。
+	if _, e := st2.ChannelModelRatio(chID, "glm-5.3"); e == nil {
+		t.Error("② 点号孪生应被删")
+	}
+	if got, e := st2.ChannelModelRatio(chID, "glm-5-3"); e != nil || got != 0.3 {
+		t.Errorf("② 连字符行应保留: got %v, err %v", got, e)
+	}
+	// ③ 无点号行不动。
+	if got, e := st2.ChannelModelRatio(chID, "kimi-k3"); e != nil || got != 0.5 {
+		t.Errorf("③ 无点号行不该被改: got %v, err %v", got, e)
+	}
+	// 幂等:再开一次不再动。
+	mustNoErr(t, st2.Close(), "close2")
+	st3, err := Open(dsn)
+	mustNoErr(t, err, "third open")
+	defer st3.Close()
+	if _, e := st3.ChannelModelRatio(chID, "deepseek-v4-1-flash"); e != nil {
+		t.Errorf("重开后连字符键应仍在: err %v", e)
+	}
 }

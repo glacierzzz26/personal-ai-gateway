@@ -33,8 +33,10 @@
 >
 > **成本系数(订阅计划页自动派生)**:站主每月 $10 订阅(CC GOAT / opencode Go),订阅页给**每个模型一份
 > 不同的月度额度**(CC `Monthly credits` / opencode `Monthly limit`)。故**模型级**成本系数 = 订阅价 ÷ 该模型额度,
-> 由 `POST /official-prices/fetch-plans`(批量刷新一并跑)自动写入 `channel_model_cost_ratios`(`source=plan`),
-> **人工覆盖行 `source=manual` 不被覆盖**。查不到模型级时可退回厂商级 `channel_vendor_costs.ratio`(手工兜底)。
+> 由 `POST /official-prices/fetch-plans`(批量刷新一并跑)自动**同步**进 `channel_model_cost_ratios`(`source=plan`):
+> 派生键**归一为连字符**(opencode 页的点号 slug `.`→`-`,与官方价绑定 `models.official_model_name` / 计费的
+> `plan.OfficialModelName` 同口径),否则计费点查不到、成本静默按 1.0 计;**人工覆盖行 `source=manual` 不被覆盖也不被删**,
+> 已下线的旧 plan 行随同步 prune。查不到模型级时可退回厂商级 `channel_vendor_costs.ratio`(手工兜底)。
 > 详见 DESIGN §5.6.1。
 
 - **倍率**:`settings.price_multiplier`(全局默认);`model_offers.rate_override`(可空,单模型覆盖)—— 仿现有 `override_price` 套路。本期只做全局,单模型字段留而不用。

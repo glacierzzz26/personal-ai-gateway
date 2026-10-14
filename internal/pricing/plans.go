@@ -94,7 +94,8 @@ type planRow struct {
 
 // PlanAllowance 一个模型在订阅计划下的成本系数(落库/计费用)。
 //
-// ModelName 落 slug(= official_prices.model_name,可被 canonicalModelKey 绑定,与 CC/opencode 抓取一致)。
+// ModelName 落**归一后的** slug(= official_prices.model_name / models.official_model_name 口径,
+// 见 planSlugCanonical —— 点号一律折成连字符),方可被计费的 plan.OfficialModelName 点查到。
 type PlanAllowance struct {
 	ChannelType    domain.ChannelType `json:"channelType"`
 	ModelName      string             `json:"modelName"`
@@ -402,7 +403,8 @@ func ocSplitSuffix(display string) (base, label string) {
 }
 
 // planRowOf 解析一行额度表。display 为空的行(占位)跳过(返回零值 planRow,Display=="")。
-// 显示名会剥括号后缀(opencode 的 "(Off-Peak)"/"(≤ 256K tokens)")再映射 slug。
+// 显示名会剥括号后缀(opencode 的 "(Off-Peak)"/"(≤ 256K tokens)")再映射 slug，
+// 映射到的 slug 一律经 planSlugCanonical 归一为官方价绑定口径。
 func planRowOf(cells []*html.Node, iModel, iCredits int, slugByName map[string]string) planRow {
 	display := normalizeText(nodeText(cells[iModel]))
 	if display == "" {
@@ -428,8 +430,20 @@ func planRowOf(cells []*html.Node, iModel, iCredits int, slugByName map[string]s
 		r.Unmapped = true // 显示名映射不到 slug:由调用方跳过并上报
 		return r
 	}
-	r.Slug = slug
+	r.Slug = planSlugCanonical(slug)
 	return r
+}
+
+// planSlugCanonical 把订阅计划页解析出的模型 slug 归一为官方价绑定口径(点号 → 连字符)。
+//
+// opencode Go 页的「Model ID」用**点号**(deepseek-v4.1-flash、qwen3.8-max、grok-4.6),而官方价绑定
+// (models.official_model_name,来自 commandcode 的 /models/<slug>)与计费的 plan.OfficialModelName
+// 一律用**连字符**(deepseek-v4-1-flash、qwen3-8-max、grok-4-6)。计费按 OfficialModelName 点查模型级
+// 成本系数,不归一化则 opencode 渠道派生的系数行永远匹配不到模型,成本静默按 1.0 计(不折扣)。
+//
+// CC 的 slug 本无点号,归一对其是 no-op;两来源因此共用同一套「连字符=官方价口径」的键。
+func planSlugCanonical(slug string) string {
+	return strings.ReplaceAll(slug, ".", "-")
 }
 
 // ---------- 抓取入口 ----------

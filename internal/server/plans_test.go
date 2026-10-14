@@ -114,7 +114,7 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 	if cc.Priced != 53 || cc.Written != 52 {
 		t.Errorf("CC priced/written = %d/%d, want 53/52", cc.Priced, cc.Written)
 	}
-	// opencode:43 行 → 去重 30 个 slug,全写入。
+	// opencode:43 行 → 去重 30 个 slug(归一为连字符),全写入。
 	if oc.Priced != 30 || oc.Written != 30 {
 		t.Errorf("opencode priced/written = %d/%d, want 30/30", oc.Priced, oc.Written)
 	}
@@ -131,14 +131,18 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 	if got, _ := st.ChannelModelRatio(ccID, "gpt-5-6-sol"); !closeTo(got, 10.0/70.0) {
 		t.Errorf("gpt-5-6-sol ratio = %v, want 0.1428", got)
 	}
-	// opencode 渠道:30 行,连字符/点号 slug 按各自来源键控。
+	// opencode 渠道:30 行,**归一为连字符键**(页面点号 "deepseek-v4.1-flash" → "deepseek-v4-1-flash"),
+	// 与官方价绑定 / 计费 plan.OfficialModelName 同口径。
 	ocRows, err := st.ListChannelModelCostRatios(ocID)
 	mustNoErrT(t, err, "list oc ratios")
 	mustEqualT(t, len(ocRows), 30, "opencode 写入行数")
-	if got, _ := st.ChannelModelRatio(ocID, "deepseek-v4.1-flash"); !closeTo(got, 0.125) {
+	if got, _ := st.ChannelModelRatio(ocID, "deepseek-v4-1-flash"); !closeTo(got, 0.125) {
 		t.Errorf("opencode deepseek ratio = %v, want 0.125", got)
 	}
-	// 只写给匹配类型:CC 渠道不该有 opencode 的点号 slug,反之亦然。
+	// 点号键已归一:两个渠道都不该留下点号 slug。
+	if _, err := st.ChannelModelRatio(ocID, "deepseek-v4.1-flash"); err == nil {
+		t.Error("opencode 渠道不该留点号 slug(应归一并连字符)")
+	}
 	if _, err := st.ChannelModelRatio(ccID, "deepseek-v4.1-flash"); err == nil {
 		t.Error("点号 slug 不该出现在 CC 渠道")
 	}
