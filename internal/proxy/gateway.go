@@ -63,14 +63,15 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // inboundReq 一次 /v1 业务请求的收敛信息。
 type inboundReq struct {
-	op      string // messages | chat | count_tokens
-	inProto string // anthropic | openai
-	body    []byte
-	model   string // 客户端请求名(统一名或真实名)
-	stream  bool
-	ip      string
-	tool    string
-	token   domain.TokenRow
+	op        string // messages | chat | count_tokens
+	inProto   string // anthropic | openai
+	body      []byte
+	model     string // 客户端请求名(统一名或真实名)
+	stream    bool
+	ip        string
+	tool      string
+	sessionID string // 出站 opencode 会话标识(见 session.go);仅 opencode 渠道写进 header
+	token     domain.TokenRow
 }
 
 // parseModelStream 从 body 取 model/stream(两种协议都这两个顶层字段)。
@@ -114,6 +115,9 @@ func (g *Gateway) parseInbound(w http.ResponseWriter, r *http.Request, op string
 		return nil, false
 	}
 	in.token = token
+	// 会话标识(见 session.go):入站头/体 metadata 定出,仅 opencode 渠道出站时写进
+	// x-opencode-session。此时 body 已在内存、token 已解析,无额外读取。
+	in.sessionID = resolveSessionID(r, body, token)
 
 	if op != countOp {
 		model, stream, err := parseModelStream(body)
@@ -367,7 +371,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			continue
 		}
 		outProto := OutProto(ch.EgressProto)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), outboundModel(plan, at))
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), outboundModel(plan, at), in.sessionID)
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -471,7 +475,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 			continue
 		}
 		outProto := OutProto(ch.EgressProto)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), outboundModel(plan, at))
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), outboundModel(plan, at), in.sessionID)
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return

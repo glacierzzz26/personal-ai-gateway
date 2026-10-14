@@ -31,7 +31,7 @@ func newE2E(t *testing.T) *e2eEnv {
 	t.Helper()
 	st := storetest.Open(t)
 	eng := engine.New(st)
-	gw := NewGateway(st, eng, NewRelay(st))
+	gw := NewGateway(st, eng, NewRelay(st, "test"))
 	srv := httptest.NewServer(gw)
 	t.Cleanup(srv.Close)
 	return &e2eEnv{t: t, st: st, gw: gw, srv: srv}
