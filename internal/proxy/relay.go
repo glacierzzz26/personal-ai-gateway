@@ -257,6 +257,30 @@ func retryableHTTP(status int) bool {
 	return false
 }
 
+// transientCommandCode400 是 commandcode 上游泛化瞬态 400 的固定标记(空格形态)。
+// 真·坏请求回带成因的 400(见下),不含此字面量,故不会误判。
+const transientCommandCode400 = "invalid request error"
+
+// retryableUpstream 在 retryableHTTP 之外,额外识别 commandcode 上游的「瞬态 400」。
+//
+// 背景:commandcode(api.commandcode.ai)在并发压力下会把**完全合法**的请求随机判成 400,
+// 响应为泛化的 {"message":"invalid request error trace_id: <hex>"} —— 与请求内容无关
+// (实测同一 body 重放可在 200/400 间任意翻转:顺序 ~5%、8 并发可达 ~20%)。它既不是 429
+// 也非 5xx,旧逻辑(retryableHTTP)会直接 break,把这类本可自愈的请求当硬失败回给客户端。
+//
+// 判据:仅当渠道类型为 commandcode、状态 400、且响应体确为该泛化形态时判可重试。
+// 请求自身真有问题时 commandcode 回的是**带成因**的 400(如 "Too small: expected number to be >0"、
+// "Model \"...\" is not supported on this endpoint."),不含该字面量 —— 不会被重试,不误伤。
+// 瞬态 400 只有重试同一条渠道能救回,故走重试。
+func retryableUpstream(ch domain.ChannelRow, status int, body []byte) bool {
+	if retryableHTTP(status) {
+		return true
+	}
+	return ch.ChannelType == domain.ChannelTypeCommandCode &&
+		status == http.StatusBadRequest &&
+		bytes.Contains(body, []byte(transientCommandCode400))
+}
+
 // doNonStream 单候选非流请求:成功返回 2xx 原始体;失败读完整错误体。
 // 网络/超时错误以 upErr 返回(无 status/body)。
 func (r *Relay) doNonStream(ctx context.Context, client *http.Client, req *outboundReq, ch domain.ChannelRow, offer domain.OfferRead, timeoutMs int) (*attemptResult, error) {

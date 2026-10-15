@@ -396,7 +396,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 				firstErr = res
 			}
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
-			if !retryableHTTP(res.status) {
+			if !retryableUpstream(ch, res.status, res.body) {
 				break // 400/422 属请求自身问题,换渠道无益
 			}
 			continue
@@ -501,7 +501,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 				firstErr = res
 			}
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
-			if !retryableHTTP(res.status) {
+			if !retryableUpstream(ch, res.status, res.errBody) {
 				break
 			}
 			continue
