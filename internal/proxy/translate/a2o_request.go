@@ -10,7 +10,8 @@ import (
 // buildA2ORequest 把 anthropic /v1/messages 请求体改写为 openai /chat/completions 请求体。
 // 返回 outOp="chat"(供 outboundPath),改写后的 JSON,以及本地估算的输入 token。
 // look 命中时给 assistant 消息补回 reasoning_content(见 ReasoningLookup)。
-func buildA2ORequest(body []byte, stream bool, look ReasoningLookup) (outOp string, outBody []byte, estIn int, err error) {
+// forceReasoning=true 时缓存未命中也写 reasoning_content: ""(上游已确认要求该字段时的自愈重发)。
+func buildA2ORequest(body []byte, stream bool, look ReasoningLookup, forceReasoning bool) (outOp string, outBody []byte, estIn int, err error) {
 	var in aMessagesRequest
 	if err := json.Unmarshal(body, &in); err != nil {
 		return "", nil, 0, fmt.Errorf("translate a2o: invalid anthropic request: %w", err)
@@ -25,7 +26,7 @@ func buildA2ORequest(body []byte, stream bool, look ReasoningLookup) (outOp stri
 	sys := systemText(in.System)
 	var msgs []map[string]any
 	for _, m := range in.Messages {
-		msgs = append(msgs, rewriteMessage(m, look)...)
+		msgs = append(msgs, rewriteMessage(m, look, forceReasoning)...)
 	}
 	if sys != "" {
 		msgs = append([]map[string]any{{"role": "system", "content": sys}}, msgs...)
@@ -67,12 +68,12 @@ func buildA2ORequest(body []byte, stream bool, look ReasoningLookup) (outOp stri
 //
 //	user(纯文本)→ user;user(带 tool_result)→ 各 tool 消息(+残余文本置后为 user);
 //	assistant(text+tool_use)→ 单条 assistant(content+tool_calls)。
-func rewriteMessage(m aMessage, look ReasoningLookup) []map[string]any {
+func rewriteMessage(m aMessage, look ReasoningLookup, forceReasoning bool) []map[string]any {
 	switch m.Role {
 	case "user":
 		return userToOpenAI(m.Content)
 	case "assistant":
-		if o := assistantToOpenAI(m.Content, look); o != nil {
+		if o := assistantToOpenAI(m.Content, look, forceReasoning); o != nil {
 			return []map[string]any{o}
 		}
 	case "system": // 容忍罕见的 messages 内 system:并入 system 语义(这里只兜底,正常走顶层)
@@ -118,10 +119,10 @@ func userToOpenAI(raw json.RawMessage) []map[string]any {
 	return out
 }
 
-func assistantToOpenAI(raw json.RawMessage, look ReasoningLookup) map[string]any {
+func assistantToOpenAI(raw json.RawMessage, look ReasoningLookup, forceReasoning bool) map[string]any {
 	if s, ok := asTextString(raw); ok {
 		o := map[string]any{"role": "assistant", "content": s}
-		backfillReasoning(o, nil, s, look)
+		backfillReasoning(o, nil, s, look, forceReasoning)
 		return o
 	}
 	blocks := contentBlocks(raw)
@@ -157,7 +158,7 @@ func assistantToOpenAI(raw json.RawMessage, look ReasoningLookup) map[string]any
 	if len(calls) > 0 {
 		o["tool_calls"] = calls
 	}
-	backfillReasoning(o, aIDs, text.String(), look)
+	backfillReasoning(o, aIDs, text.String(), look, forceReasoning)
 	return o
 }
 
@@ -165,12 +166,19 @@ func assistantToOpenAI(raw json.RawMessage, look ReasoningLookup) map[string]any
 //
 // 只在命中时补:命中本身就证明「这个上游确实在用该字段」,因此不必按 provider 白名单,
 // 也不会把该字段塞给不认识它的上游(OpenAI 官方 / Azure 等)。
-func backfillReasoning(o map[string]any, toolUseIDs []string, text string, look ReasoningLookup) {
-	if look == nil {
-		return
+//
+// forceReasoning 例外:上游已用 400 明确要求回传(可能是缓存丢失/该轮 reasoning 为空),
+// 此时未命中也写空串 —— 上游只校验字段存在,空串即可让对话继续;
+// 下一次成功响应会重新把真实 reasoning 写入缓存。
+func backfillReasoning(o map[string]any, toolUseIDs []string, text string, look ReasoningLookup, forceReasoning bool) {
+	if look != nil {
+		if r := look.Lookup(toolUseIDs, text); r != "" {
+			o["reasoning_content"] = r
+			return
+		}
 	}
-	if r := look.Lookup(toolUseIDs, text); r != "" {
-		o["reasoning_content"] = r
+	if forceReasoning {
+		o["reasoning_content"] = ""
 	}
 }
 
