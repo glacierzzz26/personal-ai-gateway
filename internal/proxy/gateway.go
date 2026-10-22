@@ -371,7 +371,7 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 			continue
 		}
 		outProto := OutProto(ch.EgressProto)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), outboundModel(plan, at), in.sessionID)
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, false, g.reason.ForToken(in.token.ID), false, outboundModel(plan, at), in.sessionID)
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -381,6 +381,17 @@ func (g *Gateway) forwardOnceNonStream(w http.ResponseWriter, r *http.Request, i
 		if err != nil {
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
 			continue
+		}
+		// 特定 400:thinking 上游要求回传 reasoning_content 但缓存未命中。
+		// 同渠道补空串重发一次(命中缓存仍用真实值),避免整段对话从此每轮都 400。
+		if res.upErr == "" && (res.status < 200 || res.status >= 300) {
+			if canHealReasoning(inProto, outProto, res.status, res.body) {
+				if ob2, berr := g.rebuildWithForcedReasoning(ch, inProto, outProto, in, plan, at, false); berr == nil {
+					if res2, err2 := g.rl.doNonStream(r.Context(), client, ob2, ch, at.Offer, at.TimeoutMs); err2 == nil {
+						res = res2
+					}
+				}
+			}
 		}
 		if res.upErr != "" {
 			if clientGone(r.Context(), nil) {
@@ -475,7 +486,7 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 			continue
 		}
 		outProto := OutProto(ch.EgressProto)
-		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), outboundModel(plan, at), in.sessionID)
+		ob, err := buildOutbound(ch, inProto, outProto, in.op, in.body, true, g.reason.ForToken(in.token.ID), false, outboundModel(plan, at), in.sessionID)
 		if err != nil {
 			gateError(w, inProto, http.StatusBadRequest, "invalid_request_error", "cannot build request: "+err.Error())
 			return
@@ -485,6 +496,14 @@ func (g *Gateway) forwardStream(w http.ResponseWriter, r *http.Request, in *inbo
 		if err != nil {
 			g.eng.RecordFailure(ch.ID, ch.MaxFailures, ch.CooldownSec)
 			continue
+		}
+		// 与非流一致:reasoning_content 缺失的特定 400 先同渠道自愈重发一次。
+		if res.upErr == "" && res.status != http.StatusOK && canHealReasoning(inProto, outProto, res.status, res.errBody) {
+			if ob2, berr := g.rebuildWithForcedReasoning(ch, inProto, outProto, in, plan, at, true); berr == nil {
+				if res2, err2 := g.rl.doStream(r.Context(), client, ob2, ch, at.Offer, at.TimeoutMs); err2 == nil {
+					res = res2
+				}
+			}
 		}
 		if res.upErr != "" {
 			// 客户端自己走了(按 Esc / 断网):不是渠道故障,别熔断健康渠道。

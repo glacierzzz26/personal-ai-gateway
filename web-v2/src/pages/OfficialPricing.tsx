@@ -98,6 +98,7 @@ function SourceResult({ label, res, err }: {
 const PLAN_LABEL: Record<PlanChannelType, string> = {
   commandcode: 'command code GOAT',
   opencode: 'opencode Go',
+  opendesign: 'Open Design Go',
 };
 
 /** 一个订阅计划来源的结果块。成功报「派生 N 条模型级系数 / 写入 M 渠道」,并列出跳过的免费/未映射模型。 */

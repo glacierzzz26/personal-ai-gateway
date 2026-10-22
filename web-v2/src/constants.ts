@@ -20,6 +20,7 @@ export const channelTypes: Array<{ value: ChannelType; label: string; mark: stri
   { value: 'deepseek', label: 'DeepSeek 官方', mark: 'D', desc: '官方 /user/balance 余额' },
   { value: 'commandcode', label: 'command code', mark: 'CC', desc: 'credits + 5h/周 窗口' },
   { value: 'opencode', label: 'opencode', mark: 'OC', desc: 'base_url/v1/usage 窗口' },
+  { value: 'opendesign', label: 'Open Design', mark: 'OD', desc: '订阅计划系数;无 key 额度接口' },
   { value: 'thirdparty', label: '第三方', mark: '三方', desc: '人工配置额度路径与形状' },
 ];
 

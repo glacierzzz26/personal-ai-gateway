@@ -21,12 +21,14 @@ import (
 //
 //	CC  DeepSeek V4.1 Flash:$60  → 10/60 ≈ 0.1667
 //	OC  DeepSeek V4.1 Flash:$80  → 10/80 = 0.125
+//	OD  DeepSeek V4.1 Flash:$120 → 10/120 ≈ 0.0833
 //
 // 每个模型一个值,不再「一厂商同倍率」手填(旧口径见 channel_vendor_costs)。
 //
-// 只抓 **$10 档**(CC GOAT / opencode Go);更贵档(如 OC Go Plus $40)不抓 —— 站主只订 $10。
+// 只抓 **$10 档**(CC GOAT / opencode Go / Open Design Go);更贵档(如 OC Go Plus $40、
+// OD Plus/Pro/Max)不抓 —— 站主只订 $10 档。
 //
-// 页面形态(实测 2026-10-12,真静态 HTML):
+// 页面形态(实测 2026-10-12;Open Design 节 2026-10-22):真静态 HTML。
 //   - CC GOAT `commandcode.ai/docs/plans/goat`:估算表 `Model|Context|Intelligence|…` 提供
 //     `/models/<slug>` href + truncate span 显示名;另有三张 `Model|Input|Output|Cache Read|
 //     Cache Write|Monthly credits` 表(主力 22 行 + 高价值 2 行 + 新模型 29 行,同属 $10 GOAT)。
@@ -35,6 +37,10 @@ import (
 //     计划表 `Plan|Price|Included usage` 取 Go → $10/month;清单表 `Model|Model ID|Endpoint|…`
 //     提供 slug;第一张 `Model|Input|Output|Cached Read|Cached Write|Monthly limit`
 //     即 Go 档($40 Go Plus 在其后)。
+//   - Open Design `open-design.ai/zh/pricing/`:Go 套餐卡 `data-tier="go"` 的
+//     `data-regular-price="10"`(首月 8 折的 `data-intro-price` 不取);用量组件
+//     `data-design-plan-usage` 的 `.dpu-row` 行:`strong` 显示名 +「每月使用额度」列的
+//     `$` 金额。**页面无模型 slug**,显示名按 odSlugOf 派生(两个不规则名走别名表)。
 //
 // 容错红线(照搬 commandcode.go / opencode.go):免费/不限额行跳过并上报;显示名映射不到
 // slug 跳过并上报;行数绝对地板 + 相对地板;可落库行数为 0 硬失败(不得静默清空)。
@@ -49,14 +55,21 @@ const ccGoatURL = "https://commandcode.ai/docs/plans/goat"
 // 表格结构不变(Plan|Price|Included usage + 两张 Model|…|Monthly limit + 清单表)。
 const ocGoURL = "https://opencode.ai/v2/docs/console/go/"
 
+// odPricingURL Open Design 订阅计划页(中文页;Go 档)。
+//
+// 页面为 Astro 静态 HTML:Go 套餐卡带 data-tier="go",用量组件带 data-design-plan-usage。
+// 同一模型会出现两行 —— 第二行是「谷价活动周」促销行(单元格写作「一周 $60」),
+// 不是独立额度;解析按显示名去重,首行(月度额度)优先。
+const odPricingURL = "https://open-design.ai/zh/pricing/"
+
 // planMinRows 绝对行数地板:低于此值判定页面改版,拒绝落库(宁缺勿假)。
-// 实测 CC GOAT 53 行 / OC Go 42 行;取 10 既留余量又挡「解析到半张表/抓错表」。
+// 实测 CC GOAT 53 行 / OC Go 30 个 slug / Open Design 12 行;取 10 既留余量又挡「解析到半张表/抓错表」。
 const planMinRows = 10
 
 // planFloorRatio 与上一次成功抓取的行数比,低于此视为半张表。
 const planFloorRatio = 0.8
 
-// planDefaultPriceUSD 订阅价兜底(页面解析不出时)。两档均为 $10/月。
+// planDefaultPriceUSD 订阅价兜底(页面解析不出时)。三档均为 $10/月。
 const planDefaultPriceUSD = 10
 
 // ccGoatPriceRe 从正文取 CC GOAT 订阅价("…the $10/mo GOAT plan…")。
@@ -132,6 +145,13 @@ var planRegistry = []planTarget{
 		Hosts:           []string{"opencode.ai"},
 		DefaultPriceUSD: planDefaultPriceUSD,
 		Parse:           parseOCGo,
+	},
+	{
+		ChannelType:     domain.ChannelTypeOpenDesign,
+		URL:             odPricingURL,
+		Hosts:           []string{"open-design.ai"},
+		DefaultPriceUSD: planDefaultPriceUSD,
+		Parse:           parseOpenDesignGo,
 	},
 }
 
@@ -384,6 +404,240 @@ func ocSlugByName(doc *html.Node) (map[string]string, error) {
 		return nil, fmt.Errorf("opencode Go 清单表未解析出任何模型(页面结构可能已变更)")
 	}
 	return m, nil
+}
+
+// ---------- Open Design 解析 ----------
+
+// odSlugAliases 显示名 → 模型 slug 的例外表。
+//
+// 其余模型名可由 odSlugOf 机械派生(小写 + 空白换 "-"),只有这两个缩写不规则:
+// "GLM-5.3 Flash-X" 的 X 不带连字符,"Hunyuan H4 Preview" 官方 slug 是 hy4-preview。
+// 页面新增模型若命名不规则,在此补别名即可;遗漏不会硬错,但计费点不到官方价 → 系数不生效。
+var odSlugAliases = map[string]string{
+	"GLM-5.3 Flash-X":    "glm-5.3-flashx",
+	"Hunyuan H4 Preview": "hy4-preview",
+}
+
+// odSlugOf 由显示名派生官方价 slug(未归一;调用方仍须 planSlugCanonical)。
+func odSlugOf(display string) string {
+	display = strings.TrimSpace(display)
+	if s, ok := odSlugAliases[display]; ok {
+		return s
+	}
+	return strings.ToLower(strings.Join(strings.Fields(display), "-"))
+}
+
+// odCreditRe 「每月使用额度」单元格的纯金额形态($30 / $1,200 / $12.5)。
+// 请求数单元格是 "3,000"(无 $),谷价促销行是 "一周 $60 …"(非纯金额),都不会命中。
+var odCreditRe = regexp.MustCompile(`^\$[0-9][0-9,]*(?:\.[0-9]+)?$`)
+
+// parseOpenDesignGo 解析 Open Design 订阅计划页(Go 档),返回额度行与订阅价(USD)。
+func parseOpenDesignGo(body []byte) ([]planRow, float64, error) {
+	doc, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	price := odPlanPrice(doc)
+
+	section, err := odUsageSection(doc)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var out []planRow
+	seen := map[string]bool{}
+	for _, row := range odRowNodes(section) {
+		if odHasClass(row, "dpu-head") || odHasClass(row, "dpu-axis") {
+			continue
+		}
+		nameNode := odFirstElem(row, "strong")
+		if nameNode == nil {
+			continue
+		}
+		display := normalizeText(nodeText(nameNode))
+		if display == "" || seen[display] {
+			// 同模型第二行 = 谷价活动周促销行(不是独立额度);显示名去重,首行优先。
+			continue
+		}
+		seen[display] = true
+		r := planRow{Display: display}
+		amt, ok := odCreditsOfRow(row)
+		if !ok {
+			r.Free = true // 免费/不限额/破折号 → 跳过并上报
+			out = append(out, r)
+			continue
+		}
+		r.CreditsUSD = amt
+		r.Slug = planSlugCanonical(odSlugOf(display))
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return nil, 0, fmt.Errorf("Open Design 页未解析出任何额度行(页面结构可能已变更)")
+	}
+	return out, price, nil
+}
+
+// odPlanPrice 取 Go 套餐卡的**常规月价**(data-regular-price),不取首月折扣价。
+func odPlanPrice(doc *html.Node) float64 {
+	var card *html.Node
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if card != nil {
+			return
+		}
+		if n.Type == html.ElementNode && ccAttr(n, "data-tier") == "go" {
+			card = n
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if card == nil {
+		return planDefaultPriceUSD
+	}
+	if v := odRegularPrice(card); v > 0 {
+		return v
+	}
+	return planDefaultPriceUSD
+}
+
+// odRegularPrice 在节点子树里找 data-regular-price。
+func odRegularPrice(n *html.Node) float64 {
+	for _, a := range n.Attr {
+		if a.Key == "data-regular-price" {
+			if v, _, ok := parseMoney("$" + strings.TrimSpace(a.Val)); ok && v > 0 {
+				return v
+			}
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if v := odRegularPrice(c); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+// odUsageSection 定位用量组件(data-design-plan-usage)。
+func odUsageSection(doc *html.Node) (*html.Node, error) {
+	var found *html.Node
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if found != nil {
+			return
+		}
+		if n.Type == html.ElementNode && odHasAttr(n, "data-design-plan-usage") {
+			found = n
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if found == nil {
+		return nil, fmt.Errorf("Open Design 页未找到用量表(data-design-plan-usage;页面结构可能已变更)")
+	}
+	return found, nil
+}
+
+// odRowNodes 用量组件内的 .dpu-row(表头/坐标轴行由调用方跳过)。
+func odRowNodes(root *html.Node) []*html.Node {
+	var out []*html.Node
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && odHasClass(n, "dpu-row") {
+			out = append(out, n) // dpu-row 不嵌套
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
+}
+
+// odCreditsOfRow 取「每月使用额度」列的 Go 值。
+// 促销行整格是 .dpu-number.dpu-activity("一周 $60 …"),不是月度额度,直接跳过。
+func odCreditsOfRow(row *html.Node) (float64, bool) {
+	var (
+		amt  float64
+		ok   bool
+		walk func(*html.Node)
+	)
+	walk = func(n *html.Node) {
+		if ok {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "span" &&
+			odHasClass(n, "dpu-number") && !odHasClass(n, "dpu-activity") {
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				if c.Type != html.ElementNode || ccAttr(c, "data-usage-value") != "go" {
+					continue
+				}
+				if v, got := odParseCredit(nodeText(c)); got {
+					amt, ok = v, true
+					return
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil && !ok; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(row)
+	return amt, ok
+}
+
+// odParseCredit 解析纯金额单元格。免费/不限额/破折号 → ok=false。
+func odParseCredit(s string) (float64, bool) {
+	s = normalizeText(s)
+	if !odCreditRe.MatchString(s) {
+		return 0, false
+	}
+	if v, _, ok := parseMoney(s); ok && v > 0 {
+		return v, true
+	}
+	return 0, false
+}
+
+// odHasAttr 元素是否带某属性(值可为空,如 data-design-plan-usage)。
+func odHasAttr(n *html.Node, key string) bool {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// odHasClass class 列表是否含 cls。
+func odHasClass(n *html.Node, cls string) bool {
+	for _, f := range strings.Fields(ccAttr(n, "class")) {
+		if f == cls {
+			return true
+		}
+	}
+	return false
+}
+
+// odFirstElem 子树内第一个指定标签的元素。
+func odFirstElem(n *html.Node, tag string) *html.Node {
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type != html.ElementNode {
+			continue
+		}
+		if c.Data == tag {
+			return c
+		}
+		if x := odFirstElem(c, tag); x != nil {
+			return x
+		}
+	}
+	return nil
 }
 
 // ---------- 共享行解析 ----------

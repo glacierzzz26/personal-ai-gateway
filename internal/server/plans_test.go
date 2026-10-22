@@ -28,6 +28,7 @@ func planFixtureServer(t *testing.T, failPaths map[string]bool) *httptest.Server
 		"/docs/plans/goat":     "commandcode_goat.html",
 		"/v2/docs/console/go":  "opencode_go.html",
 		"/v2/docs/console/go/": "opencode_go.html",
+		"/zh/pricing/":         "opendesign_go.html",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if failPaths[r.URL.Path] {
@@ -65,7 +66,7 @@ func mkChanType(t *testing.T, st *store.Store, name string, ct domain.ChannelTyp
 	return ch.ID
 }
 
-// TestFetchPlansEndToEnd 端到端:CC GOAT / opencode Go 两来源各自按模型派生系数,
+// TestFetchPlansEndToEnd 端到端:CC GOAT / opencode Go / Open Design Go 三来源各自按模型派生系数,
 // 只写给**匹配 channel_type** 的渠道;已存在的人工覆盖行(source=manual)不被覆盖。
 func TestFetchPlansEndToEnd(t *testing.T) {
 	srvUp := planFixtureServer(t, nil)
@@ -79,6 +80,7 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 
 	ccID := mkChanType(t, st, "cc", domain.ChannelTypeCommandCode)
 	ocID := mkChanType(t, st, "oc", domain.ChannelTypeOpenCode)
+	odID := mkChanType(t, st, "od", domain.ChannelTypeOpenDesign)
 
 	// 预置一条人工覆盖行(CC 渠道,deepseek-v4-1-flash):抓取后不得被 plan 行覆盖。
 	mustNoErrT(t, st.SetChannelModelCostRatio(ccID, "deepseek-v4-1-flash", 0.05, "manual", "手改"), "seed manual")
@@ -86,12 +88,13 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch-plans", nil)
 	mustStatus(t, code, http.StatusOK, "fetch plans")
 	res := decode[domain.PlanFetchResult](t, body)
-	if len(res.Sources) != 2 {
-		t.Fatalf("sources = %d, want 2: %s", len(res.Sources), body)
+	if len(res.Sources) != 3 {
+		t.Fatalf("sources = %d, want 3: %s", len(res.Sources), body)
 	}
-	cc, oc := res.Sources[0], res.Sources[1]
-	if cc.ChannelType != domain.ChannelTypeCommandCode || oc.ChannelType != domain.ChannelTypeOpenCode {
-		t.Fatalf("来源顺序应 CC→opencode: %+v", res.Sources)
+	cc, oc, od := res.Sources[0], res.Sources[1], res.Sources[2]
+	if cc.ChannelType != domain.ChannelTypeCommandCode || oc.ChannelType != domain.ChannelTypeOpenCode ||
+		od.ChannelType != domain.ChannelTypeOpenDesign {
+		t.Fatalf("来源顺序应 CC→opencode→opendesign: %+v", res.Sources)
 	}
 	for _, r := range res.Sources {
 		if r.Error != "" {
@@ -117,6 +120,10 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 	// opencode:43 行 → 去重 30 个 slug(归一为连字符),全写入。
 	if oc.Priced != 30 || oc.Written != 30 {
 		t.Errorf("opencode priced/written = %d/%d, want 30/30", oc.Priced, oc.Written)
+	}
+	// Open Design:12 个模型(促销重复行已去重),全写入。
+	if od.Priced != 12 || od.Written != 12 {
+		t.Errorf("opendesign priced/written = %d/%d, want 12/12", od.Priced, od.Written)
 	}
 
 	// CC 渠道:plan 52 行 + manual 1 行;人工行系数保持 0.05。
@@ -146,6 +153,16 @@ func TestFetchPlansEndToEnd(t *testing.T) {
 	if _, err := st.ChannelModelRatio(ccID, "deepseek-v4.1-flash"); err == nil {
 		t.Error("点号 slug 不该出现在 CC 渠道")
 	}
+	// Open Design 渠道:12 行,别名 + 点号归一后按官方价口径键控。
+	odRows, err := st.ListChannelModelCostRatios(odID)
+	mustNoErrT(t, err, "list od ratios")
+	mustEqualT(t, len(odRows), 12, "opendesign 写入行数")
+	if got, _ := st.ChannelModelRatio(odID, "glm-5-3-flashx"); !closeTo(got, 10.0/30.0) {
+		t.Errorf("opendesign glm-5-3-flashx ratio = %v, want 0.3333", got)
+	}
+	if got, _ := st.ChannelModelRatio(odID, "deepseek-v4-1-flash"); !closeTo(got, 10.0/120.0) {
+		t.Errorf("opendesign deepseek ratio = %v, want 0.0833", got)
+	}
 }
 
 // TestFetchPlansSourceIndependence 一来源失败不影响另一来源(逐来源独立成败):
@@ -165,15 +182,19 @@ func TestFetchPlansSourceIndependence(t *testing.T) {
 	code, body := doJSON(t, c, http.MethodPost, base+"/api/v1/official-prices/fetch-plans", nil)
 	mustStatus(t, code, http.StatusOK, "partial failure still 200")
 	res := decode[domain.PlanFetchResult](t, body)
-	if len(res.Sources) != 2 {
-		t.Fatalf("sources = %d, want 2", len(res.Sources))
+	if len(res.Sources) != 3 {
+		t.Fatalf("sources = %d, want 3", len(res.Sources))
 	}
-	cc, oc := res.Sources[0], res.Sources[1]
+	cc, oc, od := res.Sources[0], res.Sources[1], res.Sources[2]
 	if cc.Error != "" || cc.Written == 0 {
 		t.Errorf("CC 源应成功且写入: %+v", cc)
 	}
 	if oc.Error == "" || oc.ErrorType != "fetch_failed" {
 		t.Errorf("opencode 源应报 fetch_failed: %+v", oc)
+	}
+	// Open Design 无渠道(未建该类型渠道)→ 解析成功但写入 0,不算失败。
+	if od.Error != "" || od.Written != 0 {
+		t.Errorf("opendesign 源应成功且无渠道可写: %+v", od)
 	}
 	// CC 渠道写入、opencode 渠道为空(其来源失败)。
 	nPlan, _ := st.CountChannelModelRatiosBySource(ccID, "plan")
@@ -188,7 +209,10 @@ func TestFetchPlansSourceIndependence(t *testing.T) {
 // Plans 为空,但 CC 官方价抓取照常成功(计划页失败不淹没官方价)。
 func TestRefreshPlansBlockIndependent(t *testing.T) {
 	// 计划页两条路径 500;模型/zen 定价页正常。
-	srvUp := planFixtureServer(t, map[string]bool{"/docs/plans/goat": true, "/v2/docs/console/go": true, "/v2/docs/console/go/": true})
+	srvUp := planFixtureServer(t, map[string]bool{
+		"/docs/plans/goat": true, "/v2/docs/console/go": true, "/v2/docs/console/go/": true,
+		"/zh/pricing/": true,
+	})
 
 	srv, c, st, s := newTestServerS(t)
 	base := srv.URL

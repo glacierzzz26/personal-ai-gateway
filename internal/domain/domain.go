@@ -113,18 +113,19 @@ const (
 	ChannelTypeDeepSeek    ChannelType = "deepseek"    // DeepSeek 官方直连
 	ChannelTypeCommandCode ChannelType = "commandcode" // command code 订阅
 	ChannelTypeOpenCode    ChannelType = "opencode"    // opencode zen
+	ChannelTypeOpenDesign  ChannelType = "opendesign"  // Open Design(Design Plan 订阅)
 	ChannelTypeThirdParty  ChannelType = "thirdparty"  // 其它中转站(额度路径手工配置)
 )
 
 // ChannelTypes 前端「渠道类型」下拉的可选集合,与 web-v2 constants.channelTypes 一致。
 var ChannelTypes = []ChannelType{
-	ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeThirdParty,
+	ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeOpenDesign, ChannelTypeThirdParty,
 }
 
 // Valid 是否为受支持的渠道类型。
 func (t ChannelType) Valid() bool {
 	switch t {
-	case ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeThirdParty:
+	case ChannelTypeDeepSeek, ChannelTypeCommandCode, ChannelTypeOpenCode, ChannelTypeOpenDesign, ChannelTypeThirdParty:
 		return true
 	}
 	return false

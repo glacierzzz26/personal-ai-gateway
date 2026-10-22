@@ -364,25 +364,72 @@ func TestBuildRequestBackfillsReasoning(t *testing.T) {
 	}
 }
 
-// TestBuildRequestNoBackfillWhenMiss 未命中(或 look 为 nil)时不注入字段,
-// 以免把 reasoning_content 塞给不认识它的上游(OpenAI 官方/Azure)。
-func TestBuildRequestNoBackfillWhenMiss(t *testing.T) {
-	encID := OpenAItoAnthropicToolID("call_x")
+// TestBuildRequestForceReasoningFillsEmptyOnMiss 自愈重发:缓存未命中时也写
+// reasoning_content: "",且覆盖所有 assistant 消息(纯文本轮 + tool_use 轮)。
+// 上游只校验字段存在,空串即可让对话继续(实测 opencode/DeepSeek)。
+func TestBuildRequestForceReasoningFillsEmptyOnMiss(t *testing.T) {
+	encID := OpenAItoAnthropicToolID("call_forced")
 	body := `{
-		"model": "gpt-4o",
+		"model": "deepseek/deepseek-v4.1-flash",
+		"messages": [
+			{"role": "user", "content": "hi"},
+			{"role": "assistant", "content": "好的"},
+			{"role": "user", "content": "查天气"},
+			{"role": "assistant", "content": [
+				{"type": "tool_use", "id": "` + encID + `", "name": "get_weather", "input": {"city": "北京"}}
+			]},
+			{"role": "user", "content": [
+				{"type": "tool_result", "tool_use_id": "` + encID + `", "content": "晴"}
+			]}
+		]
+	}`
+	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, nil, WithForceReasoning())
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	var got struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	var assistants int
+	for _, m := range got.Messages {
+		if m["role"] != "assistant" {
+			continue
+		}
+		assistants++
+		v, ok := m["reasoning_content"]
+		if !ok {
+			t.Fatalf("assistant 缺 reasoning_content: %v", m)
+		}
+		if v != "" {
+			t.Fatalf("reasoning_content = %v, want 空串", v)
+		}
+	}
+	if assistants != 2 {
+		t.Fatalf("assistant 条数 = %d, want 2", assistants)
+	}
+}
+
+// TestBuildRequestForceReasoningPrefersCached 强制模式下命中缓存仍用真实 reasoning,
+// 不能把已有上下文降级成空串。
+func TestBuildRequestForceReasoningPrefersCached(t *testing.T) {
+	encID := OpenAItoAnthropicToolID("call_cached")
+	body := `{
+		"model": "deepseek/deepseek-v4.1-flash",
 		"messages": [
 			{"role": "assistant", "content": [
 				{"type": "tool_use", "id": "` + encID + `", "name": "f", "input": {}}
 			]}
 		]
 	}`
-	for _, look := range []ReasoningLookup{nil, &fakeLookup{reasoning: ""}} {
-		_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, look)
-		if err != nil {
-			t.Fatalf("BuildRequest: %v", err)
-		}
-		if strings.Contains(string(out), "reasoning_content") {
-			t.Fatalf("reasoning_content injected on miss: %s", out)
-		}
+	look := &fakeLookup{reasoning: "真实思维链"}
+	_, out, _, err := BuildRequest(ProtoAnthropic, ProtoOpenAI, OpMessages, []byte(body), false, look, WithForceReasoning())
+	if err != nil {
+		t.Fatalf("BuildRequest: %v", err)
+	}
+	if !strings.Contains(string(out), `"reasoning_content":"真实思维链"`) {
+		t.Fatalf("未优先使用缓存的 reasoning: %s", out)
 	}
 }

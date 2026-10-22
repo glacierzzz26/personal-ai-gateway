@@ -53,7 +53,7 @@ internal/store  PostgreSQL(单基线 DDL + v15 起增量步骤,schemaVersion=18;
 internal/auth   账号(bcrypt)+ 会话 JWT(HS256,密钥由主密钥派生;httpOnly SameSite=Lax cookie)
 internal/engine 把目录+offers+规则+渠道健康编译为一次转发决策(候选/策略/重试/兜底)
 internal/pricing 官方价来源:commandcode 单页锚点(**唯一来源**,opencode zen 来源已于 v16 删除,见 §5.6)+ **订阅计划页**
-                (CC GOAT / opencode Go,派生按模型成本系数)+ 厂商登记表 + 手工录入 + 分时选价
+                (CC GOAT / opencode Go / Open Design Go,派生按模型成本系数)+ 厂商登记表 + 手工录入 + 分时选价
 internal/proxy  relay 转发 + translate(anthropic↔openai 双向,流式状态机 + usage 权威计数)+ probe/ping
 internal/server 管理面 CRUD handler(会话)+ 模型面(令牌)+ 静态托管 web-v2/dist(SPA 回退)
 web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist 产物 gitignore
@@ -67,7 +67,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
    priority, weight, timeout_ms, tags(json), enabled, max_failures, cooldown_sec,
    quota_path, quota_shape, note, created_at, updated_at)`。
   **三个正交字段勿混用**:`provider` = 卖的是谁的模型(真厂商,可空=聚合渠道,前端回落显示渠道类型);
-  `channel_type` = 上游归属(`deepseek`/`commandcode`/`opencode`/`thirdparty`),决定**额度怎么查**;
+  `channel_type` = 上游归属(`deepseek`/`commandcode`/`opencode`/`opendesign`/`thirdparty`),决定**额度怎么查**;
   `egress_proto` = 出站线上协议(`openai`/`anthropic`/`azure`),决定**请求怎么发**。
   `quota_path`/`quota_shape` 仅 `thirdparty` 有意义 —— 这类中转的额度接口没有统一约定,手工配「相对路径 + 响应形状」;
 - `models(id, name UNIQUE, display_name, context_window, capabilities(json), enabled, …)` — `name` 为渠道侧真实模型名;
@@ -207,11 +207,24 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 `t|<tokenID>|<anthropic 侧 tool_use id>`(主键,精确;id 是本网关 mint 的 `toolu_gw_<b64>`,与 `AnthropicToOpenAIToolID` 互逆)
 与 `x|<tokenID>|<sha256(assistant 文本)[:16]>`(兜底,覆盖无 tool_use 的纯文本轮)。TTL 30min、上限 1024 条,超限丢最旧。
 
-**关键设计点——只在命中缓存时才回填**。命中本身就证明「这个上游确实在用 `reasoning_content`」,
+**关键设计点——首次请求只在命中缓存时才回填**。命中本身就证明「这个上游确实在用 `reasoning_content`」,
 所以不需要 provider 白名单,也不会把该字段塞给不认识它的上游(OpenAI 官方 / Azure)。
 
-**局限**:缓存是进程内内存,丢了就不回填——进程重启、超过 TTL、或网关没见过的历史(如切到别的网关),
-对应那一轮仍会 400。这是有意的取舍:宁可那一轮失败,也不猜上游要不要这个字段。
+**缓存未命中时的空串自愈(2026-10-22)**。缓存是进程内内存,会未命中:进程重启、超过 TTL、
+网关没见过的历史(如切到别的网关)、上游该轮 reasoning 为空。旧实现把 400 原样抛给客户端,
+而这违反直觉的一点是——**该段历史会一直留在对话上下文里,于是之后每一轮都继续 400,对话彻底卡死**
+(生产实测 `request_id: 99718071…`,token 1 / opencode 渠道)。
+
+实测上游(DeepSeek thinking,经 opencode)校验的只是「字段是否存在」:**缺失 → 400,`reasoning_content: ""` → 200**。
+故网关在 a2o 路径遇到这个特定 400 时,同渠道用 `forceReasoning` 重建请求**重发一次**:
+命中缓存仍用真实 reasoning,未命中写 `""`(`translate.WithForceReasoning`,`internal/proxy/reasoning_heal.go`)。
+非流 / 流式两条路径都覆盖;限定 `anthropic→openai` 且响应体同时含 `reasoning_content` 与 `must be passed back`,
+别的 400 不重发(空串救不了它,只会白打一次上游)。重发成功后的响应照常捕获,真实 reasoning 又回到缓存。
+
+- 只自愈**一次**,不再循环;重发仍失败则把原错误返回客户端。
+- 仍然是 a2o 专属:同协议透传与 o2a 不涉及这个字段。
+- 这层自愈是缓存回填的兜底,**不是**改成「无条件注入空串」——首次请求的行为不变,
+  不认识该字段的上游依旧不会收到它。
 
 **为什么是「时不时」而不是稳定复现**(2026-09-11 定位):拿到的 5 条 400,响应体里带着
 `providerMetadata.gateway.routing` / `AI_APICallError` / `canonicalSlug` —— 说明渠道背后是一个**聚合网关**
@@ -226,7 +239,7 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 
 ### 5.3 上游额度获取(`GET /channels/{id}/quota`)
 
-用**该渠道自己的 Key** 只读问上游「还剩多少额度」,按 `channel_type` 分发到四套完全不同的协议
+用**该渠道自己的 Key** 只读问上游「还剩多少额度」,按 `channel_type` 分发到各家的不同协议
 (`internal/proxy/quota*.go`)。全部走 6s 超时,失败不影响转发,前端灰色占位 + tooltip 给原因。
 
 | `channel_type` | 请求 | 形状 |
@@ -234,7 +247,14 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 | `commandcode` | `GET https://api.commandcode.ai/alpha/billing/credits`(host 固定,不看 base_url) | `credits.*` 之和 = **剩余**;`windowLimits.{fiveHour,weekly}` 给 `used/cap/resetAt`,resetAt 是 epoch **毫秒** |
 | `opencode` | `GET {apiRoot(base_url)}/v1/usage` | `{usage:{rolling,weekly,monthly:{status,percent,resetsAt}}}`,resetsAt 是 ISO-8601 |
 | `deepseek` | `GET {apiRoot(base_url)}/user/balance`(**非 `/v1`**) | `{is_available, balance_infos:[{currency,total_balance,…}]}`,金额是**字符串**、无百分比 |
+| `opendesign` | **无**(见下) | 无 API key 维度的额度/用量接口 → `unsupported` |
 | `thirdparty` | 手工配 `quota_path` + `quota_shape` | 见下 |
+
+**Open Design 的额度为什么查不了。** 它的运行时网关 `amr-link.open-design.ai` 只暴露模型转发路径
+(`/v1/models`、`/v1/chat/completions`、`/v1/messages` 等),`/v1/usage`、`/v1/quota`、`/v1/billing/*`
+等全部 404;控制台用量走 `amr-api.open-design.ai/api/v1/workspaces/{id}/credits|dashboard`,**只认登录
+cookie**(带 API key 仍 401)。故 `FetchChannelQuota` 对它显式返回 `ErrQuotaUnsupported`(常态「查不了」,
+不是渠道故障、不触发首页告警)。若日后提供 key 维度接口,再补 `quota_opendesign.go`。
 
 第三方中转没有统一约定,故手工配置。形状三选一(`quotaShapes`):`usage`(通用信封,同 opencode)、
 `oneapi`(`/v1/dashboard/billing/subscription` 取 `hard_limit_usd`,再 `/v1/dashboard/billing/usage` 取
@@ -290,7 +310,8 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 - 错误率统计一律走 `errCond`,勿再手写 `status >= 400`——否则 499 会污染渠道健康度。
 - 首字节窗口 / `ResponseHeaderTimeout` 取自候选超时,**渠道上填的 `timeout_ms` 不参与**(§5.1)。要让上游慢时能
   及时 504 并 failover,得调 settings 的 `request_timeout_ms`;别在两处各填一个值然后奇怪哪个生效。
-- a2o 回填的 `reasoning_content` **只在缓存命中时注入**(§5.2)。改动谓词时务必保留这个前提,
+- a2o 回填的 `reasoning_content` **首次请求只在缓存命中时注入**(§5.2);只有上游明确回了
+  「must be passed back」400 才用空串兜底重发一次。改动谓词时务必保留这个前提,
   否则会把该字段塞给不认识它的上游(OpenAI 官方/Azure)而新增 400。
 - 存储 = PostgreSQL(pgx 的 `database/sql` 驱动),个人读多写少足够;管理端写操作集中在事务内(额度扣减等);
   连接池上限与 PG `max_connections` 协调(多实例时 N×池 ≤ 该值)。
@@ -410,29 +431,36 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
 
 ### 5.6.1 订阅计划来源:按模型自动派生成本系数
 
-**为什么。** 站主每月花 **$10** 订阅(CC GOAT / opencode Go),换到**每个模型一份不同的月度额度**
-(`Monthly credits` / `Monthly limit`)。因此该模型的**真实成本系数 = 订阅价 ÷ 该模型额度**,是**逐模型**的
-一个值 —— 旧的「一厂商同倍率」口径(`channel_vendor_costs`)只是兜底,不是事实。手工填系数会随订阅页
-改版而失真,故改为**从订阅计划页自动抓取**(保留人工覆盖)。
+**为什么。** 站主每月花 **$10** 订阅(CC GOAT / opencode Go / Open Design Go),换到**每个模型一份不同的
+月度额度**(`Monthly credits` / `Monthly limit` / 「每月使用额度」)。因此该模型的**真实成本系数 = 订阅价 ÷
+该模型额度**,是**逐模型**的一个值 —— 旧的「一厂商同倍率」口径(`channel_vendor_costs`)只是兜底,不是事实。
+手工填系数会随订阅页改版而失真,故改为**从订阅计划页自动抓取**(保留人工覆盖)。
 
-**两个来源**(均 $10 档;`internal/pricing/plans.go`,由 `internal/server/admin_pricing.go` 调用):
+**三个来源**(均 $10 档;`internal/pricing/plans.go`,由 `internal/server/admin_pricing.go` 调用):
 
 | channel_type | 页面 | 额度表 |
 |---|---|---|
 | `commandcode` | `https://commandcode.ai/docs/plans/goat` | `Model \| Input \| … \| Monthly credits`(分散在**三张表**,全部属 $10 GOAT,合并取用) |
 | `opencode` | `https://opencode.ai/v2/docs/console/go/`(**英文页**;中文页表头失配,固定英文 URL;站点 2026-10 改版,旧址 `docs/go/` 已 404) | `Model \| Input \| … \| Monthly limit`(取**第一张** = Go 档;$40 的 Go Plus 在其后) |
+| `opendesign` | `https://open-design.ai/zh/pricing/` | 用量组件 `.dpu-row` 的「每月使用额度」列(Go 档,$15~$120/模型;Plus/Pro/Max 列不取) |
 
 实现要点:
 
 - **订阅价**:CC 从页面 meta 正则取(兜底常量 10);opencode 从计划表 `Plan | Price | Included usage` 里
-  第一列为 `Go` 的一行取 `$10/month`。`ratio = 订阅价 ÷ 该模型额度`。
+  第一列为 `Go` 的一行取 `$10/month`;Open Design 取 Go 套餐卡的 `data-regular-price`(常规月价 **10**;
+  首月 8 折的 `data-intro-price` 不取)。`ratio = 订阅价 ÷ 该模型额度`。
 - **显示名 → slug**:CC 从估算表(`Model | Context | Intelligence`,`/models/<slug>` href + truncate span)
   建映射;opencode 从 `Model | Model ID` 表建映射(显示名先剥括号后缀 `(Off-Peak)`/`(≤ 256K tokens)`)。
+  **Open Design 页面没有 slug**,故由显示名派生(`odSlugOf`:小写 + 空白换 `-`),两个不规则名走
+  `odSlugAliases`(`GLM-5.3 Flash-X → glm-5.3-flashx`、`Hunyuan H4 Preview → hy4-preview`);新增模型若命名
+  不规则须在别名表补一行,否则计费点不到官方价(系数不生效,不会硬错)。
+  Open Design 的同一模型会出现两行 —— 第二行是「谷价活动周」促销(单元格写作「一周 $60」),不是独立额度;
+  解析按**显示名去重**,首行(月度额度)优先。
 - **slug 一律归一为连字符(官方价口径)**:opencode 的 Model ID 用**点号**(`deepseek-v4.1-flash`、`qwen3.8-max`),
   而官方价绑定(`models.official_model_name`,来自 commandcode)与计费的 `plan.OfficialModelName` 用**连字符**
   (`deepseek-v4-1-flash`、`qwen3-8-max`)。故落库前经 `planSlugCanonical` 把点号折成连字符(`.` → `-`)。
   **不归一 = 计费点查不到系数**:计费按 `plan.OfficialModelName` 点查 `channel_model_cost_ratios`,点号键永远
-  匹配不到模型 → 静默回落 1.0(不折扣)。CC 的 slug 本无点号,归一对其是 no-op —— 两来源因此**共用同一套
+  匹配不到模型 → 静默回落 1.0(不折扣)。CC 的 slug 本无点号,归一对其是 no-op —— 三来源因此**共用同一套
   「连字符 = 官方价口径」的键**。旧的「各渠道按自身来源 slug 键控、不跨源混用」口径**已废**(它与「绑定是模型级
   单值」相矛盾,正是 opencode 系数绑不上模型的病根);存量点号行由 **v17 迁移**归一/清理。
   同一「连字符 = 官方价口径」也扩到了**绑定侧**:官方价自动回填的匹配键 `officialSlugKey` 同样折点号(两侧都折),
@@ -447,8 +475,8 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
   掉本渠道不再出现的旧 plan 行(slug 口径改版 / 模型下线留下的「死键」,语义同官方价抓取的来源对账)。
   **人工覆盖行 `source='manual'` 既不被覆盖也不被删**(`ON CONFLICT … WHERE source <> 'manual'`)——
   自动值只是默认,站主手改过的必须留住。空派生集是 no-op(绝不当作「全删」)。
-- **逐来源独立成败**:单点网络抖动不该让两个来源的系数都白更;端点 `POST /official-prices/fetch-plans`,
-  批量刷新 `POST /official-prices/refresh` 在 CC/opencode 之后跑计划来源第三块(计划失败不淹没官方价抓取)。
+- **逐来源独立成败**:单点网络抖动不该让三个来源的系数都白更;端点 `POST /official-prices/fetch-plans`,
+  批量刷新 `POST /official-prices/refresh` 在 CC/opencode/Open Design 之后跑计划来源第三块(计划失败不淹没官方价抓取)。
 
 **计费三级口径**(`internal/proxy/billing.go` 的 `costRatio`,成本 = 官方价 × 系数):
 ① **模型级** `channel_model_cost_ratios`(本小节自动派生 / 人工覆盖)> ② **厂商级** `channel_vendor_costs`(兜底)
@@ -584,7 +612,7 @@ zen 页已 404;故**删除 zen 来源**,官方价**统一走 CC**。**所有渠�
 | `GET /official-prices/vendors` | 厂商登记表(`{provider, sourceUrl, manualOnly, manualCurrency}`);驱动抓取/手工录入入口与门禁 |
 | `POST /official-prices/fetch` `{provider}` · `POST /official-prices/manual` | 按厂商抓取(逐厂商路径,当前全部 ManualOnly)/ 手工录入(来源 URL 必填,缺省币种按厂商落地) |
 | `POST /official-prices/fetch-commandcode` | **官方价唯一来源**(issue #27;v16 起单来源):抓 commandcode 单页全厂商价并落库 + 对账删除该来源下下架行;回 `{totalRows, upserted, removed, perVendor, freeSkipped, unmappedSkipped}`(`unmappedSkipped` = 付费但未登记厂商、被跳过的行) |
-| `POST /official-prices/fetch-plans` | **订阅计划来源**(见 §5.6.1):抓 CC GOAT / opencode Go 两个 $10 档订阅页,按模型派生成本系数(点号 slug 归一为连字符)**同步**匹配 `channel_type` 的渠道(`source=plan`;不覆盖 `manual`,并 prune 该渠道陈旧的 plan 行);回 `{sources:[{channelType, sourceUrl, contentSha256, planPriceUsd, totalRows, priced, written, channelsTouched, skippedFree, skippedUnmapped, error}]}`,逐来源独立成败 |
+| `POST /official-prices/fetch-plans` | **订阅计划来源**(见 §5.6.1):抓 CC GOAT / opencode Go / Open Design Go 三个 $10 档订阅页,按模型派生成本系数(点号 slug 归一为连字符)**同步**匹配 `channel_type` 的渠道(`source=plan`;不覆盖 `manual`,并 prune 该渠道陈旧的 plan 行);回 `{sources:[{channelType, sourceUrl, contentSha256, planPriceUsd, totalRows, priced, written, channelsTouched, skippedFree, skippedUnmapped, error}]}`,逐来源独立成败 |
 | `POST /official-prices/refresh` `{providers?}` | 批量:先抓 CC 锚点(**破坏性**对账),再抓订阅计划页派生系数,再走显式 providers,最后 `BackfillOfficialBindings`;回 `{results[], bound[], commandCode, commandCodeError, plans, plansError, totalUpserted, totalRemoved}`。超时 120s |
 | `POST /official-prices/{id}/apply` `{offerId,confirmOverride}` · `DELETE /official-prices/{id}` | 应用官方价到某 offer(写四价 + 来源留证)/ 删官方价(已应用的报价与留证不受影响) |
 | `GET/POST /tokens` · `GET/PATCH/DELETE /tokens/{id}` | 令牌 CRUD;新建响应一次性返回明文 key;user 只见/操作自己名下 |

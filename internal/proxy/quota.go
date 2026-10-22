@@ -45,6 +45,11 @@ func (r *Relay) FetchChannelQuota(ctx context.Context, client *http.Client, ch d
 		return fetchOpenCodeQuota(ctx, client, ch)
 	case domain.ChannelTypeDeepSeek:
 		return fetchDeepSeekQuota(ctx, client, ch)
+	case domain.ChannelTypeOpenDesign:
+		// Open Design(Design Plan)没有 API key 维度的用量/额度接口:运行时网关
+		// (amr-link.open-design.ai)只有模型转发路径,控制台用量走 amr-api 的登录 cookie。
+		// 显式走「查不了」而不是「查失败」,避免首页把它当渠道故障告警。
+		return QuotaResult{}, ErrQuotaUnsupported
 	case domain.ChannelTypeThirdParty, "":
 		return fetchThirdPartyQuota(ctx, client, ch)
 	default:
