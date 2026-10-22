@@ -22,9 +22,13 @@ func bodyClient(t *testing.T, body []byte) *http.Client {
 //	commandcode_goat.html —— CC GOAT($10 档)页(789626 字节):估算表 + 三张 Monthly credits 表(53 行)。
 //	opencode_go.html      —— opencode Go($10 档)英文页(54552 字节,https://opencode.ai/v2/docs/console/go/):
 //	                         计划表 + 两张 Monthly limit 表(Go 43 行 / Go Plus 43 行)+ 清单表。
+//	opendesign_go.html    —— Open Design 中文定价页(https://open-design.ai/zh/pricing/)实存页的
+//	                         Go 套餐卡 + 用量组件两段(34KB;CSS/JS/其它档位无关 DOM 已删,解析只依赖这两段):
+//	                         12 个模型 × Go 月度额度,另有 1 行 DeepSeek 谷价活动促销(同模型第二行)。
 const (
 	ccGoatFixture = "commandcode_goat.html"
 	ocGoFixture   = "opencode_go.html"
+	odGoFixture   = "opendesign_go.html"
 )
 
 func approx(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
@@ -123,7 +127,91 @@ func TestParseOCGo(t *testing.T) {
 	}
 }
 
-// 免费/不限额行(OC 的 "Unlimited"、CC 的 "Free")必须跳过并上报,不得落库。
+// Open Design Go:12 个模型,订阅价取**常规月价** $10(不是首月折扣 $8);
+// 同模型第二行是谷价活动促销("一周 $60")→ 按显示名去重,不重复落库。
+// 显示名无页面 slug,由 odSlugOf 派生后归一为连字符口径。
+func TestParseOpenDesignGo(t *testing.T) {
+	bySlug, price := planBySlug(t, odGoFixture, parseOpenDesignGo)
+	if price != 10 {
+		t.Errorf("plan price = %v, want 10(取 data-regular-price,不是首月折扣 8)", price)
+	}
+	if len(bySlug) != 12 {
+		t.Errorf("mapped rows = %d, want 12", len(bySlug))
+	}
+	for _, tc := range []struct {
+		slug    string
+		credits float64
+	}{
+		{"glm-5-3-flashx", 30}, // "GLM-5.3 Flash-X" 走别名 + 点号归一
+		{"deepseek-v4-pro", 60},
+		{"kimi-k2-7-code", 60},
+		{"hy4-preview", 60}, // "Hunyuan H4 Preview" 走别名
+		{"claude-haiku-5-5", 30},
+		{"gpt-6-luna", 15},
+		{"glm-5-3-flash", 60},
+		{"deepseek-v4-flash-vision-exp", 60},
+		{"mimo-v2-6-pro", 60},
+		{"deepseek-v4-flash", 60},
+		{"mimo-v2-6-flash", 60},
+		{"deepseek-v4-1-flash", 120}, // 促销行同显示名("一周 $60")不覆盖月度额度
+	} {
+		r, ok := bySlug[tc.slug]
+		if !ok {
+			t.Errorf("缺 slug %s", tc.slug)
+			continue
+		}
+		if !approx(r.CreditsUSD, tc.credits) {
+			t.Errorf("%s credits = %v, want %v", tc.slug, r.CreditsUSD, tc.credits)
+		}
+	}
+	// ratio = 10 / credits
+	if r := bySlug["deepseek-v4-1-flash"]; !approx(10/r.CreditsUSD, 10.0/120.0) {
+		t.Errorf("deepseek ratio = %v, want 0.0833", 10/r.CreditsUSD)
+	}
+	// 点号键不得残留(官方价/计费口径)。
+	if _, ok := bySlug["deepseek-v4.1-flash"]; ok {
+		t.Error("点号 slug 不该出现在归一后的键里")
+	}
+}
+
+// odSlugOf:规则名机械派生,两个不规则名走别名表。
+func TestOpenDesignSlugOf(t *testing.T) {
+	for display, want := range map[string]string{
+		"GLM-5.3 Flash-X":              "glm-5.3-flashx",
+		"Hunyuan H4 Preview":           "hy4-preview",
+		"DeepSeek V4.1 Flash":          "deepseek-v4.1-flash",
+		"DeepSeek V4 Flash Vision Exp": "deepseek-v4-flash-vision-exp",
+	} {
+		if got := odSlugOf(display); got != want {
+			t.Errorf("odSlugOf(%q) = %q, want %q", display, got, want)
+		}
+	}
+}
+
+// FetchPlanAllowances 端到端:Open Design 来源已登记,12 行全部可落库。
+func TestFetchPlanAllowancesOpenDesign(t *testing.T) {
+	client := bodyClient(t, loadFixture(t, odGoFixture))
+	target, ok := PlanTargetFor(domain.ChannelTypeOpenDesign)
+	if !ok {
+		t.Fatal("未登记 opendesign 订阅计划来源")
+	}
+	allows, rep, err := FetchPlanAllowances(context.Background(), client, target, 0)
+	if err != nil {
+		t.Fatalf("FetchPlanAllowances: %v", err)
+	}
+	if rep.PlanPriceUSD != 10 || rep.TotalRows != 12 || rep.Priced != 12 {
+		t.Errorf("report = price %v / total %d / priced %d, want 10/12/12",
+			rep.PlanPriceUSD, rep.TotalRows, rep.Priced)
+	}
+	if len(rep.SkippedFree) != 0 || len(rep.SkippedUnmapped) != 0 {
+		t.Errorf("不该有跳过行: free=%v unmapped=%v", rep.SkippedFree, rep.SkippedUnmapped)
+	}
+	m := PlanAllowanceMap(allows)
+	if !approx(m["glm-5-3-flashx"], 10.0/30.0) {
+		t.Errorf("glm-5-3-flashx ratio = %v, want 0.3333", m["glm-5-3-flashx"])
+	}
+}
+
 func TestParsePlanSkipsFreeLabelled(t *testing.T) {
 	// OC 页两张 "…Free" 行额度为 "Unlimitedlimited time" → Free。
 	rows, _, err := parseOCGo(loadFixture(t, ocGoFixture))

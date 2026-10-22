@@ -12,7 +12,7 @@ export type Provider =
   | '';
 
 /** 渠道类型:决定上游额度怎么查。 */
-export type ChannelType = 'deepseek' | 'commandcode' | 'opencode' | 'thirdparty';
+export type ChannelType = 'deepseek' | 'commandcode' | 'opencode' | 'opendesign' | 'thirdparty';
 
 /** 出站协议:决定请求怎么发上去。 */
 export type EgressProto = 'openai' | 'anthropic' | 'azure';
@@ -295,8 +295,8 @@ export interface ModelCostRatioInput {
   note?: string;
 }
 
-/** 订阅计划来源(CC GOAT / opencode Go) */
-export type PlanChannelType = 'commandcode' | 'opencode';
+/** 订阅计划来源(CC GOAT / opencode Go / Open Design Go) */
+export type PlanChannelType = 'commandcode' | 'opencode' | 'opendesign';
 
 /** 单个订阅计划来源的抓取/写入结果 */
 export interface PlanSourceResult {

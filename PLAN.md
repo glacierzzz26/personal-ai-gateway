@@ -14,7 +14,7 @@
 | 无用户级账户 | `admins` 无余额概念;无钱包、无充值、无账变流水 |
 | 币种 | 全站单一币种 `settings.displayCurrency`;`model_offers.*_price_usd` / `official_prices.*_price` 是**历史命名**,装的是「当前计价币种金额」;`costUsd()` 直接乘 token,**不做换算**(`gateway.go:632`) |
 | 对外暴露面 | `GET /api/v1/models` **登录即可**(`server.go:153`),对客户**全量**返回渠道名、每个供给源的上游真实名、官方价来源 URL、以及**全站** `todayRequests/successRate`(`reads.go:136-177`) |
-| 官方价覆盖 | **issue #27 起:官方价锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。**v16 起为唯一来源**:此前并存的 opencode zen 第二来源(`internal/pricing/opencode.go`,`source=opencode` 渠道按其价)已删除,官方价**所有渠道统一取 CC 价**;厂商枚举保留 21 家(Mistral 原由 zen 页引入,现仅余手工录入)。`BuildManual` 已对全部厂商放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`)。**容错:来源页出现未登记厂商前缀的新模型时,免费行豁免归属、付费行跳过该行并计入报告 `unmappedSkipped`(不再整批硬错拖垮全站官方价抓取)**。**成本系数来源:订阅计划页**(`internal/pricing/plans.go`:CC GOAT / opencode Go,$10 档)按模型自动派生,见下方「成本」行与 DESIGN §5.6.1 |
+| 官方价覆盖 | **issue #27 起:官方价锚点 = commandcode 单页**(`internal/pricing/commandcode.go`,一页覆盖 20 家厂商),逐厂商官网抓取已停用(`pricing.Vendors()` 全部 `ManualOnly`)。**v16 起为唯一来源**:此前并存的 opencode zen 第二来源(`internal/pricing/opencode.go`,`source=opencode` 渠道按其价)已删除,官方价**所有渠道统一取 CC 价**;厂商枚举保留 21 家(Mistral 原由 zen 页引入,现仅余手工录入)。`BuildManual` 已对全部厂商放开 —— 原「Claude/GPT 官方价录不进库」的问题随 #27 一并解决(详见 DESIGN §5.6、§3 `domain.Provider`)。**容错:来源页出现未登记厂商前缀的新模型时,免费行豁免归属、付费行跳过该行并计入报告 `unmappedSkipped`(不再整批硬错拖垮全站官方价抓取)**。**成本系数来源:订阅计划页**(`internal/pricing/plans.go`:CC GOAT / opencode Go / Open Design Go,$10 档;Open Design 暂无 key 维度额度接口)按模型自动派生,见下方「成本」行与 DESIGN §5.6.1 |
 
 ## 2. 定价模型(定稿:就 3 个数)
 
@@ -31,12 +31,14 @@
 > 官方价**统一取 CC 价**,所有渠道一致(改绑 + 删 zen 行的数据迁移见 DESIGN §5.6)。CC 单价是本站**采购锚点**,
 > 靠高缓存命中率可能低于厂商挂牌价。
 >
-> **成本系数(订阅计划页自动派生)**:站主每月 $10 订阅(CC GOAT / opencode Go),订阅页给**每个模型一份
-> 不同的月度额度**(CC `Monthly credits` / opencode `Monthly limit`)。故**模型级**成本系数 = 订阅价 ÷ 该模型额度,
+> **成本系数(订阅计划页自动派生)**:站主每月 $10 订阅(CC GOAT / opencode Go / Open Design Go),订阅页给
+> **每个模型一份不同的月度额度**(CC `Monthly credits` / opencode `Monthly limit` / Open Design「每月使用额度」)。
+> 故**模型级**成本系数 = 订阅价 ÷ 该模型额度,
 > 由 `POST /official-prices/fetch-plans`(批量刷新一并跑)自动**同步**进 `channel_model_cost_ratios`(`source=plan`):
-> 派生键**归一为连字符**(opencode 页的点号 slug `.`→`-`,与官方价绑定 `models.official_model_name` / 计费的
-> `plan.OfficialModelName` 同口径),否则计费点查不到、成本静默按 1.0 计;**人工覆盖行 `source=manual` 不被覆盖也不被删**,
-> 已下线的旧 plan 行随同步 prune。查不到模型级时可退回厂商级 `channel_vendor_costs.ratio`(手工兜底)。
+> 派生键**归一为连字符**(opencode 页的点号 slug `.`→`-`,Open Design 显示名小写+空白换 `-`,与官方价绑定
+> `models.official_model_name` / 计费的 `plan.OfficialModelName` 同口径),否则计费点查不到、成本静默按 1.0 计;
+> **人工覆盖行 `source=manual` 不被覆盖也不被删**,已下线的旧 plan 行随同步 prune。查不到模型级时可退回厂商级
+> `channel_vendor_costs.ratio`(手工兜底)。
 > v18 又把**绑定侧**归到同一口径:官方价自动回填的匹配键折点号(`officialSlugKey`),并把存量陈旧/未绑定的
 > 点号名模型(migrate 到正确连字符 slug)一并归位 —— 否则点号名模型永不绑定、成本静默按 1.0。详见 DESIGN §5.6.1。
 
