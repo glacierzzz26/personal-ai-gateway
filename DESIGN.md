@@ -207,11 +207,24 @@ web-v2/         管理台前端源码(React18+antd5+react-query+echarts);dist �
 `t|<tokenID>|<anthropic 侧 tool_use id>`(主键,精确;id 是本网关 mint 的 `toolu_gw_<b64>`,与 `AnthropicToOpenAIToolID` 互逆)
 与 `x|<tokenID>|<sha256(assistant 文本)[:16]>`(兜底,覆盖无 tool_use 的纯文本轮)。TTL 30min、上限 1024 条,超限丢最旧。
 
-**关键设计点——只在命中缓存时才回填**。命中本身就证明「这个上游确实在用 `reasoning_content`」,
+**关键设计点——首次请求只在命中缓存时才回填**。命中本身就证明「这个上游确实在用 `reasoning_content`」,
 所以不需要 provider 白名单,也不会把该字段塞给不认识它的上游(OpenAI 官方 / Azure)。
 
-**局限**:缓存是进程内内存,丢了就不回填——进程重启、超过 TTL、或网关没见过的历史(如切到别的网关),
-对应那一轮仍会 400。这是有意的取舍:宁可那一轮失败,也不猜上游要不要这个字段。
+**缓存未命中时的空串自愈(2026-10-22)**。缓存是进程内内存,会未命中:进程重启、超过 TTL、
+网关没见过的历史(如切到别的网关)、上游该轮 reasoning 为空。旧实现把 400 原样抛给客户端,
+而这违反直觉的一点是——**该段历史会一直留在对话上下文里,于是之后每一轮都继续 400,对话彻底卡死**
+(生产实测 `request_id: 99718071…`,token 1 / opencode 渠道)。
+
+实测上游(DeepSeek thinking,经 opencode)校验的只是「字段是否存在」:**缺失 → 400,`reasoning_content: ""` → 200**。
+故网关在 a2o 路径遇到这个特定 400 时,同渠道用 `forceReasoning` 重建请求**重发一次**:
+命中缓存仍用真实 reasoning,未命中写 `""`(`translate.WithForceReasoning`,`internal/proxy/reasoning_heal.go`)。
+非流 / 流式两条路径都覆盖;限定 `anthropic→openai` 且响应体同时含 `reasoning_content` 与 `must be passed back`,
+别的 400 不重发(空串救不了它,只会白打一次上游)。重发成功后的响应照常捕获,真实 reasoning 又回到缓存。
+
+- 只自愈**一次**,不再循环;重发仍失败则把原错误返回客户端。
+- 仍然是 a2o 专属:同协议透传与 o2a 不涉及这个字段。
+- 这层自愈是缓存回填的兜底,**不是**改成「无条件注入空串」——首次请求的行为不变,
+  不认识该字段的上游依旧不会收到它。
 
 **为什么是「时不时」而不是稳定复现**(2026-09-11 定位):拿到的 5 条 400,响应体里带着
 `providerMetadata.gateway.routing` / `AI_APICallError` / `canonicalSlug` —— 说明渠道背后是一个**聚合网关**
@@ -297,7 +310,8 @@ cookie**(带 API key 仍 401)。故 `FetchChannelQuota` 对它显式返回 `ErrQ
 - 错误率统计一律走 `errCond`,勿再手写 `status >= 400`——否则 499 会污染渠道健康度。
 - 首字节窗口 / `ResponseHeaderTimeout` 取自候选超时,**渠道上填的 `timeout_ms` 不参与**(§5.1)。要让上游慢时能
   及时 504 并 failover,得调 settings 的 `request_timeout_ms`;别在两处各填一个值然后奇怪哪个生效。
-- a2o 回填的 `reasoning_content` **只在缓存命中时注入**(§5.2)。改动谓词时务必保留这个前提,
+- a2o 回填的 `reasoning_content` **首次请求只在缓存命中时注入**(§5.2);只有上游明确回了
+  「must be passed back」400 才用空串兜底重发一次。改动谓词时务必保留这个前提,
   否则会把该字段塞给不认识它的上游(OpenAI 官方/Azure)而新增 400。
 - 存储 = PostgreSQL(pgx 的 `database/sql` 驱动),个人读多写少足够;管理端写操作集中在事务内(额度扣减等);
   连接池上限与 PG `max_connections` 协调(多实例时 N×池 ≤ 该值)。

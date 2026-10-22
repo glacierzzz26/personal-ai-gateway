@@ -42,20 +42,41 @@ func Supported(inProto, outProto string) bool {
 		(inProto == ProtoOpenAI && outProto == ProtoAnthropic)
 }
 
+// BuildOption 调整出站改写行为(当前仅 a2o 方向有选项)。
+type BuildOption func(*buildOptions)
+
+type buildOptions struct {
+	forceReasoning bool
+}
+
+// WithForceReasoning 让 a2o 在缓存未命中时也写 reasoning_content: ""。
+//
+// 只在「上游已用 400 明确要求回传 reasoning_content」后的自愈重发里使用:
+// 部分 thinking 上游(如 opencode 路由到的 DeepSeek)只校验字段存在,空串即可;
+// 命中缓存时仍写真实 reasoning,不丢上下文。见 proxy.isReasoningBackfill400。
+func WithForceReasoning() BuildOption {
+	return func(o *buildOptions) { o.forceReasoning = true }
+}
+
 // BuildRequest 把入站体改写成上游协议。
 //   - 返回改写的 outOp(anthropic messages → openai chat / openai chat → anthropic messages,
 //     供 outbound 取路径);
 //   - outBody 是重写的 JSON;estIn 是本地估算的输入 token(仅 a2o 的 message_start 展示用)。
 //   - look 为推理回填查找器(a2o 专用;o2a 方向忽略,可传 nil):命中则给 assistant 消息
 //     补回 reasoning_content。传 nil 即完全不回填(行为同回填上线前)。
+//   - opts 见 BuildOption;o2a 方向忽略。
 //   - 返回的错误是「入站体无法翻译」→ 上层按客户端 400 处理,不回退。
-func BuildRequest(inProto, outProto, op string, body []byte, stream bool, look ReasoningLookup) (outOp string, outBody []byte, estIn int, err error) {
+func BuildRequest(inProto, outProto, op string, body []byte, stream bool, look ReasoningLookup, opts ...BuildOption) (outOp string, outBody []byte, estIn int, err error) {
+	var cfg buildOptions
+	for _, o := range opts {
+		o(&cfg)
+	}
 	switch {
 	case inProto == ProtoAnthropic && outProto == ProtoOpenAI:
 		if op != OpMessages {
 			return "", nil, 0, fmt.Errorf("translate: op %q has no a2o outbound (only messages)", op)
 		}
-		return buildA2ORequest(body, stream, look)
+		return buildA2ORequest(body, stream, look, cfg.forceReasoning)
 	case inProto == ProtoOpenAI && outProto == ProtoAnthropic:
 		if op != OpChat {
 			return "", nil, 0, fmt.Errorf("translate: op %q has no o2a outbound (only chat)", op)

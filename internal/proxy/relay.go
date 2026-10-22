@@ -157,7 +157,9 @@ type outboundReq struct {
 // 同协议与跨协议路径都生效。
 // sessionID 为该请求的会话标识(见 session.go),带上后由 setOutboundHeaders 决定是否写进
 // opencode 出站头。
-func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool, look translate.ReasoningLookup, originModel, sessionID string) (*outboundReq, error) {
+// forceReasoning 仅 a2o 且上游已确认要求回填时置 true(见 reasoning_heal.go):
+// 缓存未命中也写 reasoning_content: ""。
+func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []byte, stream bool, look translate.ReasoningLookup, forceReasoning bool, originModel, sessionID string) (*outboundReq, error) {
 	key, err := secret.Decrypt(ch.APIKeyCipher)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt channel key: %w", err)
@@ -175,7 +177,11 @@ func buildOutbound(ch domain.ChannelRow, inProto, outProto, op string, body []by
 	if inProto == outProto {
 		req.Body = body // 同协议 fast path:原样透传
 	} else {
-		outOp, outBody, _, err := translate.BuildRequest(inProto, outProto, op, body, stream, look)
+		var opts []translate.BuildOption
+		if forceReasoning {
+			opts = append(opts, translate.WithForceReasoning())
+		}
+		outOp, outBody, _, err := translate.BuildRequest(inProto, outProto, op, body, stream, look, opts...)
 		if err != nil {
 			return nil, err
 		}
