@@ -1,0 +1,272 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 1280" width="1520" height="1280" role="img" aria-labelledby="t d">
+  <title id="t">AI Gateway 生产拓扑</title>
+  <desc id="d">客户端经 DNS 进入 tencent 主节点与 aliyun 灾备节点；主节点运行 nginx、gateway 容器（数据面与管理台）、PostgreSQL 16 主库、nexus 告警与每日备份；灾备节点运行 PostgreSQL 16 从库、SSH 隧道、ha-controller 定时器与待提升的 gateway 栈；上游为 DeepSeek 官方与 OpenCode Zen，外部依赖飞书机器人与 DNSPod。</desc>
+
+  <defs>
+    <linearGradient id="gIndigo" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="gTeal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#14B8A6"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="gViolet" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#C026D3"/>
+    </linearGradient>
+    <linearGradient id="gAmber" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#F97316"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.07"/>
+    </filter>
+
+    <pattern id="dotGrid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1.4" cy="1.4" r="1.4" fill="#CBD5E1" opacity="0.45"/>
+    </pattern>
+
+    <marker id="arrowData" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#4F46E5"/>
+    </marker>
+    <marker id="arrowRepl" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#16A34A"/>
+    </marker>
+    <marker id="arrowFail" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#D97706"/>
+    </marker>
+    <marker id="arrowAlert" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#DB2777"/>
+    </marker>
+    <marker id="arrowMuted" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <style>
+    text {
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      fill: #0F172A;
+    }
+    .mono { font-family: "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace; }
+    .edge-label {
+      font-size: 9.5px;
+      paint-order: stroke;
+      stroke: #FFFFFF;
+      stroke-width: 3.5;
+      stroke-linejoin: round;
+    }
+  </style>
+
+  <!-- 背景 -->
+  <rect x="0" y="0" width="1520" height="1280" fill="#F8FAFC"/>
+  <rect x="0" y="0" width="1520" height="1280" fill="url(#dotGrid)"/>
+
+  <!-- ============================== 客户端 ============================== -->
+  <rect x="470" y="28" width="580" height="104" rx="20" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text x="492" y="52" font-size="10.5" font-weight="700" letter-spacing="1.6" fill="#94A3B8">客户端 · CLIENTS</text>
+
+  <g>
+    <rect x="492" y="64" width="168" height="46" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+    <text x="576" y="92" text-anchor="middle" font-size="12.5" font-weight="600" fill="#334155">Claude Code CLI</text>
+  </g>
+  <g>
+    <rect x="676" y="64" width="168" height="46" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+    <text x="760" y="92" text-anchor="middle" font-size="12.5" font-weight="600" fill="#334155">浏览器 · 管理台</text>
+  </g>
+  <g>
+    <rect x="860" y="64" width="168" height="46" rx="13" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+    <text x="944" y="92" text-anchor="middle" font-size="12.5" font-weight="600" fill="#334155">API / 脚本</text>
+  </g>
+
+  <!-- 客户端 → DNS -->
+  <path d="M576,132 L700,190" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arrowMuted)"/>
+  <path d="M760,132 L760,178" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arrowMuted)"/>
+  <path d="M944,132 L830,190" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arrowMuted)"/>
+
+  <!-- DNS 云 -->
+  <path d="M 674 308 C 650 308 636 290 642 270 C 624 256 630 228 656 222 C 664 188 710 176 738 200 C 760 176 810 182 824 214 C 858 210 882 234 874 264 C 896 276 892 306 868 308 Z"
+        fill="#FFFFFF" stroke="#64748B" stroke-width="1.5"/>
+  <text x="758" y="240" text-anchor="middle" font-size="14.5" font-weight="700" fill="#0F172A">DNS · 5home.online</text>
+  <text x="758" y="259" text-anchor="middle" font-size="10.5" fill="#94A3B8">域名解析入口</text>
+
+  <!-- DNS → 主节点 / 备节点 -->
+  <path d="M700,300 L250,434" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+  <text class="edge-label" x="486" y="362" text-anchor="middle" fill="#4338CA">gatewayapi / gateway / nexus</text>
+
+  <path d="M820,300 L1140,434" fill="none" stroke="#D97706" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrowFail)"/>
+  <text class="edge-label" x="976" y="360" text-anchor="middle" fill="#B45309">failover 后切换</text>
+
+  <!-- ============================== tencent 主节点 ============================== -->
+  <rect x="40" y="360" width="680" height="680" rx="24" fill="#FFFFFF" stroke="#C7D2FE" stroke-width="1.5" filter="url(#softShadow)"/>
+  <line x1="88" y1="361" x2="672" y2="361" stroke="url(#gIndigo)" stroke-width="4" stroke-linecap="round"/>
+
+  <text x="88" y="400" font-size="17" font-weight="700" fill="#0F172A">tencent · 生产主节点</text>
+  <text x="88" y="422" font-size="11" fill="#64748B">124.223.188.186 · Ubuntu 26.04 · 2C / 1.9G</text>
+  <rect x="584" y="378" width="112" height="24" rx="12" fill="#EEF2FF" stroke="#C7D2FE"/>
+  <text x="640" y="394" text-anchor="middle" font-size="9.5" font-weight="700" letter-spacing="1.4" fill="#4F46E5">PRIMARY</text>
+
+  <!-- nginx -->
+  <polygon points="150,478 200,434 300,434 350,478 300,522 200,522" fill="#FFF7ED" stroke="#F59E0B" stroke-width="1.5"/>
+  <text x="250" y="472" text-anchor="middle" font-size="13" font-weight="600" fill="#92400E">nginx（宿主）</text>
+  <text x="250" y="491" text-anchor="middle" font-size="10.5" fill="#B45309">TLS 终止 · :443</text>
+
+  <!-- nexus -->
+  <rect x="470" y="432" width="220" height="108" rx="14" fill="#FDF2F8" stroke="#DB2777" stroke-width="1.5"/>
+  <text x="580" y="460" text-anchor="middle" font-size="12.5" font-weight="600" fill="#831843">nexus 告警容器</text>
+  <text x="580" y="479" text-anchor="middle" font-size="10.5" class="mono" fill="#9D174D">deploy-nexus-1</text>
+  <text x="580" y="497" text-anchor="middle" font-size="10.5" fill="#9D174D">飞书告警 / 日报</text>
+  <text x="580" y="519" text-anchor="middle" font-size="9.5" class="mono" fill="#9D174D">deploy-postgres-1 · nexus 库</text>
+
+  <!-- gateway 容器 -->
+  <rect x="90" y="560" width="600" height="180" rx="18" fill="#EEF2FF" stroke="#4F46E5" stroke-width="2"/>
+  <text x="112" y="591" font-size="14" font-weight="700" fill="#312E81">gateway 容器</text>
+  <text x="668" y="591" text-anchor="end" font-size="10.5" class="mono" fill="#6366F1">ai-gateway:v0.0.0-b569421</text>
+
+  <rect x="112" y="630" width="270" height="90" rx="12" fill="#FFFFFF" stroke="#A5B4FC" stroke-width="1.5"/>
+  <text x="247" y="663" text-anchor="middle" font-size="13" font-weight="600" fill="#3730A3">数据面 · :17080</text>
+  <text x="247" y="684" text-anchor="middle" font-size="10.5" fill="#6366F1">Anthropic / OpenAI 兼容 API</text>
+
+  <rect x="398" y="630" width="270" height="90" rx="12" fill="#FFFFFF" stroke="#A5B4FC" stroke-width="1.5"/>
+  <text x="533" y="663" text-anchor="middle" font-size="13" font-weight="600" fill="#3730A3">管理台 · :17090</text>
+  <text x="533" y="684" text-anchor="middle" font-size="10.5" fill="#6366F1">Web 控制台 + REST</text>
+
+  <!-- PostgreSQL 主库 -->
+  <path d="M90,812 V908 A115,16 0 0 0 320,908 V812" fill="#F0FDF4" stroke="#16A34A" stroke-width="1.5"/>
+  <ellipse cx="205" cy="812" rx="115" ry="16" fill="#DCFCE7" stroke="#16A34A" stroke-width="1.5"/>
+  <text x="205" y="845" text-anchor="middle" font-size="12.5" font-weight="600" fill="#14532D">PostgreSQL 16 · 主库</text>
+  <text x="205" y="865" text-anchor="middle" font-size="10.5" class="mono" fill="#166534">ai-gateway-v2-db-1</text>
+  <text x="205" y="884" text-anchor="middle" font-size="10.5" class="mono" fill="#166534">127.0.0.1:5433</text>
+
+  <!-- 备份 -->
+  <rect x="90" y="950" width="300" height="70" rx="12" fill="#FFFBEB" stroke="#D97706" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text x="240" y="980" text-anchor="middle" font-size="11.5" font-weight="600" fill="#78350F">cron 04:00 · pg_dump -Fc</text>
+  <text x="240" y="1000" text-anchor="middle" font-size="10.5" fill="#92400E">每日备份 · 保留 7 天</text>
+
+  <!-- 主节点内部连线 -->
+  <path d="M215,522 L247,630" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+  <text class="edge-label" x="258" y="574" fill="#4338CA">17081 → 17080</text>
+
+  <path d="M285,522 L533,630" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+  <text class="edge-label" x="305" y="550" fill="#4338CA">17090</text>
+
+  <path d="M350,478 L470,478" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+  <text class="edge-label" x="410" y="469" text-anchor="middle" fill="#4338CA">8080</text>
+
+  <path d="M247,720 L215,796" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+  <text class="edge-label" x="162" y="762" fill="#4338CA">db:5432</text>
+
+  <path d="M533,720 L300,800" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+
+  <path d="M240,950 L215,924" fill="none" stroke="#94A3B8" stroke-width="1.4" marker-end="url(#arrowMuted)"/>
+  <text class="edge-label" x="250" y="938" fill="#64748B">pg_dump</text>
+
+  <!-- ============================== aliyun 灾备节点 ============================== -->
+  <rect x="800" y="360" width="680" height="680" rx="24" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5" filter="url(#softShadow)"/>
+  <line x1="848" y1="361" x2="1432" y2="361" stroke="url(#gTeal)" stroke-width="4" stroke-linecap="round"/>
+
+  <text x="848" y="400" font-size="17" font-weight="700" fill="#0F172A">aliyun · 灾备节点</text>
+  <text x="848" y="422" font-size="11" fill="#64748B">47.116.65.140 · Ubuntu 26.04 · 2C / 1.6G</text>
+  <rect x="1344" y="378" width="112" height="24" rx="12" fill="#ECFDF5" stroke="#99F6E4"/>
+  <text x="1400" y="394" text-anchor="middle" font-size="9.5" font-weight="700" letter-spacing="1.4" fill="#0D9488">STANDBY</text>
+
+  <!-- ha-controller -->
+  <rect x="820" y="432" width="170" height="104" rx="14" fill="#FFFBEB" stroke="#D97706" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text x="905" y="460" text-anchor="middle" font-size="12" font-weight="600" fill="#78350F">ha-controller</text>
+  <text x="905" y="479" text-anchor="middle" font-size="10.5" class="mono" fill="#92400E">.timer · 每 60s</text>
+  <text x="905" y="497" text-anchor="middle" font-size="10.5" fill="#92400E">健康判定 · 告警</text>
+  <text x="905" y="515" text-anchor="middle" font-size="10.5" fill="#92400E">切 DNS</text>
+
+  <!-- nginx 备用 -->
+  <polygon points="1040,478 1090,434 1190,434 1240,478 1190,522 1090,522" fill="#FFF7ED" stroke="#F59E0B" stroke-width="1.5"/>
+  <text x="1140" y="472" text-anchor="middle" font-size="13" font-weight="600" fill="#92400E">nginx（宿主）</text>
+  <text x="1140" y="491" text-anchor="middle" font-size="10.5" fill="#B45309">备用入口 · :443</text>
+
+  <!-- gateway 栈（待提升） -->
+  <rect x="1080" y="620" width="230" height="80" rx="14" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="6 6"/>
+  <text x="1195" y="651" text-anchor="middle" font-size="11.5" font-weight="600" fill="#64748B">gateway 栈（待提升）</text>
+  <text x="1195" y="671" text-anchor="middle" font-size="10" class="mono" fill="#94A3B8">/opt/ai-gateway-v2</text>
+
+  <!-- SSH 隧道 -->
+  <rect x="820" y="820" width="170" height="80" rx="14" fill="#FFF7ED" stroke="#F59E0B" stroke-width="1.5"/>
+  <text x="905" y="849" text-anchor="middle" font-size="11.5" font-weight="600" fill="#92400E">gw-pg-tunnel</text>
+  <text x="905" y="869" text-anchor="middle" font-size="10.5" class="mono" fill="#B45309">SSH 隧道 :15432</text>
+
+  <!-- PostgreSQL 从库 -->
+  <path d="M1080,812 V908 A115,16 0 0 0 1310,908 V812" fill="#ECFDF5" stroke="#0D9488" stroke-width="1.5"/>
+  <ellipse cx="1195" cy="812" rx="115" ry="16" fill="#D1FAE5" stroke="#0D9488" stroke-width="1.5"/>
+  <text x="1195" y="845" text-anchor="middle" font-size="12.5" font-weight="600" fill="#134E4A">PostgreSQL 16 · 从库</text>
+  <text x="1195" y="865" text-anchor="middle" font-size="10.5" class="mono" fill="#0F766E">ai-gateway-v2-db-1</text>
+  <text x="1195" y="884" text-anchor="middle" font-size="10.5" fill="#0F766E">只读 · 流复制</text>
+
+  <!-- 其他工作负载 -->
+  <rect x="820" y="945" width="620" height="85" rx="14" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text x="838" y="968" font-size="10.5" fill="#94A3B8">其他工作负载</text>
+  <rect x="838" y="978" width="190" height="40" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="933" y="1003" text-anchor="middle" font-size="9.5" class="mono" fill="#475569">frps · 17000/17001/7500</text>
+  <rect x="1044" y="978" width="190" height="40" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="1139" y="1003" text-anchor="middle" font-size="9.5" fill="#475569">frpc visitors</text>
+  <rect x="1250" y="978" width="174" height="40" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="1337" y="1003" text-anchor="middle" font-size="9.5" fill="#475569">litesentry 监控</text>
+
+  <!-- 备节点内部连线 -->
+  <path d="M1140,522 L1180,620" fill="none" stroke="#D97706" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrowFail)"/>
+  <text class="edge-label" x="1190" y="576" fill="#B45309">failover 后启用</text>
+
+  <path d="M1195,700 L1195,796" fill="none" stroke="#D97706" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrowFail)"/>
+  <text class="edge-label" x="1204" y="752" fill="#B45309">提升后读写</text>
+
+  <!-- 复制链路：主库 → SSH 隧道 → 从库 -->
+  <path d="M320,860 L820,860" fill="none" stroke="#16A34A" stroke-width="3" marker-end="url(#arrowRepl)"/>
+  <text class="edge-label" x="560" y="851" text-anchor="middle" font-size="10" font-weight="700" fill="#15803D">流复制 · WAL</text>
+
+  <path d="M990,860 L1080,860" fill="none" stroke="#16A34A" stroke-width="3" marker-end="url(#arrowRepl)"/>
+  <text class="edge-label" x="1035" y="851" text-anchor="middle" fill="#15803D">只读从库</text>
+
+  <!-- ============================== 上游模型渠道 ============================== -->
+  <rect x="40" y="1070" width="680" height="170" rx="24" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5" filter="url(#softShadow)"/>
+  <line x1="88" y1="1071" x2="672" y2="1071" stroke="url(#gViolet)" stroke-width="4" stroke-linecap="round"/>
+  <text x="88" y="1106" font-size="15" font-weight="700" fill="#0F172A">上游模型渠道</text>
+  <text x="88" y="1126" font-size="10.5" fill="#94A3B8">OpenAI / Anthropic 兼容上游</text>
+
+  <rect x="88" y="1150" width="280" height="60" rx="12" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
+  <text x="228" y="1176" text-anchor="middle" font-size="12.5" font-weight="600" fill="#4C1D95">DeepSeek 官方</text>
+  <text x="228" y="1196" text-anchor="middle" font-size="10.5" class="mono" fill="#6D28D9">api.deepseek.com</text>
+
+  <rect x="384" y="1150" width="304" height="60" rx="12" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
+  <text x="536" y="1176" text-anchor="middle" font-size="12.5" font-weight="600" fill="#4C1D95">OpenCode Zen</text>
+  <text x="536" y="1196" text-anchor="middle" font-size="10.5" class="mono" fill="#6D28D9">opencode.ai/zen/go/v1</text>
+
+  <!-- ============================== 外部服务 ============================== -->
+  <rect x="800" y="1070" width="680" height="170" rx="24" fill="#FFFFFF" stroke="#FDE68A" stroke-width="1.5" filter="url(#softShadow)"/>
+  <line x1="848" y1="1071" x2="1432" y2="1071" stroke="url(#gAmber)" stroke-width="4" stroke-linecap="round"/>
+  <text x="848" y="1106" font-size="15" font-weight="700" fill="#0F172A">外部服务</text>
+  <text x="848" y="1126" font-size="10.5" fill="#94A3B8">告警与域名解析</text>
+
+  <rect x="848" y="1150" width="260" height="60" rx="12" fill="#FDF2F8" stroke="#DB2777" stroke-width="1.5"/>
+  <text x="978" y="1176" text-anchor="middle" font-size="12.5" font-weight="600" fill="#831843">飞书机器人</text>
+  <text x="978" y="1196" text-anchor="middle" font-size="10.5" fill="#9D174D">告警 / 日报</text>
+
+  <rect x="1124" y="1150" width="300" height="60" rx="12" fill="#FFFBEB" stroke="#D97706" stroke-width="1.5"/>
+  <text x="1274" y="1176" text-anchor="middle" font-size="12.5" font-weight="600" fill="#78350F">DNSPod 域名解析</text>
+  <text x="1274" y="1196" text-anchor="middle" font-size="10.5" fill="#92400E">A 记录切换</text>
+
+  <!-- ============================== 跨面板连线（置顶绘制，避免被卡片遮挡） ============================== -->
+
+  <!-- 数据面 → 上游渠道 -->
+  <path d="M112,675 H86 Q70,675 70,691 V1124 Q70,1140 86,1140 H536" fill="none" stroke="#4F46E5" stroke-width="2"/>
+  <path d="M228,1140 V1150" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+  <path d="M536,1140 V1150" fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrowData)"/>
+  <text class="edge-label" x="330" y="1132" text-anchor="middle" fill="#4338CA">HTTPS · 上游调用</text>
+
+  <!-- HA → DNSPod -->
+  <path d="M820,484 H790 V1048 H1274 V1150" fill="none" stroke="#D97706" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrowFail)"/>
+  <text class="edge-label" transform="rotate(-90 782 952)" x="782" y="952" text-anchor="middle" fill="#B45309">切 A 记录</text>
+
+  <!-- nexus → 飞书 -->
+  <path d="M690,480 H760 V1062 H978 V1150" fill="none" stroke="#DB2777" stroke-width="2" stroke-dasharray="4 5" marker-end="url(#arrowAlert)"/>
+  <text class="edge-label" transform="rotate(-90 752 760)" x="752" y="760" text-anchor="middle" fill="#BE185D">告警 / 日报</text>
+
+</svg>

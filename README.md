@@ -96,6 +96,7 @@ curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8787/v1/models   # 目录(
 - `internal/auth` 管理会话(bcrypt 账号 + HS256 JWT,签名密钥由主密钥派生;空闲 1h + 7 天绝对上限,滑动续期)
 - `internal/server` v2 管理 REST(会话鉴权)+ 模型面 /v1(令牌鉴权)+ 静态托管
 - `web-v2/` 管理台前端源码(React 18 + antd v5 + react-query + echarts)
+- `deploy/topology/` 生产拓扑图(静态页面,双击 `index.html` 即可看节点 / 容器 / 端口 / 数据流)
 
 ## 配置与密钥(全部见 config.example.yaml)
 
@@ -121,8 +122,9 @@ tls:
 
 ## 生产部署(Go 自终止 TLS 双口 + 域名边缘 Nginx)
 
-生产在云主机 `47.116.65.140`(别名 `aliyun`)上跑 Go 网关自身终止 TLS(数据面 17080 / 管理台 17090,
-**两个口都只绑 127.0.0.1**);宿主原生 Nginx 是唯一的公网入口,用**公信证书**终结 TLS,
+生产主节点是云主机 `tencent`(`124.223.188.186`),跑 Go 网关自身终止 TLS(数据面 17080 / 管理台 17090,
+**两个口都只绑 127.0.0.1**);`aliyun`(`47.116.65.140`)为流复制热备,网关停用(见 [`deploy/HA.md`](deploy/HA.md))。
+宿主原生 Nginx 是唯一的公网入口,用**公信证书**终结 TLS,
 客户端不再需要导入自签 CA:
 
 ```
@@ -146,7 +148,7 @@ tls:
 
 ```bash
 deploy/scripts/gen-certs.sh          # 生成自签 CA + admin/api 叶子(私钥不落仓库);重签叶子用 RESIGN=1
-ssh aliyun 'bash /opt/ai-gateway-v2/upgrade.sh <版本>'   # 生产一键升级/回滚(ghcr 链路;见 deploy/README.md)
+ssh tencent 'bash /opt/ai-gateway-v2/upgrade.sh <版本>'   # 生产一键升级/回滚(ghcr 链路;见 deploy/README.md)
 deploy/scripts/deploy.sh [GW_HOST]   # 应急/离线链路:本地构建镜像 → docker save 经 ssh 推目标主机(默认 aliyun)
 deploy/scripts/backup.sh             # PostgreSQL 快照(pg_dump -Fc;REMOTE_DIR=/opt/ai-gateway-v2)
 # 域名边缘(公网入口)在独立仓库 host-infra:cd ../host-infra && sudo DOMAIN=5home.online bash scripts/deploy.sh

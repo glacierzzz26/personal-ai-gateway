@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Gateway · 生产拓扑</title>
+<style>
+  :root {
+    --ink: #0F172A;
+    --ink-2: #334155;
+    --muted: #64748B;
+    --faint: #94A3B8;
+    --line: #E2E8F0;
+    --card: #FFFFFF;
+    --indigo: #4F46E5;
+    --green: #16A34A;
+    --amber: #D97706;
+    --pink: #DB2777;
+    --radius: 24px;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+            "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --mono: "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font);
+    color: var(--ink);
+    background:
+      radial-gradient(900px 520px at 8% -6%, rgba(99, 102, 241, 0.13), transparent 60%),
+      radial-gradient(820px 480px at 96% 2%, rgba(20, 184, 166, 0.12), transparent 60%),
+      radial-gradient(760px 520px at 50% 108%, rgba(245, 158, 11, 0.10), transparent 62%),
+      #F8FAFC;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 56px 40px 72px;
+  }
+
+  /* ---------------------------------------------------------------- header */
+  header { margin-bottom: 34px; }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 14px 7px 11px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(8px);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .eyebrow .pulse {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
+  }
+
+  h1 {
+    margin: 20px 0 10px;
+    font-size: clamp(32px, 4vw, 46px);
+    font-weight: 800;
+    letter-spacing: -1.2px;
+    line-height: 1.12;
+    background: linear-gradient(100deg, #1E1B4B 0%, #4338CA 46%, #0E7490 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .subtitle {
+    margin: 0;
+    max-width: 880px;
+    font-size: 15.5px;
+    line-height: 1.75;
+    color: var(--muted);
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: rgba(255, 255, 255, 0.78);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  .chip .dot { width: 8px; height: 8px; border-radius: 3px; flex: none; }
+  .dot-indigo { background: linear-gradient(135deg, #6366F1, #8B5CF6); }
+  .dot-teal   { background: linear-gradient(135deg, #14B8A6, #06B6D4); }
+  .dot-violet { background: linear-gradient(135deg, #8B5CF6, #C026D3); }
+  .dot-amber  { background: linear-gradient(135deg, #F59E0B, #F97316); }
+
+  /* ---------------------------------------------------------------- diagram */
+  .panel {
+    position: relative;
+    padding: 22px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: rgba(255, 255, 255, 0.82);
+    box-shadow: 0 24px 60px -28px rgba(15, 23, 42, 0.22),
+                0 2px 8px rgba(15, 23, 42, 0.04);
+    backdrop-filter: blur(6px);
+  }
+
+  .panel-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 4px 6px 16px;
+    flex-wrap: wrap;
+  }
+  .panel-bar .label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.8px;
+    color: var(--faint);
+    text-transform: uppercase;
+  }
+  .panel-bar a {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--indigo);
+    text-decoration: none;
+    padding: 7px 12px;
+    border-radius: 9px;
+    transition: background .18s ease;
+  }
+  .panel-bar a:hover { background: rgba(79, 70, 229, 0.08); }
+
+  .diagram-scroll {
+    overflow-x: auto;
+    border-radius: 18px;
+    background: #F8FAFC;
+  }
+  .diagram-scroll img {
+    display: block;
+    width: 100%;
+    min-width: 1120px;
+    height: auto;
+  }
+
+  /* ---------------------------------------------------------------- legend */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 26px;
+    margin: 20px 6px 0;
+  }
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .swatch { width: 30px; height: 0; border-top: 2.5px solid; border-radius: 2px; flex: none; }
+  .sw-data   { border-color: var(--indigo); }
+  .sw-repl   { border-color: var(--green); border-top-width: 3.5px; }
+  .sw-fail   { border-color: var(--amber); border-top-style: dashed; }
+  .sw-alert  { border-color: var(--pink); border-top-style: dashed; }
+  .sw-muted  { border-color: #94A3B8; border-top-width: 1.5px; }
+
+  /* ---------------------------------------------------------------- detail cards */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 22px;
+    margin-top: 30px;
+  }
+
+  .card {
+    position: relative;
+    overflow: hidden;
+    padding: 26px 26px 22px;
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    background: var(--card);
+    box-shadow: 0 18px 44px -30px rgba(15, 23, 42, 0.20);
+  }
+  .card::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 4px;
+    border-radius: 20px 20px 0 0;
+  }
+  .card.indigo::before { background: linear-gradient(90deg, #6366F1, #8B5CF6); }
+  .card.teal::before   { background: linear-gradient(90deg, #14B8A6, #06B6D4); }
+  .card.violet::before { background: linear-gradient(90deg, #8B5CF6, #C026D3); }
+
+  .card h2 {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 4px 0 4px;
+    font-size: 16.5px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+  }
+  .card h2 small {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    color: var(--faint);
+    text-transform: uppercase;
+  }
+  .card .ip {
+    margin: 0 0 18px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  .rows { display: grid; gap: 11px; margin: 0; }
+  .row {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  .row dt { color: var(--faint); font-weight: 600; }
+  .row dd { margin: 0; color: var(--ink-2); }
+  .row dd .mono { font-family: var(--mono); font-size: 11.5px; }
+
+  .tag {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    vertical-align: 1px;
+  }
+  .tag.ok   { background: #DCFCE7; color: #15803D; }
+  .tag.warn { background: #FEF3C7; color: #B45309; }
+
+  /* ---------------------------------------------------------------- footer */
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-top: 40px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+  footer code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: rgba(148, 163, 184, 0.13);
+    padding: 2px 7px;
+    border-radius: 6px;
+  }
+
+  /* ---------------------------------------------------------------- responsive */
+  @media (max-width: 1180px) {
+    .cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 820px) {
+    .wrap { padding: 36px 18px 52px; }
+    .cards { grid-template-columns: 1fr; }
+    .panel { padding: 14px; }
+  }
+
+  /* ---------------------------------------------------------------- print */
+  @media print {
+    body { background: #FFFFFF; }
+    .wrap { max-width: none; padding: 0; }
+    .panel, .card { box-shadow: none; background: #FFFFFF; }
+    .panel-bar a { display: none; }
+    .diagram-scroll img { min-width: 0; }
+    .card, .panel { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow"><span class="pulse"></span>Infrastructure · Topology</span>
+    <h1>AI Gateway 生产拓扑</h1>
+    <p class="subtitle">
+      双节点高可用架构：tencent 承载生产流量与 PostgreSQL 主库，aliyun 以流复制热备并运行 ha-controller 自动故障切换。
+      下图展示节点、容器、端口与数据流向，数据核对于 2026-11-03。
+    </p>
+    <div class="meta">
+      <span class="chip"><span class="dot dot-indigo"></span>2 个节点 · 生产主 / 灾备</span>
+      <span class="chip"><span class="dot dot-teal"></span>PostgreSQL 16 · 流复制</span>
+      <span class="chip"><span class="dot dot-violet"></span>2 个上游渠道 · 28 个可用模型</span>
+      <span class="chip"><span class="dot dot-amber"></span>60s 自动故障切换</span>
+    </div>
+  </header>
+
+  <section class="panel" aria-label="拓扑图">
+    <div class="panel-bar">
+      <span class="label">System Map · 1520 × 1280</span>
+      <a href="topology.svg" target="_blank" rel="noopener">查看原图 ↗</a>
+    </div>
+    <div class="diagram-scroll">
+      <img src="topology.svg" alt="AI Gateway 生产拓扑图：客户端经 DNS 进入 tencent 主节点与 aliyun 灾备节点，主节点运行 nginx、gateway 容器、PostgreSQL 16 主库、nexus 告警与每日备份，灾备节点运行 PostgreSQL 16 从库、SSH 隧道、ha-controller 与待提升的 gateway 栈，上游为 DeepSeek 官方与 OpenCode Zen，外部依赖飞书与 DNSPod。">
+    </div>
+    <div class="legend">
+      <span class="legend-item"><span class="swatch sw-data"></span>数据流 / 调用</span>
+      <span class="legend-item"><span class="swatch sw-repl"></span>数据库流复制</span>
+      <span class="legend-item"><span class="swatch sw-fail"></span>故障切换</span>
+      <span class="legend-item"><span class="swatch sw-alert"></span>告警 / 通知</span>
+      <span class="legend-item"><span class="swatch sw-muted"></span>运维 / 备份</span>
+    </div>
+  </section>
+
+  <section class="cards">
+
+    <article class="card indigo">
+      <h2>tencent <small>Primary</small></h2>
+      <p class="ip">124.223.188.186 · Ubuntu 26.04 · 2C / 1.9G</p>
+      <dl class="rows">
+        <div class="row"><dt>边缘</dt><dd>nginx（宿主）· TLS 终止 · :443</dd></div>
+        <div class="row"><dt>网关镜像</dt><dd><span class="mono">ai-gateway:v0.0.0-b569421</span></dd></div>
+        <div class="row"><dt>数据面</dt><dd>:17080 · Anthropic / OpenAI 兼容 API <span class="tag ok">运行中</span></dd></div>
+        <div class="row"><dt>管理台</dt><dd>:17090 · Web 控制台 + REST</dd></div>
+        <div class="row"><dt>数据库</dt><dd><span class="mono">ai-gateway-v2-db-1</span> · 127.0.0.1:5433 · 主库</dd></div>
+        <div class="row"><dt>告警</dt><dd><span class="mono">deploy-nexus-1</span> · :8080 · 飞书告警 / 日报</dd></div>
+        <div class="row"><dt>nexus 库</dt><dd><span class="mono">deploy-postgres-1</span> · 同属 nexus 栈</dd></div>
+        <div class="row"><dt>备份</dt><dd>cron 04:00 · <span class="mono">pg_dump -Fc</span> · 保留 7 天</dd></div>
+      </dl>
+    </article>
+
+    <article class="card teal">
+      <h2>aliyun <small>Standby</small></h2>
+      <p class="ip">47.116.65.140 · Ubuntu 26.04 · 2C / 1.6G</p>
+      <dl class="rows">
+        <div class="row"><dt>边缘</dt><dd>nginx（宿主）· 备用入口 · :443</dd></div>
+        <div class="row"><dt>数据库</dt><dd>PostgreSQL 16 · 从库 · 只读流复制 <span class="tag ok">同步中</span></dd></div>
+        <div class="row"><dt>复制通道</dt><dd><span class="mono">gw-pg-tunnel</span> · SSH 隧道 :15432</dd></div>
+        <div class="row"><dt>故障切换</dt><dd><span class="mono">ha-controller.timer</span> · 每 60s 健康判定</dd></div>
+        <div class="row"><dt>待提升栈</dt><dd><span class="mono">/opt/ai-gateway-v2</span> <span class="tag warn">Standby</span></dd></div>
+        <div class="row"><dt>其他负载</dt><dd>frps 17000/17001/7500 · frpc visitors · litesentry</dd></div>
+      </dl>
+    </article>
+
+    <article class="card violet">
+      <h2>上游 &amp; 外部服务 <small>Upstreams</small></h2>
+      <p class="ip">OpenAI / Anthropic 兼容上游 · 外部依赖</p>
+      <dl class="rows">
+        <div class="row"><dt>DeepSeek</dt><dd>DeepSeek 官方 · <span class="mono">api.deepseek.com</span></dd></div>
+        <div class="row"><dt>OpenCode</dt><dd>OpenCode Zen · <span class="mono">opencode.ai/zen/go/v1</span></dd></div>
+        <div class="row"><dt>模型</dt><dd>28 个已启用模型</dd></div>
+        <div class="row"><dt>告警</dt><dd>飞书机器人 · 告警 / 日报</dd></div>
+        <div class="row"><dt>DNS</dt><dd>DNSPod · <span class="mono">5home.online</span> · A 记录切换</dd></div>
+        <div class="row"><dt>入口</dt><dd><span class="mono">gatewayapi / gateway / nexus</span></dd></div>
+      </dl>
+    </article>
+
+  </section>
+
+  <footer>
+    <span>数据核对：2026-11-03 · 图中不含任何密钥、口令或 webhook 地址</span>
+    <span>源文件 <code>deploy/topology/topology.svg</code> · 说明 <code>deploy/topology/README.md</code></span>
+  </footer>
+
+</div>
+</body>
+</html>
