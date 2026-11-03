@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>全域拓扑 · 所有机器</title>
+<style>
+  :root {
+    --bg: #F8FAFC;
+    --bg-accent: #EEF2FF;
+    --card: #FFFFFF;
+    --ink: #0F172A;
+    --ink-soft: #475569;
+    --ink-mute: #94A3B8;
+    --line: #E2E8F0;
+    --indigo: #4F46E5;
+    --indigo-soft: #EEF2FF;
+    --teal: #0D9488;
+    --teal-soft: #F0FDFA;
+    --violet: #7C3AED;
+    --violet-soft: #F5F3FF;
+    --amber: #D97706;
+    --amber-soft: #FFFBEB;
+    --rose: #DB2777;
+    --rose-soft: #FDF2F8;
+    --green: #16A34A;
+    --green-soft: #F0FDF4;
+    --radius: 20px;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 12px 32px -12px rgba(15, 23, 42, .14);
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 600px at 12% -10%, #E0E7FF 0%, transparent 55%),
+      radial-gradient(1000px 520px at 92% 0%, #CCFBF1 0%, transparent 50%),
+      linear-gradient(180deg, var(--bg) 0%, #F1F5F9 100%);
+    background-attachment: fixed;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    line-height: 1.6;
+  }
+
+  .wrap {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 56px 28px 80px;
+  }
+
+  /* ---------- header ---------- */
+  header { margin-bottom: 34px; }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    color: var(--indigo);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 22px;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--indigo), #8B5CF6);
+  }
+
+  h1 {
+    margin: 0 0 10px;
+    font-size: clamp(30px, 4.2vw, 46px);
+    font-weight: 800;
+    letter-spacing: -.03em;
+    line-height: 1.12;
+    background: linear-gradient(120deg, #1E1B4B 0%, #4338CA 55%, #0D9488 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .lede {
+    margin: 0;
+    max-width: 780px;
+    font-size: 15px;
+    color: var(--ink-soft);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .8);
+    border: 1px solid var(--line);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    backdrop-filter: blur(6px);
+  }
+  .chip .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--indigo);
+    box-shadow: 0 0 0 4px rgba(79, 70, 229, .12);
+  }
+  .chip.teal .dot { background: var(--teal); box-shadow: 0 0 0 4px rgba(13, 148, 136, .14); }
+  .chip.amber .dot { background: var(--amber); box-shadow: 0 0 0 4px rgba(217, 119, 6, .14); }
+
+  /* ---------- diagram panel ---------- */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .panel-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 26px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .panel-head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+  }
+  .panel-head .hint {
+    font-size: 12px;
+    color: var(--ink-mute);
+  }
+
+  .diagram {
+    overflow-x: auto;
+    padding: 18px;
+    background:
+      linear-gradient(180deg, #FBFDFF 0%, #F8FAFC 100%);
+  }
+  .diagram img {
+    display: block;
+    width: 100%;
+    min-width: 1080px;
+    height: auto;
+    border-radius: 14px;
+  }
+
+  /* ---------- section titles ---------- */
+  .section {
+    margin-top: 46px;
+  }
+  .section-title {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .section-title h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+  }
+  .section-title span {
+    font-size: 12.5px;
+    color: var(--ink-mute);
+  }
+
+  /* ---------- host cards ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+
+  .host {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 20px 20px 18px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  }
+  .host:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow);
+  }
+  .host::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 3px;
+    border-radius: 18px 18px 0 0;
+    background: var(--accent, var(--indigo));
+    opacity: .85;
+  }
+  .host.indigo { --accent: linear-gradient(90deg, #6366F1, #8B5CF6); }
+  .host.teal   { --accent: linear-gradient(90deg, #14B8A6, #06B6D4); }
+  .host.violet { --accent: linear-gradient(90deg, #8B5CF6, #C026D3); }
+  .host.amber  { --accent: linear-gradient(90deg, #F59E0B, #F97316); }
+  .host.rose   { --accent: linear-gradient(90deg, #EC4899, #DB2777); }
+
+  .host-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .host h3 {
+    margin: 0;
+    font-size: 15.5px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+  }
+  .badge {
+    flex: none;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    background: var(--indigo-soft);
+    color: var(--indigo);
+    border: 1px solid #C7D2FE;
+  }
+  .badge.teal  { background: var(--teal-soft);  color: var(--teal);  border-color: #99F6E4; }
+  .badge.amber { background: var(--amber-soft); color: var(--amber); border-color: #FDE68A; }
+  .badge.rose  { background: var(--rose-soft);  color: var(--rose);  border-color: #FBCFE8; }
+  .badge.slate { background: #F1F5F9;           color: #64748B;      border-color: #E2E8F0; }
+
+  .ip {
+    font-family: "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--ink-mute);
+    margin-bottom: 12px;
+  }
+
+  .host ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .host li {
+    position: relative;
+    padding-left: 16px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .host li::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: .62em;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--ink-mute);
+    opacity: .65;
+  }
+  .host code {
+    font-family: "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    color: #334155;
+    background: #F1F5F9;
+    padding: 1px 6px;
+    border-radius: 6px;
+  }
+
+  /* ---------- footer ---------- */
+  footer {
+    margin-top: 52px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 14px;
+    font-size: 12.5px;
+    color: var(--ink-mute);
+  }
+  footer strong { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 640px) {
+    .wrap { padding: 36px 16px 56px; }
+    .panel-head { padding: 16px 18px 12px; }
+    .diagram { padding: 12px; }
+    .diagram img { min-width: 860px; }
+  }
+
+  /* ---------- print ---------- */
+  @media print {
+    body { background: #fff; }
+    .wrap { max-width: none; padding: 0; }
+    .host:hover { transform: none; box-shadow: none; }
+    .panel, .host { box-shadow: none; break-inside: avoid; }
+    .diagram { overflow: visible; padding: 0; }
+    .diagram img { min-width: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Infrastructure · Topology</div>
+    <h1>全域机器拓扑</h1>
+    <p class="lede">
+      七台主机的静态快照：tencent 生产主节点与 aliyun 灾备节点承载 AI 网关、PostgreSQL 主从与 frp 中继；
+      vps 与 la 是海外代理出口并各跑一份同一 Cloudflare Tunnel；家庭内网含本地 WSL 开发机、quant-server 与 lab。
+      上游为 DeepSeek 官方与 OpenCode Zen，外部依赖飞书、DNSPod、Cloudflare 与 GitHub / ghcr。
+    </p>
+    <div class="chips">
+      <span class="chip"><span class="dot"></span>7 台主机</span>
+      <span class="chip teal"><span class="dot"></span>数据核对 2026-11-03</span>
+      <span class="chip amber"><span class="dot"></span>静态快照 · 非实时</span>
+    </div>
+  </header>
+
+  <section class="panel" aria-label="拓扑图">
+    <div class="panel-head">
+      <h2>拓扑总览</h2>
+      <span class="hint">横向滚动查看完整图 · 源文件 <code>topology.svg</code></span>
+    </div>
+    <div class="diagram">
+      <img src="topology.svg" alt="七台主机的全域拓扑图：客户端经 DNS 与 Cloudflare 访问 tencent 生产主节点与 aliyun 灾备节点，家庭内网经 frp 中继接入，vps 与 la 作为海外代理出口，底部为上游模型渠道与外部服务。">
+    </div>
+  </section>
+
+  <!-- ============ 主机明细 ============ -->
+  <section class="section">
+    <div class="section-title">
+      <h2>主机明细</h2>
+      <span>7 台 · 角色 / 地址 / 关键服务</span>
+    </div>
+
+    <div class="grid">
+
+      <article class="host indigo">
+        <div class="host-top">
+          <h3>tencent · 生产主节点</h3>
+          <span class="badge">Primary</span>
+        </div>
+        <div class="ip">124.223.188.186 · Ubuntu 26.04 · 2C / 1.9G</div>
+        <ul>
+          <li>宿主 nginx：TLS 终止 <code>:443</code>，按 SNI 分流</li>
+          <li>gateway 容器：数据面 <code>:17080</code>、管理台 <code>:17090</code></li>
+          <li>PostgreSQL 16 主库：<code>ai-gateway-v2-db-1</code> <code>:5433</code></li>
+          <li>nexus 告警容器 <code>deploy-nexus-1</code> <code>:8080</code> + nexus 库</li>
+          <li>cron 04:00 <code>pg_dump -Fc</code>，保留 7 天</li>
+        </ul>
+      </article>
+
+      <article class="host teal">
+        <div class="host-top">
+          <h3>aliyun · 灾备节点</h3>
+          <span class="badge teal">Standby</span>
+        </div>
+        <div class="ip">47.116.65.140 · Ubuntu 26.04 · 2C / 1.6G</div>
+        <ul>
+          <li>宿主 nginx：备用入口 <code>:443</code></li>
+          <li>PostgreSQL 16 从库（只读），经 SSH 隧道复制</li>
+          <li><code>gw-pg-tunnel</code> SSH <code>:15432</code> → tencent <code>:5433</code></li>
+          <li><code>ha-controller.timer</code>：每 60s 健康判定，切 DNS + 飞书告警</li>
+          <li>frps 中继 <code>:17000</code> + visitors（invest / piks）</li>
+          <li>litesentry 状态监控 <code>:17002</code></li>
+        </ul>
+      </article>
+
+      <article class="host violet">
+        <div class="host-top">
+          <h3>vps · 代理出口</h3>
+          <span class="badge rose">Proxy</span>
+        </div>
+        <div class="ip">162.35.36.104 · Ubuntu 26.04 · 1C / 1.6G</div>
+        <ul>
+          <li>sing-box：VLESS-REALITY <code>:443/TCP</code></li>
+          <li>sing-box：Hysteria2 <code>:443/UDP</code></li>
+          <li>sing-box：VLESS-WS <code>:8081</code>（本机）</li>
+          <li>Caddy <code>:8080</code> · 静态站 <code>/var/www/rguo</code></li>
+          <li>cloudflared tunnel（副本 A）</li>
+          <li>fail2ban · 登录防爆破</li>
+        </ul>
+      </article>
+
+      <article class="host violet">
+        <div class="host-top">
+          <h3>la · 代理出口</h3>
+          <span class="badge rose">Proxy</span>
+        </div>
+        <div class="ip">154.81.37.25 · Debian 12 · 2C / 960M</div>
+        <ul>
+          <li>sing-box：Hysteria2 <code>:443/UDP</code></li>
+          <li>sing-box：VLESS-WS <code>:8081</code>（本机）</li>
+          <li>Caddy <code>:8080</code> · 静态站 + WS 反代</li>
+          <li>cloudflared tunnel（副本 B，同一隧道）</li>
+          <li>cloudflared-la-ssh → <code>la-ssh.rguo.top</code></li>
+          <li>SSH 经 vps 跳板（ProxyJump）</li>
+        </ul>
+      </article>
+
+      <article class="host amber">
+        <div class="host-top">
+          <h3>本地 WSL · 开发机</h3>
+          <span class="badge amber">Dev</span>
+        </div>
+        <div class="ip">DESKTOP-6R75NEG · 12C / 15G · 192.168.0.100</div>
+        <ul>
+          <li>Docker：piksp4 栈（web / gateway / research / pg）</li>
+          <li><code>piks-postgres</code> · <code>quant-test-pg</code> <code>:55432</code></li>
+          <li>frpc → aliyun frps <code>:17000</code></li>
+          <li>SSH 隧道 <code>:17001</code> · 前端预览 <code>:17099</code></li>
+        </ul>
+      </article>
+
+      <article class="host indigo">
+        <div class="host-top">
+          <h3>quant-server</h3>
+          <span class="badge slate">Home</span>
+        </div>
+        <div class="ip">192.168.0.201</div>
+        <ul>
+          <li>invest-web（frp stcp）→ aliyun <code>:17011</code></li>
+          <li><code>invest.5home.online</code> 回源</li>
+        </ul>
+      </article>
+
+      <article class="host amber">
+        <div class="host-top">
+          <h3>lab · 家主机</h3>
+          <span class="badge amber">Home</span>
+        </div>
+        <div class="ip">192.168.0.202 · 当前离线</div>
+        <ul>
+          <li>piks-web（frp stcp）→ aliyun <code>:17010</code></li>
+          <li><code>piks.5home.online</code> 回源</li>
+        </ul>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ 上游 / 外部 ============ -->
+  <section class="section">
+    <div class="section-title">
+      <h2>上游与外部依赖</h2>
+      <span>模型供给 · 告警 · 解析 · 镜像</span>
+    </div>
+
+    <div class="grid">
+      <article class="host violet">
+        <div class="host-top">
+          <h3>DeepSeek 官方</h3>
+          <span class="badge">Upstream</span>
+        </div>
+        <div class="ip">api.deepseek.com</div>
+        <ul>
+          <li>OpenAI 兼容上游，经数据面 <code>:17080</code> 转发</li>
+        </ul>
+      </article>
+
+      <article class="host violet">
+        <div class="host-top">
+          <h3>OpenCode Zen</h3>
+          <span class="badge">Upstream</span>
+        </div>
+        <div class="ip">opencode.ai/zen/go/v1</div>
+        <ul>
+          <li>OpenAI 兼容上游，经数据面 <code>:17080</code> 转发</li>
+        </ul>
+      </article>
+
+      <article class="host rose">
+        <div class="host-top">
+          <h3>飞书机器人</h3>
+          <span class="badge rose">Alert</span>
+        </div>
+        <div class="ip">nexus · ha-controller</div>
+        <ul>
+          <li>告警通知 / 每日日报</li>
+        </ul>
+      </article>
+
+      <article class="host amber">
+        <div class="host-top">
+          <h3>DNSPod</h3>
+          <span class="badge amber">DNS</span>
+        </div>
+        <div class="ip">5home.online</div>
+        <ul>
+          <li>托管域名解析，failover 时切 A 记录</li>
+        </ul>
+      </article>
+
+      <article class="host teal">
+        <div class="host-top">
+          <h3>Cloudflare</h3>
+          <span class="badge teal">Tunnel</span>
+        </div>
+        <div class="ip">rguo.top</div>
+        <ul>
+          <li>Tunnel 两份副本（vps / la），la-ssh 独立隧道</li>
+        </ul>
+      </article>
+
+      <article class="host indigo">
+        <div class="host-top">
+          <h3>GitHub / ghcr</h3>
+          <span class="badge slate">Registry</span>
+        </div>
+        <div class="ip">镜像交付</div>
+        <ul>
+          <li>常规升级走 ghcr + <code>upgrade.sh</code></li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <footer>
+    <span><strong>数据核对：</strong>2026-11-03 · 静态快照，非实时监控</span>
+    <span><strong>源文件：</strong><code>deploy/topology/topology.svg</code> · 手绘 SVG，无外部依赖</span>
+  </footer>
+
+</div>
+</body>
+</html>

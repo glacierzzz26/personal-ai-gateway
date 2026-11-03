@@ -9,8 +9,8 @@
 #     只在缺失时创建,不随重部署覆盖。
 #
 # 前置:目标主机可免密 ssh;远端 docker compose v2;宿主发布口 17081/17090 空闲。
-# 用法:deploy/scripts/deploy.sh [GW_HOST]         (默认 aliyun;旧默认 lab 192.168.0.202 已非生产)
-#       REMOTE_DIR=/path deploy.sh [GW_HOST]       (覆盖远端目录,默认 <远端家目录>/ai-gateway)
+# 用法:deploy/scripts/deploy.sh [GW_HOST]         (默认 tencent 124.223.188.186;aliyun 为灾备)
+#       REMOTE_DIR=/path deploy.sh [GW_HOST]       (覆盖远端目录,默认 /opt/ai-gateway-v2)
 #
 # 定位:这是**应急/离线**链路(本地构建 → save|ssh|load),常规升级走 ghcr + upgrade.sh。
 #       与 upgrade.sh 的取舍:本脚本不经 registry,适合 ghcr 不可达时用;代价是每次全量传镜像。
@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 . "$SCRIPT_DIR/lib-version.sh"
-HOST="${1:-${GW_HOST:-aliyun}}"
+HOST="${1:-${GW_HOST:-tencent}}"
 CERTS_DIR="$REPO/deploy/certs"
 
 echo "==> [1/6] 证书就绪(无则生成)"
@@ -33,8 +33,7 @@ VER="$VER" bash "$SCRIPT_DIR/build.sh"
 IMAGE="ai-gateway:$VER"
 
 echo "==> [3/6] 远端目录准备"
-RHOME="$(ssh "$HOST" 'printf %s "$HOME"')"
-REMOTE_DIR="${REMOTE_DIR:-$RHOME/ai-gateway}"
+REMOTE_DIR="${REMOTE_DIR:-/opt/ai-gateway-v2}"
 ssh "$HOST" "mkdir -p '$REMOTE_DIR'"
 
 if ssh "$HOST" "test -f '$REMOTE_DIR/.env'"; then

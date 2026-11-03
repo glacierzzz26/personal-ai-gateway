@@ -202,7 +202,7 @@ ssh aliyun 'chmod +x /opt/ai-gateway-v2/{upgrade,backup}.sh'
 ## 本地/应急链路:`deploy.sh`
 
 ```bash
-deploy/scripts/deploy.sh [GW_HOST]        # 默认 aliyun
+deploy/scripts/deploy.sh [GW_HOST]        # 默认 tencent;远端目录默认 /opt/ai-gateway-v2
 ```
 
 它本地构建 `ai-gateway:<ver>`、`docker save | ssh docker load` 推到目标机,远端 `GW_IMAGE=ai-gateway docker compose up -d`。
